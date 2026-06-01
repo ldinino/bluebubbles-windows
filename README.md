@@ -2,7 +2,7 @@
 
 A native Windows client for [BlueBubbles](https://bluebubbles.app) — send and receive iMessages
 from your PC by talking to a BlueBubbles server running on your Mac. Built with **WinUI 3** and
-Fluent design to feel at home on Windows 11. No browser, no Electron.
+Fluent design to feel at home on Windows 11. No Flutter, no Dart.
 
 > **Independent project** — not affiliated with Apple, Microsoft, or the BlueBubbles team. Free and
 > non-commercial. See [Disclaimer](#disclaimer).
@@ -13,7 +13,7 @@ Fluent design to feel at home on Windows 11. No browser, no Electron.
 
 BlueBubbles for Windows is a from-scratch C# / WinUI 3 client that speaks the BlueBubbles server
 API (REST + Socket.IO). It connects to **your own** BlueBubbles macOS server and gives you a fast,
-native Windows messaging experience that works with your existing server setup.
+native Windows messaging experience that works with your existing server setup. This is only compatible with the Private API used in your BlueBubbles server. **Applescript methods have been deprecated.**
 
 ## Features
 
