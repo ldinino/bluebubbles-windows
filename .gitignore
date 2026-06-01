@@ -1,0 +1,76 @@
+# ---- .NET / Visual Studio (WinUI3 app) ----
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+*.binlog
+
+# Claude Code local settings (per-machine; not shared)
+.claude/settings.local.json
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+pubspeck.lock
+
+# Web related
+
+# Exceptions to above rules.
+!/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
+
+#signing
+**/android/key.properties
+
+# WinUI3 MSIX packaging — keep the private signing key and built packages out of source control.
+# The public .cer is safe to share with testers; the .pfx (with private key) is not.
+/signing/*.pfx
+/AppPackages/
+
+# Built installers / portable zips (publish.ps1 output).
+/dist/
+
+# Holding area for discarded build cruft (safe to delete).
+/.TRASH/
+**/android/.settings
+**/releases
+
+#objectbox
+.dart_tool/*
+!.dart_tool/build
+.dart_tool/build/entrypoint
+.dart_tool/build/*/error_cache/**
+.dart_tool/build/generated
+!.dart_tool/build/generated/*/*.info
+
+#private keys
+*.env
+.vscode/launch.json
+/lib/models/html/giphy.dart

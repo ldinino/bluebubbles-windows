@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BlueBubbles.Windows.Controls.MessageComposer"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Padding="12,8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Reply preview bar -->
+        <Border x:Name="ReplyPreviewBar"
+                Grid.Row="0"
+                Visibility="Collapsed"
+                Background="{ThemeResource ControlFillColorDefaultBrush}"
+                CornerRadius="8"
+                Padding="10,6"
+                Margin="0,0,0,8">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Rectangle Width="3"
+                           Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                           RadiusX="1.5" RadiusY="1.5" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock x:Name="ReplyPreviewSender"
+                               FontSize="12"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="ReplyPreviewSnippet"
+                               FontSize="12"
+                               Opacity="0.75"
+                               MaxLines="1"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button x:Name="ReplyCancelButton"
+                        Grid.Column="2"
+                        Click="OnReplyCancelClick"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="4"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Cancel reply">
+                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Edit preview bar (mutually exclusive with the reply bar; both share row 0) -->
+        <Border x:Name="EditPreviewBar"
+                Grid.Row="0"
+                Visibility="Collapsed"
+                Background="{ThemeResource ControlFillColorDefaultBrush}"
+                CornerRadius="8"
+                Padding="10,6"
+                Margin="0,0,0,8">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE70F;"
+                          FontSize="14"
+                          VerticalAlignment="Center"
+                          Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Editing message"
+                               FontSize="12"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="EditPreviewSnippet"
+                               FontSize="12"
+                               Opacity="0.75"
+                               MaxLines="1"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="2"
+                        Click="OnEditCancelClick"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="4"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Cancel edit">
+                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Attachment staging bar -->
+        <ScrollViewer x:Name="StagingScroller"
+                      Grid.Row="1"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled"
+                      Visibility="Collapsed"
+                      Margin="0,0,0,8">
+            <ItemsRepeater x:Name="StagingRepeater">
+                <ItemsRepeater.Layout>
+                    <StackLayout Orientation="Horizontal" Spacing="8" />
+                </ItemsRepeater.Layout>
+                <ItemsRepeater.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{ThemeResource ControlFillColorDefaultBrush}"
+                                CornerRadius="8"
+                                Padding="8,6"
+                                Height="40">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <FontIcon Glyph="&#xE8A5;" FontSize="14" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding FileName}"
+                                           VerticalAlignment="Center"
+                                           MaxWidth="120"
+                                           TextTrimming="CharacterEllipsis"
+                                           Style="{StaticResource CaptionTextBlockStyle}" />
+                                <Button Grid.Column="2"
+                                        Tag="{Binding}"
+                                        Click="OnRemoveAttachment"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="4"
+                                        VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE711;" FontSize="10" />
+                                </Button>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+        </ScrollViewer>
+
+        <!-- Input row -->
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Attachment button -->
+            <Button x:Name="AttachButton"
+                    VerticalAlignment="Bottom"
+                    Width="36" Height="36"
+                    Padding="0"
+                    CornerRadius="18"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    ToolTipService.ToolTip="Add attachment"
+                    AutomationProperties.Name="Add attachment">
+                <FontIcon Glyph="&#xE710;" FontSize="16" />
+                <Button.Flyout>
+                    <MenuFlyout Placement="TopEdgeAlignedLeft">
+                        <MenuFlyoutItem Text="Photo or video" Click="OnPickPhoto">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE722;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="File" Click="OnPickFile">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8E5;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+
+            <!-- Text input -->
+            <TextBox x:Name="InputBox"
+                     Grid.Column="1"
+                     PlaceholderText="iMessage"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     MaxHeight="120"
+                     VerticalAlignment="Bottom"
+                     AutomationProperties.Name="Message"
+                     TextChanged="OnTextChanged"
+                     PreviewKeyDown="OnPreviewKeyDown" />
+
+            <!-- Send button -->
+            <Button x:Name="SendButton"
+                    Grid.Column="2"
+                    VerticalAlignment="Bottom"
+                    Width="36" Height="36"
+                    Padding="0"
+                    CornerRadius="18"
+                    IsEnabled="False"
+                    Click="OnSendClick"
+                    ToolTipService.ToolTip="Send message"
+                    AutomationProperties.Name="Send message">
+                <FontIcon Glyph="&#xE724;" FontSize="16" />
+            </Button>
+        </Grid>
+    </Grid>
+</UserControl>

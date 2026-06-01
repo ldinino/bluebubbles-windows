@@ -1,0 +1,1031 @@
+using System.Collections.ObjectModel;
+using System.Text.Json;
+using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Models;
+using BlueBubbles.Core.Services;
+using BlueBubbles.Core.Utils;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+
+namespace BlueBubbles.Windows.ViewModels;
+
+public partial class ChatViewModel : ObservableObject
+{
+    private readonly IMessagesService _messagesService;
+    private readonly IContactResolverService _contacts;
+    private readonly IActionHandler _actionHandler;
+    private readonly IOutgoingMessageService _outgoingService;
+    private readonly IChatsService _chatsService;
+    private readonly ISocketService _socketService;
+    private readonly IAttachmentCacheService _attachmentCache;
+    private readonly IWindowStateService _windowState;
+    private readonly ILinkPreviewService? _linkPreview;
+    private readonly AppSettings _settings;
+
+    private int _chatId;
+    private string _chatGuid = string.Empty;
+    private bool _isGroup;
+    private IReadOnlyList<string> _participantAddresses = [];
+    private string? _chatDisplayNameRaw;
+    private long? _oldestMessageDate;
+    private readonly HashSet<string> _pendingTempGuids = [];
+    private Timer? _typingDebounce;   // send-side: throttles our "started/stopped-typing" emits
+    private Timer? _typingExpiry;     // receive-side: auto-clears a stuck "… is typing" bubble
+
+    private const int PageSize = 50;
+
+    // The server is edge-triggered (one event when the other party starts typing, one when
+    // they stop). The stop event is occasionally lost (socket hiccup / Private API), which
+    // would otherwise leave the bubble up forever — so we clear it ourselves after this long
+    // with no further activity. Apple's own clients use a comparable local timeout.
+    private static readonly TimeSpan TypingTimeout = TimeSpan.FromSeconds(30);
+
+    public ObservableCollection<object> Items { get; } = [];
+    public ObservableCollection<StagedAttachment> StagedAttachments { get; } = [];
+
+    /// <summary>GUID of the first unread message in the loaded page, or null. Used by the optional
+    /// "Scroll to last unread" setting to open the thread at the first unread message.</summary>
+    public string? FirstUnreadGuid { get; private set; }
+
+    [ObservableProperty] public partial string ChatDisplayName { get; set; }
+    [ObservableProperty] public partial string ParticipantSummary { get; set; }
+    [ObservableProperty] public partial string Initials { get; set; }
+    [ObservableProperty] public partial byte[]? AvatarBytes { get; set; }
+    [ObservableProperty] public partial bool IsGroupChat { get; set; }
+    [ObservableProperty] public partial bool IsTyping { get; set; }
+    [ObservableProperty] public partial bool IsLoading { get; set; }
+    [ObservableProperty] public partial bool HasMoreMessages { get; set; }
+    [ObservableProperty] public partial bool ShowScrollToBottom { get; set; }
+    [ObservableProperty] public partial string MessageText { get; set; }
+    [ObservableProperty] public partial bool CanSend { get; set; }
+
+    /// <summary>The message currently being replied to, or null when not in reply mode.</summary>
+    [ObservableProperty] public partial ReplyDraft? ReplyingTo { get; set; }
+
+    /// <summary>The message currently being edited, or null when not in edit mode.</summary>
+    [ObservableProperty] public partial EditDraft? EditingMessage { get; set; }
+
+    public event EventHandler? MessagesLoaded;
+    public event EventHandler? NewMessageAppended;
+    public event EventHandler<string>? ScrollToMessageRequested;
+
+    public ChatViewModel(
+        IMessagesService messagesService,
+        IContactResolverService contacts,
+        IActionHandler actionHandler,
+        IOutgoingMessageService outgoingService,
+        IChatsService chatsService,
+        ISocketService socketService,
+        IAttachmentCacheService attachmentCache,
+        IWindowStateService windowState,
+        AppSettings settings,
+        ILinkPreviewService? linkPreview = null)
+    {
+        _messagesService = messagesService;
+        _contacts = contacts;
+        _actionHandler = actionHandler;
+        _outgoingService = outgoingService;
+        _chatsService = chatsService;
+        _socketService = socketService;
+        _attachmentCache = attachmentCache;
+        _windowState = windowState;
+        _settings = settings;
+        _linkPreview = linkPreview;
+
+        ChatDisplayName = string.Empty;
+        ParticipantSummary = string.Empty;
+        Initials = string.Empty;
+        MessageText = string.Empty;
+
+        _actionHandler.NewMessageReceived += (s, e) => RunOnUI(() => OnNewMessageReceived(s, e));
+        _actionHandler.MessageUpdated += (s, e) => RunOnUI(() => OnMessageUpdated(s, e));
+        _actionHandler.ReactionReceived += (s, e) => RunOnUI(() => OnReactionReceived(s, e));
+        _actionHandler.TypingIndicatorChanged += (s, e) => RunOnUI(() => OnTypingIndicatorChanged(s, e));
+        _outgoingService.MessageStateChanged += (s, e) => RunOnUI(() => OnOutgoingMessageStateChanged(s, e));
+        _contacts.ContactsChanged += (s, e) => RunOnUI(RefreshContactInfo);
+    }
+
+    /// <summary>Re-resolves the open chat's header (name, initials, 1:1 avatar) after the
+    /// contact set changes — e.g. a vCard import — so it doesn't stay on the raw address.</summary>
+    private void RefreshContactInfo()
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+        ChatDisplayName = _contacts.GetChatDisplayName(_participantAddresses, _chatDisplayNameRaw);
+        Initials = _contacts.GetInitials(ChatDisplayName);
+        AvatarBytes = _participantAddresses.Count == 1
+            ? _contacts.GetAvatar(_participantAddresses[0])
+            : null;
+        if (!_isGroup)
+            ParticipantSummary = _participantAddresses.FirstOrDefault() ?? string.Empty;
+    }
+
+    public async Task LoadChatAsync(ConversationTileViewModel tile)
+    {
+        if (_chatGuid == tile.ChatGuid) return;
+
+        _chatId = tile.Chat.Id;
+        _chatGuid = tile.ChatGuid;
+        _windowState.SetActiveChatGuid(_chatGuid);
+        _isGroup = tile.IsGroup;
+        _participantAddresses = tile.Participants.Select(p => p.Address).ToList();
+        _chatDisplayNameRaw = tile.Chat.DisplayName;
+        ChatDisplayName = tile.DisplayName;
+        Initials = tile.Initials;
+        AvatarBytes = tile.AvatarBytes;
+        IsGroupChat = tile.IsGroup;
+        SetTypingBubble(false);
+
+        ParticipantSummary = _isGroup
+            ? $"{tile.Participants.Count} participants"
+            : tile.Participants.FirstOrDefault()?.Address ?? string.Empty;
+
+        Items.Clear();
+        _oldestMessageDate = null;
+        _pendingTempGuids.Clear();
+        HasMoreMessages = true;
+        MessageText = string.Empty;
+        StagedAttachments.Clear();
+        StopTypingIndicator();
+
+        IsLoading = true;
+        try
+        {
+            var messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize);
+            if (messages.Count > 0) _oldestMessageDate = messages[0].DateCreated;
+            FirstUnreadGuid = ComputeFirstUnread(tile.Chat, messages);
+            BuildMessageList(messages);
+            await LoadAndApplyReactionsAsync(messages);
+            await ResolveReplySnippetsAsync();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+
+        MessagesLoaded?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Finds the first unread message in a freshly-loaded page (oldest→newest). Prefers the
+    /// message right after the chat's last-read marker; falls back to the oldest unread incoming
+    /// message. Returns null when the chat has no unread messages.</summary>
+    private static string? ComputeFirstUnread(ChatEntity chat, IReadOnlyList<MessageEntity> messages)
+    {
+        if (!chat.HasUnreadMessage || messages.Count == 0) return null;
+
+        if (!string.IsNullOrEmpty(chat.LastReadMessageGuid))
+        {
+            for (var i = 0; i < messages.Count; i++)
+            {
+                if (messages[i].Guid == chat.LastReadMessageGuid)
+                    return i + 1 < messages.Count ? messages[i + 1].Guid : null;
+            }
+        }
+
+        foreach (var m in messages)
+        {
+            if (!m.IsFromMe && m.DateRead is null)
+                return m.Guid;
+        }
+        return null;
+    }
+
+    [RelayCommand]
+    private async Task LoadMoreMessagesAsync()
+    {
+        if (!HasMoreMessages || IsLoading) return;
+        IsLoading = true;
+        try
+        {
+            var messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize, _oldestMessageDate);
+
+            if (messages.Count == 0)
+            {
+                messages = await _messagesService.FetchOlderMessagesFromServerAsync(
+                    _chatId, _chatGuid, 25);
+            }
+
+            if (messages.Count == 0)
+            {
+                HasMoreMessages = false;
+            }
+            else
+            {
+                _oldestMessageDate = messages[0].DateCreated;
+                PrependMessages(messages);
+                await LoadAndApplyReactionsAsync(messages);
+                await ResolveReplySnippetsAsync();
+            }
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    partial void OnMessageTextChanged(string value)
+    {
+        CanSend = !string.IsNullOrWhiteSpace(value) || StagedAttachments.Count > 0;
+        EmitTypingIndicator();
+    }
+
+    [RelayCommand]
+    private void SendMessage()
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+
+        // In edit mode the composer's send button commits the edit instead of sending a new message.
+        if (EditingMessage is not null)
+        {
+            CommitEdit();
+            return;
+        }
+
+        var text = MessageText?.Trim();
+        var hasText = !string.IsNullOrEmpty(text);
+        var hasAttachments = StagedAttachments.Count > 0;
+        if (!hasText && !hasAttachments) return;
+
+        StopTypingIndicator();
+
+        string? previewText = null;
+
+        // A reply targets a single message. Apply it to the text, or the first attachment if text-free.
+        var reply = ReplyingTo;
+        var replyConsumed = false;
+
+        if (hasText)
+        {
+            var tempGuid = _outgoingService.EnqueueText(_chatGuid, text!,
+                selectedMessageGuid: reply?.MessageGuid, partIndex: reply?.PartIndex);
+            InsertOptimisticMessage(tempGuid, text!, reply);
+            replyConsumed = reply is not null;
+            previewText = text;
+        }
+
+        foreach (var attachment in StagedAttachments.ToList())
+        {
+            var attReply = replyConsumed ? null : reply;
+            var tempGuid = _outgoingService.EnqueueAttachment(_chatGuid, attachment.FilePath,
+                selectedMessageGuid: attReply?.MessageGuid, partIndex: attReply?.PartIndex);
+            InsertOptimisticAttachment(tempGuid, attachment, attReply);
+            replyConsumed = replyConsumed || attReply is not null;
+            previewText ??= attachment.FileName;
+        }
+
+        MessageText = string.Empty;
+        StagedAttachments.Clear();
+        ReplyingTo = null;
+        CanSend = false;
+
+        _ = _chatsService.HandleNewMessageAsync(
+            _chatGuid, previewText,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            isFromMe: true);
+    }
+
+    public void AddStagedAttachment(string filePath)
+    {
+        StagedAttachments.Add(new StagedAttachment(filePath));
+        CanSend = true;
+    }
+
+    public void RemoveStagedAttachment(StagedAttachment attachment)
+    {
+        StagedAttachments.Remove(attachment);
+        CanSend = !string.IsNullOrWhiteSpace(MessageText) || StagedAttachments.Count > 0;
+    }
+
+    private void InsertOptimisticMessage(string tempGuid, string text, ReplyDraft? reply = null)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var entity = new MessageEntity
+        {
+            Guid = tempGuid,
+            Text = text,
+            IsFromMe = true,
+            DateCreated = now,
+            ThreadOriginatorGuid = reply?.MessageGuid
+        };
+        var bubble = CreateBubbles(entity, cache: null)[0];
+        InsertOptimisticBubble(bubble, tempGuid, now, reply);
+    }
+
+    /// <summary>Optimistic bubble for a just-picked local attachment — renders the image/thumbnail
+    /// immediately rather than the file name.</summary>
+    private void InsertOptimisticAttachment(string tempGuid, StagedAttachment staged, ReplyDraft? reply = null)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var localAttachment = AttachmentViewModel.CreateLocal(staged.FilePath);
+        var bubble = MessageBubbleViewModel.CreateOptimisticAttachment(
+            tempGuid, now, [localAttachment], reply?.MessageGuid);
+        WireBubble(bubble);
+        InsertOptimisticBubble(bubble, tempGuid, now, reply);
+    }
+
+    /// <summary>Shared optimistic-insert: date separator, tail fixup, sending/delay state, append.</summary>
+    private void InsertOptimisticBubble(MessageBubbleViewModel bubble, string tempGuid, long now, ReplyDraft? reply)
+    {
+        _pendingTempGuids.Add(tempGuid);
+
+        var msgDate = DateTimeOffset.FromUnixTimeMilliseconds(now).LocalDateTime.Date;
+        var newestBubble = Items.OfType<MessageBubbleViewModel>().LastOrDefault();
+        var newestBubbleDate = newestBubble?.DateCreated > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(newestBubble.DateCreated).LocalDateTime.Date
+            : (DateTime?)null;
+
+        if (newestBubbleDate != msgDate)
+            Items.Add(new DateSeparatorViewModel(DateTimeOffset.FromUnixTimeMilliseconds(now)));
+
+        if (newestBubble is not null)
+            newestBubble.ShowTail = newestBubble.IsFromMe != bubble.IsFromMe;
+
+        var delayed = _settings.SendDelay > 0;
+        bubble.Status = DeliveryStatus.Sending;
+        bubble.IsDelayed = delayed;
+        bubble.ShowTail = true;
+
+        if (reply is not null)
+            bubble.SetReplyContext(reply.SenderLabel, reply.Preview);
+
+        if (delayed)
+            bubble.CancelAction = () => CancelDelayedMessage(tempGuid);
+
+        Items.Add(bubble);
+        NewMessageAppended?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CancelDelayedMessage(string tempGuid)
+    {
+        _outgoingService.CancelPending(tempGuid);
+    }
+
+    private void EmitTypingIndicator()
+    {
+        if (EditingMessage is not null) return;   // editing pre-fills the composer; that isn't "typing"
+        if (!_settings.PrivateSendTypingIndicators) return;
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+
+        if (_typingDebounce is null)
+        {
+            _ = _socketService.SendMessageAsync("started-typing",
+                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+        }
+
+        _typingDebounce?.Dispose();
+        _typingDebounce = new Timer(_ =>
+        {
+            _ = _socketService.SendMessageAsync("stopped-typing",
+                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+            _typingDebounce = null;
+        }, null, 3000, Timeout.Infinite);
+    }
+
+    private void StopTypingIndicator()
+    {
+        if (_typingDebounce is not null)
+        {
+            _typingDebounce.Dispose();
+            _typingDebounce = null;
+            _ = _socketService.SendMessageAsync("stopped-typing",
+                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+        }
+    }
+
+    private void BuildMessageList(List<MessageEntity> messages)
+    {
+        Items.Clear();
+        DateTime? lastDate = null;
+
+        foreach (var msg in messages)
+        {
+            var msgDate = msg.DateCreated.HasValue
+                ? DateTimeOffset.FromUnixTimeMilliseconds(msg.DateCreated.Value).LocalDateTime.Date
+                : (DateTime?)null;
+
+            if (msgDate.HasValue && msgDate != lastDate)
+            {
+                Items.Add(new DateSeparatorViewModel(
+                    DateTimeOffset.FromUnixTimeMilliseconds(msg.DateCreated!.Value)));
+                lastDate = msgDate;
+            }
+
+            foreach (var bubble in CreateBubbles(msg, _attachmentCache))
+            {
+                Items.Add(bubble);
+                TriggerAutoDownload(bubble);
+            }
+        }
+
+        UpdateTails();
+    }
+
+    private void PrependMessages(List<MessageEntity> messages)
+    {
+        var olderItems = new List<object>();
+        DateTime? lastDate = null;
+
+        foreach (var msg in messages)
+        {
+            var msgDate = msg.DateCreated.HasValue
+                ? DateTimeOffset.FromUnixTimeMilliseconds(msg.DateCreated.Value).LocalDateTime.Date
+                : (DateTime?)null;
+
+            if (msgDate.HasValue && msgDate != lastDate)
+            {
+                olderItems.Add(new DateSeparatorViewModel(
+                    DateTimeOffset.FromUnixTimeMilliseconds(msg.DateCreated!.Value)));
+                lastDate = msgDate;
+            }
+
+            olderItems.AddRange(CreateBubbles(msg, _attachmentCache));
+        }
+
+        // Remove duplicate date separator at the beginning of existing items
+        if (Items.Count > 0 && Items[0] is DateSeparatorViewModel && lastDate.HasValue)
+        {
+            var oldestExistingBubble = Items.OfType<MessageBubbleViewModel>().FirstOrDefault();
+            if (oldestExistingBubble is not null)
+            {
+                var existingDate = DateTimeOffset.FromUnixTimeMilliseconds(oldestExistingBubble.DateCreated)
+                    .LocalDateTime.Date;
+                if (existingDate == lastDate)
+                    Items.RemoveAt(0);
+            }
+        }
+
+        for (var i = 0; i < olderItems.Count; i++)
+            Items.Insert(i, olderItems[i]);
+
+        UpdateTails();
+    }
+
+    private void UpdateTails()
+    {
+        MessageBubbleViewModel? prev = null;
+        for (var i = 0; i < Items.Count; i++)
+        {
+            if (Items[i] is MessageBubbleViewModel bubble)
+            {
+                if (prev is not null)
+                    prev.ShowTail = prev.IsFromMe != bubble.IsFromMe;
+                prev = bubble;
+            }
+            else if (Items[i] is DateSeparatorViewModel)
+            {
+                if (prev is not null) prev.ShowTail = true;
+                prev = null;
+            }
+        }
+        if (prev is not null) prev.ShowTail = true;
+    }
+
+    private void OnOutgoingMessageStateChanged(object? sender, OutgoingMessageEvent e)
+    {
+        if (e.ChatGuid != _chatGuid) return;
+
+        var bubble = Items.OfType<MessageBubbleViewModel>()
+            .FirstOrDefault(b => b.MessageGuid == e.TempGuid || b.TempGuid == e.TempGuid);
+        if (bubble is null) return;
+
+        switch (e.State)
+        {
+            case OutgoingMessageState.Sending:
+                bubble.IsDelayed = false;
+                bubble.CancelAction = null;
+                break;
+
+            case OutgoingMessageState.Sent when e.ServerMessage is not null:
+                bubble.IsDelayed = false;
+                bubble.CancelAction = null;
+                bubble.ConfirmSent(e.ServerMessage.Guid);
+                _pendingTempGuids.Remove(e.TempGuid);
+                if (e.ServerMessage.DateDelivered is not null || e.ServerMessage.DateRead is not null)
+                {
+                    bubble.UpdateDeliveryStatus(new MessageEntity
+                    {
+                        IsFromMe = true,
+                        DateDelivered = e.ServerMessage.DateDelivered,
+                        DateRead = e.ServerMessage.DateRead
+                    });
+                }
+                _ = SaveSentMessageAsync(e.ChatGuid, e.ServerMessage);
+                break;
+
+            case OutgoingMessageState.Failed:
+                bubble.IsDelayed = false;
+                bubble.CancelAction = null;
+                bubble.MarkFailed(e.ErrorMessage);
+                _pendingTempGuids.Remove(e.TempGuid);
+                break;
+
+            case OutgoingMessageState.Cancelled:
+                _pendingTempGuids.Remove(e.TempGuid);
+                Items.Remove(bubble);
+                UpdateTails();
+                break;
+        }
+    }
+
+    private async Task SaveSentMessageAsync(string chatGuid, Message serverMessage)
+    {
+        try { await _messagesService.SaveIncomingMessageAsync(chatGuid, serverMessage); }
+        catch { }
+    }
+
+    private void OnNewMessageReceived(object? sender, MessageEventArgs e)
+    {
+        var chatGuid = e.Message.Chats?.FirstOrDefault()?.Guid;
+        if (chatGuid is null || chatGuid != _chatGuid) return;
+
+        if (e.Message.AssociatedMessageGuid is not null) return;
+
+        // Dedup: socket echo of a message we sent optimistically
+        if (e.TempGuid is not null && _pendingTempGuids.Contains(e.TempGuid))
+        {
+            var existing = Items.OfType<MessageBubbleViewModel>()
+                .FirstOrDefault(b => b.TempGuid == e.TempGuid || b.MessageGuid == e.TempGuid);
+            if (existing is not null)
+            {
+                existing.ConfirmSent(e.Message.Guid);
+                existing.UpdateDeliveryStatus(new MessageEntity
+                {
+                    IsFromMe = e.Message.IsFromMe,
+                    DateRead = e.Message.DateRead,
+                    DateDelivered = e.Message.DateDelivered
+                });
+                _pendingTempGuids.Remove(e.TempGuid);
+            }
+            return;
+        }
+
+        // Dedup: message GUID already shown (out-of-order socket event after API response)
+        var existingByGuid = Items.OfType<MessageBubbleViewModel>()
+            .FirstOrDefault(b => b.MessageGuid == e.Message.Guid);
+        if (existingByGuid is not null)
+        {
+            existingByGuid.UpdateDeliveryStatus(new MessageEntity
+            {
+                IsFromMe = e.Message.IsFromMe,
+                DateRead = e.Message.DateRead,
+                DateDelivered = e.Message.DateDelivered
+            });
+            return;
+        }
+
+        var entity = new MessageEntity
+        {
+            Guid = e.Message.Guid,
+            Text = e.Message.Text,
+            Subject = e.Message.Subject,
+            IsFromMe = e.Message.IsFromMe,
+            DateCreated = e.Message.DateCreated,
+            DateDelivered = e.Message.DateDelivered,
+            DateRead = e.Message.DateRead,
+            IsDelivered = e.Message.IsDelivered,
+            HasAttachments = e.Message.HasAttachments,
+            BalloonBundleId = e.Message.BalloonBundleId,
+            HasApplePayloadData = e.Message.HasApplePayloadData,
+            PayloadDataJson = e.Message.PayloadData is not null
+                ? JsonSerializer.Serialize(e.Message.PayloadData, JsonDefaults.Options) : null,
+            Handle = e.Message.Handle is not null
+                ? new HandleEntity { Address = e.Message.Handle.Address, Service = e.Message.Handle.Service }
+                : null,
+            Attachments = e.Message.Attachments?
+                .Select(a => new AttachmentEntity
+                {
+                    Guid = a.Guid,
+                    Uti = a.Uti,
+                    MimeType = a.MimeType,
+                    TransferName = a.TransferName,
+                    TotalBytes = a.TotalBytes,
+                    Width = a.Width,
+                    Height = a.Height,
+                    HasLivePhoto = a.HasLivePhoto
+                }).ToList<AttachmentEntity>()
+                ?? []
+        };
+
+        var msgDate = entity.DateCreated.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(entity.DateCreated.Value).LocalDateTime.Date
+            : (DateTime?)null;
+
+        var newestBubble = Items.OfType<MessageBubbleViewModel>().LastOrDefault();
+        var newestBubbleDate = newestBubble?.DateCreated > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(newestBubble.DateCreated).LocalDateTime.Date
+            : (DateTime?)null;
+
+        if (msgDate.HasValue && msgDate != newestBubbleDate)
+            Items.Add(new DateSeparatorViewModel(
+                DateTimeOffset.FromUnixTimeMilliseconds(entity.DateCreated!.Value)));
+
+        if (newestBubble is not null)
+            newestBubble.ShowTail = newestBubble.IsFromMe != entity.IsFromMe;
+
+        var bubbles = CreateBubbles(entity, _attachmentCache);
+        foreach (var bubble in bubbles)
+        {
+            bubble.ShowTail = true;
+            Items.Add(bubble);
+            TriggerAutoDownload(bubble);
+        }
+
+        if (bubbles.Any(b => b.IsReply && !b.ReplyContextReady))
+            _ = ResolveReplySnippetsAsync();
+
+        SetTypingBubble(false);   // the other party sent — they've stopped typing
+        NewMessageAppended?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnMessageUpdated(object? sender, MessageEventArgs e)
+    {
+        // A text+attachment message renders as two bubbles sharing one GUID — update all of them.
+        var bubbles = Items.OfType<MessageBubbleViewModel>()
+            .Where(b => b.MessageGuid == e.Message.Guid)
+            .ToList();
+        if (bubbles.Count == 0) return;
+
+        // Unsend: a retracted part → show the placeholder. (No further status reconciliation needed.)
+        if (MessageEdits.IsPartRetracted(e.Message.MessageSummaryInfo, 0))
+        {
+            foreach (var b in bubbles) b.ApplyUnsend();
+            return;
+        }
+
+        // Edit: a (new) dateEdited → rewrite the text bubble and surface the "Edited" label.
+        if (e.Message.DateEdited is > 0)
+        {
+            var host = bubbles.FirstOrDefault(b => !string.IsNullOrEmpty(b.Text)) ?? bubbles[0];
+            host.ApplyEdit(e.Message.Text, e.Message.DateEdited);
+        }
+
+        // Delivery status (delivered / read) — always reconcile against the server's current state.
+        var pseudoEntity = new MessageEntity
+        {
+            IsFromMe = e.Message.IsFromMe,
+            DateRead = e.Message.DateRead,
+            DateDelivered = e.Message.DateDelivered
+        };
+        foreach (var b in bubbles) b.UpdateDeliveryStatus(pseudoEntity);
+    }
+
+    private void OnTypingIndicatorChanged(object? sender, TypingIndicatorPayload e)
+    {
+        // The event is for the open chat only; compare defensively (GUID casing can vary).
+        if (string.Equals(e.Guid, _chatGuid, StringComparison.OrdinalIgnoreCase))
+            SetTypingBubble(e.Display);
+    }
+
+    /// <summary>Shows/hides the incoming "… is typing" bubble and arms a safety timeout so a
+    /// missed stop event can't leave it stuck on. Must be called on the UI thread.</summary>
+    private void SetTypingBubble(bool typing)
+    {
+        IsTyping = typing;
+
+        _typingExpiry?.Dispose();
+        _typingExpiry = null;
+
+        if (typing)
+        {
+            _typingExpiry = new Timer(_ => RunOnUI(() =>
+            {
+                IsTyping = false;
+                _typingExpiry?.Dispose();
+                _typingExpiry = null;
+            }), null, TypingTimeout, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    // ── Reactions (tapbacks) ──
+
+    /// <summary>Creates bubbles for a message and wires each one's reaction callback.</summary>
+    private List<MessageBubbleViewModel> CreateBubbles(MessageEntity entity, IAttachmentCacheService? cache)
+    {
+        var bubbles = MessageBubbleViewModel.CreateFromEntity(entity, _contacts, _isGroup, cache);
+        foreach (var bubble in bubbles)
+            WireBubble(bubble);
+        return bubbles;
+    }
+
+    /// <summary>Attaches the per-bubble reaction/reply/scroll/edit/unsend/delete callbacks.</summary>
+    private void WireBubble(MessageBubbleViewModel bubble)
+    {
+        bubble.SendReactionAction = type => SendReaction(bubble, type);
+        bubble.StartReplyAction = () => StartReply(bubble);
+        bubble.ScrollToMessageAction = guid => ScrollToMessageRequested?.Invoke(this, guid);
+        bubble.StartEditAction = () => StartEdit(bubble);
+        bubble.UnsendAction = () => Unsend(bubble);
+        bubble.DeleteAction = () => DeleteMessage(bubble);
+        if (bubble.UrlPreview is not null && _linkPreview is not null)
+            bubble.UrlPreview.Fetcher = _linkPreview.FetchAsync;
+    }
+
+    /// <summary>Loads stored reactions for the given messages and applies them to their bubbles.</summary>
+    private async Task LoadAndApplyReactionsAsync(IReadOnlyCollection<MessageEntity> messages)
+    {
+        if (messages.Count == 0) return;
+
+        var parentGuids = messages.Select(m => m.Guid).ToList();
+        var reactions = await _messagesService.LoadReactionsAsync(parentGuids);
+        if (reactions.Count == 0) return;
+
+        foreach (var group in reactions.GroupBy(r => r.AssociatedMessageGuid!))
+        {
+            var host = LastBubbleForGuid(group.Key);
+            host?.SetReactions(group.Select(ToReactionRecord));
+        }
+    }
+
+    private void OnReactionReceived(object? sender, ReactionEventArgs e)
+    {
+        if (e.Reaction.Chats?.FirstOrDefault()?.Guid != _chatGuid) return;
+
+        var host = LastBubbleForGuid(e.ParentGuid);
+        host?.AddReaction(new ReactionRecord(
+            e.Reaction.Guid,
+            e.Reaction.AssociatedMessageType ?? string.Empty,
+            e.Reaction.IsFromMe,
+            e.Reaction.Handle?.Address,
+            e.Reaction.DateCreated ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+    }
+
+    /// <summary>The user picked <paramref name="reactionType"/> for a message. Tapping the type already
+    /// applied removes it; otherwise it (re)applies. Updates optimistically, then calls the server.</summary>
+    private void SendReaction(MessageBubbleViewModel bubble, string reactionType)
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+
+        var targetGuid = bubble.MessageGuid;
+        if (string.IsNullOrEmpty(targetGuid) ||
+            targetGuid.StartsWith("temp-", StringComparison.Ordinal))
+            return; // cannot react to a message that hasn't been sent yet
+
+        var send = bubble.SelfReactionType == reactionType ? $"-{reactionType}" : reactionType;
+
+        bubble.AddReaction(new ReactionRecord(
+            OutgoingMessageService.GenerateTempGuid(), send,
+            IsFromMe: true, ReactorAddress: null,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+
+        _ = SendReactionApiAsync(targetGuid, bubble.Text ?? string.Empty, send);
+    }
+
+    private async Task SendReactionApiAsync(string targetGuid, string selectedText, string reaction)
+    {
+        try
+        {
+            var response = await _outgoingService.SendTapbackAsync(
+                _chatGuid, selectedText, targetGuid, reaction, partIndex: 0);
+
+            // Persist the authoritative reaction so it survives a reload even if the
+            // socket echo is missed. The echo (if any) de-dupes by GUID. Mirrors SaveSentMessageAsync.
+            // Guarded so a response without the association can't land as a normal bubble.
+            if (response.Status == 200 && response.Data is { AssociatedMessageGuid: not null } data
+                && ReactionTypes.IsReaction(data.AssociatedMessageType))
+                await _messagesService.SaveReactionAsync(_chatGuid, data);
+        }
+        catch
+        {
+            // The socket echo reconciles the authoritative state; nothing to roll back here.
+        }
+    }
+
+    private MessageBubbleViewModel? LastBubbleForGuid(string guid)
+        => Items.OfType<MessageBubbleViewModel>().LastOrDefault(b => b.MessageGuid == guid);
+
+    private static ReactionRecord ToReactionRecord(MessageEntity reaction)
+        => new(
+            reaction.Guid,
+            reaction.AssociatedMessageType ?? string.Empty,
+            reaction.IsFromMe,
+            reaction.Handle?.Address,
+            reaction.DateCreated ?? 0);
+
+    // ── Replies (threads) ──
+
+    /// <summary>Enters reply mode targeting <paramref name="bubble"/>'s message.</summary>
+    public void StartReply(MessageBubbleViewModel bubble)
+    {
+        if (string.IsNullOrEmpty(bubble.MessageGuid) ||
+            bubble.MessageGuid.StartsWith("temp-", StringComparison.Ordinal))
+            return; // can't reply to a message that hasn't been sent yet
+
+        var sender = bubble.IsFromMe ? "You" : (bubble.SenderName ?? ChatDisplayName);
+        if (EditingMessage is not null)
+        {
+            // Reply and edit are mutually exclusive; leaving edit mode drops its pre-filled text.
+            EditingMessage = null;
+            MessageText = string.Empty;
+        }
+        ReplyingTo = new ReplyDraft(bubble.MessageGuid, 0, sender, BubblePreview(bubble));
+    }
+
+    [RelayCommand]
+    private void CancelReply() => ReplyingTo = null;
+
+    /// <summary>Fills in the quoted snippet/sender for any reply bubbles not yet resolved, preferring
+    /// already-loaded messages and falling back to the database.</summary>
+    private async Task ResolveReplySnippetsAsync()
+    {
+        var unresolved = Items.OfType<MessageBubbleViewModel>()
+            .Where(b => b.IsReply && !b.ReplyContextReady)
+            .ToList();
+        if (unresolved.Count == 0) return;
+
+        var loaded = Items.OfType<MessageBubbleViewModel>()
+            .GroupBy(b => b.MessageGuid)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var misses = new HashSet<string>();
+        foreach (var host in unresolved)
+        {
+            if (loaded.TryGetValue(host.ThreadOriginatorGuid!, out var origin))
+                host.SetReplyContext(
+                    origin.IsFromMe ? "You" : (origin.SenderName ?? ChatDisplayName),
+                    BubblePreview(origin));
+            else
+                misses.Add(host.ThreadOriginatorGuid!);
+        }
+
+        if (misses.Count == 0) return;
+
+        var originals = await _messagesService.GetMessagesByGuidsAsync(misses);
+        var byGuid = originals.ToDictionary(m => m.Guid);
+
+        foreach (var host in unresolved.Where(h => !h.ReplyContextReady))
+        {
+            if (byGuid.TryGetValue(host.ThreadOriginatorGuid!, out var origin))
+                host.SetReplyContext(EntitySenderLabel(origin), EntityPreview(origin));
+        }
+    }
+
+    private static string BubblePreview(MessageBubbleViewModel b)
+    {
+        if (!string.IsNullOrWhiteSpace(b.Text)) return b.Text!;
+        return b.HasAttachments ? "Attachment" : "Message";
+    }
+
+    private string EntitySenderLabel(MessageEntity m)
+        => m.IsFromMe ? "You"
+            : (m.Handle?.Address is { } addr ? _contacts.GetDisplayName(addr) : ChatDisplayName);
+
+    private static string EntityPreview(MessageEntity m)
+    {
+        var text = m.Text?.Replace("￼", string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(text)) return text!;
+        return m.HasAttachments ? "Attachment" : "Message";
+    }
+
+    // ── Message actions: edit, unsend, delete (Phase 15) ──
+
+    /// <summary>Enters edit mode for an own text message: pre-fills the composer with its text.</summary>
+    public void StartEdit(MessageBubbleViewModel bubble)
+    {
+        if (!bubble.IsFromMe || bubble.IsUnsent) return;
+        if (string.IsNullOrEmpty(bubble.MessageGuid) ||
+            bubble.MessageGuid.StartsWith("temp-", StringComparison.Ordinal))
+            return; // can't edit a message that hasn't been sent yet
+
+        var text = bubble.Text;
+        if (string.IsNullOrEmpty(text)) return; // only text parts are editable
+
+        ReplyingTo = null;   // edit and reply are mutually exclusive composer modes
+        EditingMessage = new EditDraft(bubble.MessageGuid, 0, text);
+        MessageText = text;
+        CanSend = true;
+    }
+
+    [RelayCommand]
+    private void CancelEdit()
+    {
+        // Clear the draft while still flagged as editing so the text change doesn't emit "typing".
+        MessageText = string.Empty;
+        EditingMessage = null;
+        CanSend = false;
+    }
+
+    /// <summary>Commits the in-progress edit: optimistic bubble update, then the Private API edit call.</summary>
+    private void CommitEdit()
+    {
+        var edit = EditingMessage;
+        if (edit is null) return;
+
+        var newText = MessageText?.Trim() ?? string.Empty;
+
+        // Leave edit mode regardless of outcome so the composer returns to normal. Clear the draft
+        // while still flagged as editing so the text change doesn't emit a "typing" indicator.
+        MessageText = string.Empty;
+        EditingMessage = null;
+        CanSend = false;
+
+        // Empty or unchanged → nothing to send (editing to empty would be an unsend, not an edit).
+        if (string.IsNullOrEmpty(newText) || newText == edit.OriginalText) return;
+
+        var bubble = Items.OfType<MessageBubbleViewModel>()
+            .FirstOrDefault(b => b.MessageGuid == edit.MessageGuid && !string.IsNullOrEmpty(b.Text));
+        bubble?.ApplyEdit(newText, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        _ = SendEditApiAsync(edit.MessageGuid, newText, edit.PartIndex);
+    }
+
+    private async Task SendEditApiAsync(string messageGuid, string newText, int partIndex)
+    {
+        try
+        {
+            var backwardsCompat = MessageEdits.BuildBackwardsCompatText(newText);
+            var response = await _outgoingService.SendEditAsync(
+                messageGuid, newText, backwardsCompat, partIndex);
+
+            // Persist the authoritative edited text + history; the socket echo (if any) re-applies idempotently.
+            if (response.Status == 200 && response.Data is not null)
+                await _messagesService.UpdateMessageAsync(response.Data);
+        }
+        catch
+        {
+            // The socket updated-message echo reconciles authoritative state; nothing to roll back.
+        }
+    }
+
+    /// <summary>Unsends (retracts) an own message via the Private API, showing the placeholder optimistically.</summary>
+    private void Unsend(MessageBubbleViewModel bubble)
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+        if (!bubble.IsFromMe || bubble.IsUnsent) return;
+
+        var guid = bubble.MessageGuid;
+        if (string.IsNullOrEmpty(guid) || guid.StartsWith("temp-", StringComparison.Ordinal))
+            return; // can't unsend a message that hasn't been sent yet
+
+        bubble.ApplyUnsend();
+        _ = SendUnsendApiAsync(guid, 0);
+    }
+
+    private async Task SendUnsendApiAsync(string messageGuid, int partIndex)
+    {
+        try
+        {
+            var response = await _outgoingService.SendUnsendAsync(messageGuid, partIndex);
+            if (response.Status == 200 && response.Data is not null)
+                await _messagesService.UpdateMessageAsync(response.Data);
+        }
+        catch
+        {
+            // The socket updated-message echo reconciles authoritative state.
+        }
+    }
+
+    /// <summary>Locally deletes a message: removes its bubble(s) from the view and soft-deletes it in the DB.
+    /// This is a client-side delete (unlike unsend, it does not retract the message on Apple's side).</summary>
+    private void DeleteMessage(MessageBubbleViewModel bubble)
+    {
+        var guid = bubble.MessageGuid;
+
+        // A text+attachment message renders as two bubbles sharing one GUID — remove both.
+        foreach (var b in Items.OfType<MessageBubbleViewModel>()
+                     .Where(b => b.MessageGuid == guid).ToList())
+            Items.Remove(b);
+
+        PruneOrphanDateSeparators();
+        UpdateTails();
+
+        if (!string.IsNullOrEmpty(guid) && !guid.StartsWith("temp-", StringComparison.Ordinal))
+            _ = _messagesService.SoftDeleteMessageAsync(guid);
+    }
+
+    /// <summary>Removes any date separator left without a following message bubble (e.g. after a delete).</summary>
+    private void PruneOrphanDateSeparators()
+    {
+        for (var i = Items.Count - 1; i >= 0; i--)
+        {
+            if (Items[i] is not DateSeparatorViewModel) continue;
+            var hasBubbleAfter = i + 1 < Items.Count && Items[i + 1] is MessageBubbleViewModel;
+            if (!hasBubbleAfter) Items.RemoveAt(i);
+        }
+    }
+
+    private void TriggerAutoDownload(MessageBubbleViewModel bubble)
+    {
+        if (!_settings.AutoDownload || !bubble.HasAttachments) return;
+        foreach (var att in bubble.Attachments!)
+        {
+            if (att.State == AttachmentState.NotDownloaded)
+                _ = att.DownloadAsync();
+        }
+    }
+
+    private static void RunOnUI(Action action)
+    {
+        var dispatcher = App.MainWindow?.DispatcherQueue;
+        if (dispatcher is not null)
+            dispatcher.TryEnqueue(() => action());
+        else
+            action();
+    }
+}
+
+/// <summary>The message being replied to while the composer is in reply mode.</summary>
+public record ReplyDraft(string MessageGuid, int PartIndex, string SenderLabel, string Preview);
+
+/// <summary>The message being edited while the composer is in edit mode. <see cref="OriginalText"/> is
+/// the pre-edit text, used to suppress no-op edits.</summary>
+public record EditDraft(string MessageGuid, int PartIndex, string OriginalText);

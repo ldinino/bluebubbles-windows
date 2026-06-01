@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Setup.WelcomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
+        <StackPanel Spacing="32" HorizontalAlignment="Center">
+            <Image Source="/Assets/AppIcon-256.png"
+                   Width="128" Height="128"
+                   HorizontalAlignment="Center" />
+
+            <StackPanel Spacing="8" HorizontalAlignment="Center">
+                <TextBlock Text="BlueBubbles"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="iMessage on Windows"
+                           Style="{StaticResource SubtitleTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <TextBlock Text="Connect to your BlueBubbles server to get started with iMessage on your PC."
+                       Style="{StaticResource BodyTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       MaxWidth="320" />
+
+            <Button Content="Get Started"
+                    Style="{StaticResource AccentButtonStyle}"
+                    HorizontalAlignment="Center"
+                    Padding="32,10"
+                    Click="OnGetStartedClick" />
+        </StackPanel>
+    </Grid>
+</Page>

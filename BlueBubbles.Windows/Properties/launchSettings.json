@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "BlueBubbles.Windows (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "BlueBubbles.Windows (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

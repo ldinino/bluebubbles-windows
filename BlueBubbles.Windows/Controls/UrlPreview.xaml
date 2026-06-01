@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BlueBubbles.Windows.Controls.UrlPreview"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Border x:Name="RootBorder"
+            CornerRadius="12"
+            MinWidth="200"
+            MaxWidth="320"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            Tapped="OnTapped">
+        <StackPanel>
+            <!-- Hero preview image (rich state only). A fixed-height, full-width banner: UniformToFill
+                 keeps every card's image edge-to-edge and identically sized regardless of the source
+                 aspect ratio, so square logos no longer letterbox with side bands while wide images go
+                 full-bleed. The corner radius clips the image to the card's rounded top. -->
+            <Border x:Name="HeroContainer"
+                    Visibility="Collapsed"
+                    Height="160"
+                    CornerRadius="12,12,0,0">
+                <!-- Fixed-height banner keeps every card the same shape; Uniform scales the image to
+                     fit within it (never cropping) and centres it, so a square logo or a wide image
+                     both sit centred with matte to the sides/top rather than being cut off. -->
+                <Image x:Name="HeroImage" Stretch="Uniform" />
+            </Border>
+
+            <StackPanel Padding="12" Spacing="3">
+                <TextBlock x:Name="TitleText"
+                           FontWeight="SemiBold"
+                           MaxLines="2"
+                           TextWrapping="Wrap"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="SummaryText"
+                           FontSize="12"
+                           Opacity="0.85"
+                           MaxLines="2"
+                           TextWrapping="Wrap"
+                           TextTrimming="CharacterEllipsis"
+                           Visibility="Collapsed" />
+                <TextBlock x:Name="SiteText"
+                           FontSize="11"
+                           Opacity="0.6"
+                           MaxLines="1"
+                           TextTrimming="CharacterEllipsis"
+                           Visibility="Collapsed" />
+
+                <!-- Action row: "Show preview" affordance / loading indicator -->
+                <StackPanel x:Name="ActionRow"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,2,0,0"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                    <ProgressRing x:Name="LoadingRing"
+                                  Width="16" Height="16"
+                                  IsActive="False"
+                                  Visibility="Collapsed" />
+                    <TextBlock x:Name="LoadingText"
+                               Text="Loading preview…"
+                               FontSize="12"
+                               Opacity="0.7"
+                               VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                    <HyperlinkButton x:Name="ShowPreviewButton"
+                                     Content="Show preview"
+                                     Padding="0"
+                                     MinHeight="0"
+                                     Click="OnShowPreviewClick"
+                                     Visibility="Collapsed" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

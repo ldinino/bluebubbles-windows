@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.ChatDetailsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:BlueBubbles.Windows.Controls"
+    xmlns:vm="using:BlueBubbles.Windows.ViewModels"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="24" Spacing="20" MaxWidth="600"
+                    HorizontalAlignment="Left">
+
+            <!-- Header with back button -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="BackButton"
+                        Click="OnBackClick"
+                        ToolTipService.ToolTip="Back"
+                        AutomationProperties.Name="Back"
+                        Padding="8"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0">
+                    <FontIcon Glyph="&#xE72B;" FontSize="16" />
+                </Button>
+                <TextBlock Text="Details"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Avatar + Name -->
+            <StackPanel HorizontalAlignment="Center" Spacing="12">
+                <controls:AvatarControl x:Name="DetailsAvatar"
+                                        Size="80"
+                                        HorizontalAlignment="Center" />
+
+                <!-- Display name (read-only) -->
+                <StackPanel x:Name="DisplayNamePanel"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="6">
+                    <TextBlock x:Name="DisplayNameText"
+                               Style="{StaticResource SubtitleTextBlockStyle}"
+                               TextAlignment="Center"
+                               MaxLines="2"
+                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis" />
+                    <Button x:Name="EditNameButton"
+                            Visibility="Collapsed"
+                            Click="OnEditNameClick"
+                            ToolTipService.ToolTip="Rename group"
+                            Padding="4"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            VerticalAlignment="Center">
+                        <FontIcon Glyph="&#xE70F;" FontSize="14" />
+                    </Button>
+                </StackPanel>
+
+                <!-- Edit name (inline) -->
+                <StackPanel x:Name="EditNamePanel"
+                            Visibility="Collapsed"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="6">
+                    <TextBox x:Name="EditNameBox"
+                             Width="250"
+                             PlaceholderText="Group name"
+                             KeyDown="OnEditNameKeyDown" />
+                    <Button Click="OnSaveNameClick"
+                            ToolTipService.ToolTip="Save"
+                            Padding="6">
+                        <FontIcon Glyph="&#xE73E;" FontSize="14" />
+                    </Button>
+                    <Button Click="OnCancelEditClick"
+                            ToolTipService.ToolTip="Cancel"
+                            Padding="6">
+                        <FontIcon Glyph="&#xE711;" FontSize="14" />
+                    </Button>
+                </StackPanel>
+
+                <!-- Participant count -->
+                <TextBlock x:Name="ParticipantCountText"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Status message -->
+            <InfoBar x:Name="StatusBar"
+                     IsOpen="False"
+                     Severity="Error"
+                     IsClosable="True" />
+
+            <!-- Mute toggle -->
+            <Grid Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                  CornerRadius="8"
+                  Padding="16,12"
+                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                  BorderThickness="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE74F;" FontSize="16"
+                          VerticalAlignment="Center"
+                          Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Grid.Column="1" Text="Mute Notifications"
+                           VerticalAlignment="Center" Margin="12,0,0,0" />
+                <ToggleSwitch x:Name="MuteToggle"
+                              Grid.Column="2"
+                              VerticalAlignment="Center"
+                              Toggled="OnMuteToggled"
+                              MinWidth="0" />
+            </Grid>
+
+            <!-- Participants section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="PARTICIPANTS"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <ListView x:Name="ParticipantsList"
+                          SelectionMode="None"
+                          IsItemClickEnabled="False"
+                          ContainerContentChanging="OnParticipantContainerChanging">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="MinHeight" Value="0" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ParticipantItemViewModel">
+                            <Grid Padding="4,8" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <controls:AvatarControl Size="36"
+                                                        Initials="{x:Bind Initials}"
+                                                        AvatarImage="{x:Bind AvatarBytes}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{x:Bind DisplayName}"
+                                               Style="{StaticResource BodyStrongTextBlockStyle}"
+                                               MaxLines="1"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind Address}"
+                                               Style="{StaticResource CaptionTextBlockStyle}"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               MaxLines="1"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        x:Name="RemoveParticipantBtn"
+                                        Tag="{x:Bind Address}"
+                                        Click="OnRemoveParticipantClick"
+                                        ToolTipService.ToolTip="Remove"
+                                        Padding="6"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <!-- Add participant (group only) -->
+                <Grid x:Name="AddParticipantPanel" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="AddParticipantBox"
+                             PlaceholderText="Phone or email"
+                             KeyDown="OnAddParticipantKeyDown" />
+                    <Button Grid.Column="1" Margin="8,0,0,0"
+                            Click="OnAddParticipantClick"
+                            ToolTipService.ToolTip="Add participant">
+                        <FontIcon Glyph="&#xE710;" FontSize="14" />
+                    </Button>
+                </Grid>
+            </StackPanel>
+
+            <!-- Group actions -->
+            <StackPanel x:Name="GroupActionsPanel" Visibility="Collapsed" Spacing="8">
+                <TextBlock Text="GROUP ACTIONS"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <Button x:Name="SetIconButton"
+                        Click="OnSetIconClick"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Padding="12,10">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Glyph="&#xE91B;" FontSize="16" />
+                        <TextBlock Text="Set Group Photo" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="DeleteIconButton"
+                        Click="OnDeleteIconClick"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Padding="12,10">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Glyph="&#xE74D;" FontSize="16" />
+                        <TextBlock Text="Remove Group Photo" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="LeaveGroupButton"
+                        Click="OnLeaveGroupClick"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Padding="12,10"
+                        Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Glyph="&#xEDAE;" FontSize="16" />
+                        <TextBlock Text="Leave Group" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Shared media gallery -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="SHARED MEDIA"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <GridView x:Name="MediaGrid"
+                          SelectionMode="None"
+                          IsItemClickEnabled="True"
+                          ItemClick="OnMediaItemClick"
+                          ContainerContentChanging="OnMediaContainerChanging">
+                    <GridView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal"
+                                           ItemWidth="100" ItemHeight="100" />
+                        </ItemsPanelTemplate>
+                    </GridView.ItemsPanel>
+                    <GridView.ItemContainerStyle>
+                        <Style TargetType="GridViewItem">
+                            <Setter Property="Margin" Value="2" />
+                            <Setter Property="Padding" Value="0" />
+                        </Style>
+                    </GridView.ItemContainerStyle>
+                    <GridView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:AttachmentViewModel">
+                            <Grid CornerRadius="4"
+                                  Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                <Image x:Name="ThumbImage"
+                                       Stretch="UniformToFill"
+                                       Width="96" Height="96" />
+                                <ProgressRing Width="20" Height="20"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Visibility="Collapsed" />
+                                <!-- Video overlay -->
+                                <FontIcon x:Name="VideoOverlay"
+                                          Glyph="&#xE768;" FontSize="20"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Foreground="White"
+                                          Visibility="Collapsed" />
+                            </Grid>
+                        </DataTemplate>
+                    </GridView.ItemTemplate>
+                </GridView>
+
+                <TextBlock x:Name="EmptyMediaText"
+                           Text="No shared media"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="Collapsed"
+                           Margin="0,8,0,0" />
+
+                <Button x:Name="LoadMoreMediaButton"
+                        Content="Load more"
+                        Click="OnLoadMoreMediaClick"
+                        Visibility="Collapsed"
+                        HorizontalAlignment="Center"
+                        Margin="0,4,0,0" />
+            </StackPanel>
+
+            <!-- Loading overlay -->
+            <ProgressRing x:Name="LoadingRing"
+                          IsActive="False"
+                          Width="28" Height="28"
+                          HorizontalAlignment="Center" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

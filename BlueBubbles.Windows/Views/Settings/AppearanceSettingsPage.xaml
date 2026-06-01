@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.AppearanceSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900">
+
+            <TextBlock Text="Appearance"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <tk:SettingsCard Header="Theme"
+                             Description="Choose how the app looks">
+                <ComboBox x:Name="ThemeCombo"
+                          MinWidth="160"
+                          SelectionChanged="OnThemeChanged">
+                    <ComboBoxItem Content="Use system setting" />
+                    <ComboBoxItem Content="Light" />
+                    <ComboBoxItem Content="Dark" />
+                </ComboBox>
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Colorful avatars"
+                             Description="Tint fallback avatars with a per-contact color">
+                <ToggleSwitch IsOn="{x:Bind Settings.ColorfulAvatars, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Colorful bubbles"
+                             Description="Tint incoming message bubbles with a per-contact color">
+                <ToggleSwitch IsOn="{x:Bind Settings.ColorfulBubbles, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Dense chat tiles"
+                             Description="Show more conversations by using a compact tile height">
+                <ToggleSwitch IsOn="{x:Bind Settings.DenseChatTiles, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Hide dividers"
+                             Description="Remove the separator lines between conversations">
+                <ToggleSwitch IsOn="{x:Bind Settings.HideDividers, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="24-hour time"
+                             Description="Show timestamps in 24-hour format">
+                <ToggleSwitch IsOn="{x:Bind Settings.Use24HrFormat, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Avatar size">
+                <tk:SettingsCard.Description>
+                    <Slider x:Name="AvatarScaleSlider"
+                            Minimum="0.5"
+                            Maximum="1.5"
+                            StepFrequency="0.1"
+                            Width="240"
+                            Value="{x:Bind Settings.AvatarScale, Mode=TwoWay}" />
+                </tk:SettingsCard.Description>
+            </tk:SettingsCard>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BlueBubbles.Core/BlueBubbles.Core.csproj" />
+  <Project Path="BlueBubbles.Windows.Tests/BlueBubbles.Windows.Tests.csproj" />
+  <Project Path="BlueBubbles.Windows/BlueBubbles.Windows.csproj" />
+</Solution>

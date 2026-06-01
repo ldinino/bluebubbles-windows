@@ -1,0 +1,500 @@
+using System.Text.Json;
+using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Models;
+using BlueBubbles.Core.Services;
+
+namespace BlueBubbles.Windows.Tests;
+
+public class SyncServiceTests
+{
+    private static Handle MakeHandle(string address, string service = "iMessage") =>
+        new(0, address, service, null, null, null, null, null, null);
+
+    private static Chat MakeChat(string guid, List<Handle>? participants = null, Message? lastMessage = null) =>
+        new(guid, guid, null, participants, lastMessage,
+            false, false, false, "iMessage", null, null, null, null, null, null, false, false, null);
+
+    private static Message MakeMessage(string guid, string? text = null,
+        Handle? handle = null, long? dateCreated = null) =>
+        new(null, guid, null, null, text, null, null, 0,
+            dateCreated ?? 1700000000000, null, null,
+            false, false, false, null, 0, null, 0, null, null, null, null, null,
+            handle, false, false, null, null, null, null, null, null, null, null,
+            null, false, null, false, false, false);
+
+    private static (SyncService Svc, TestDbContextFactory Factory) CreateService(
+        SyncMockApiService api, MockFirebaseService? firebase = null)
+    {
+        var factory = TestDbContextFactory.Create();
+        firebase ??= new MockFirebaseService();
+        var appSettings = new AppSettings();
+        var settingsService = new MockSettingsService();
+        var chatsService = new MockChatsService();
+        return (new SyncService(api, factory, firebase, appSettings, settingsService, chatsService), factory);
+    }
+
+    [Fact]
+    public async Task ChatPagination_BreaksOnEmptyPage()
+    {
+        var chats = Enumerable.Range(0, 250)
+            .Select(i => MakeChat($"chat-{i}"))
+            .ToList();
+
+        var api = new SyncMockApiService(chats);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync(skipEmptyChats: false);
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal(250, db.Chats.Count());
+        Assert.True(api.QueryChatsCallCount >= 2,
+            $"Expected at least 2 pagination calls, got {api.QueryChatsCallCount}");
+    }
+
+    [Fact]
+    public async Task HandleDeduplication_SharedParticipants()
+    {
+        var sharedHandle = MakeHandle("+15551234567");
+        var chats = new List<Chat>
+        {
+            MakeChat("chat-a", [sharedHandle, MakeHandle("+15559999999")]),
+            MakeChat("chat-b", [sharedHandle, MakeHandle("+15558888888")])
+        };
+
+        var api = new SyncMockApiService(chats);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        using var db = factory.CreateDbContext();
+        var handles = db.Handles.Where(h => h.Address == "+15551234567").ToList();
+        Assert.Single(handles);
+        Assert.Equal(3, db.Handles.Count());
+    }
+
+    [Fact]
+    public async Task IdempotentSync_NoDuplicates()
+    {
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "last", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-1", [handle], lastMsg) };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-1"] = [MakeMessage("msg-1", "hello", handle, recentDate - 1000)]
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+        await svc.RunFullSyncAsync();
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal(1, db.Chats.Count());
+        Assert.Equal(1, db.Handles.Count());
+        Assert.Equal(1, db.Messages.Count());
+    }
+
+    [Fact]
+    public async Task CancellationToken_StopsSync()
+    {
+        var chats = Enumerable.Range(0, 10)
+            .Select(i => MakeChat($"chat-{i}"))
+            .ToList();
+
+        var cts = new CancellationTokenSource();
+        var api = new SyncMockApiService(chats, onQueryChats: () => cts.Cancel());
+        var (svc, _) = CreateService(api);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => svc.RunFullSyncAsync(skipEmptyChats: false, ct: cts.Token));
+    }
+
+    [Fact]
+    public async Task ProgressReporting_ReportsAllPhases()
+    {
+        var chats = new List<Chat> { MakeChat("chat-1") };
+        var api = new SyncMockApiService(chats);
+        var (svc, _) = CreateService(api);
+
+        var phases = new List<SyncPhase>();
+        var progress = new SyncTestProgress<SyncProgress>(p => phases.Add(p.Phase));
+
+        await svc.RunFullSyncAsync(skipEmptyChats: false, progress: progress);
+
+        Assert.Contains(SyncPhase.Starting, phases);
+        Assert.Contains(SyncPhase.SyncingChats, phases);
+        Assert.Contains(SyncPhase.SyncingMessages, phases);
+        Assert.Contains(SyncPhase.FetchingFcmConfig, phases);
+        Assert.Contains(SyncPhase.Complete, phases);
+    }
+
+    [Fact]
+    public async Task SkipEmptyChats_SoftDeletesChatsWithNoMessages()
+    {
+        var handle = MakeHandle("+15551234567");
+        var msgHandle = MakeHandle("+15559999999");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "last", msgHandle, recentDate);
+        var chats = new List<Chat>
+        {
+            MakeChat("chat-with-msgs", [handle], lastMsg),
+            MakeChat("chat-empty", [handle]),
+            MakeChat("chat-no-participants", []),
+        };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-with-msgs"] = [MakeMessage("msg-1", "hello", msgHandle, recentDate - 1000)]
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync(skipEmptyChats: true);
+
+        using var db = factory.CreateDbContext();
+        var allChats = db.Chats.ToList();
+        Assert.Equal(3, allChats.Count);
+
+        var active = allChats.Where(c => c.DateDeleted == null).ToList();
+        Assert.Single(active);
+        Assert.Equal("chat-with-msgs", active[0].Guid);
+
+        var deleted = allChats.Where(c => c.DateDeleted != null).ToList();
+        Assert.Equal(2, deleted.Count);
+        Assert.All(deleted, c => Assert.False(c.HasUnreadMessage));
+    }
+
+    [Fact]
+    public async Task SkipEmptyChatsDisabled_KeepsEmptyChats()
+    {
+        var handle = MakeHandle("+15551234567");
+        var chats = new List<Chat>
+        {
+            MakeChat("chat-empty", [handle]),
+        };
+
+        var api = new SyncMockApiService(chats);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync(skipEmptyChats: false);
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single();
+        Assert.Null(chat.DateDeleted);
+    }
+
+    [Fact]
+    public async Task TieredSync_RecentChat_Gets30DayWindow()
+    {
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-recent", [handle], lastMsg) };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-recent"] = [MakeMessage("msg-1", "hello", handle, recentDate - 1000)]
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, _) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        var call = api.ChatMessageCalls.First(c => c.Guid == "chat-recent");
+        Assert.NotNull(call.After);
+        var thirtyDaysAgoApprox = DateTimeOffset.UtcNow.AddDays(-30).ToUnixTimeMilliseconds();
+        Assert.InRange(call.After.Value, thirtyDaysAgoApprox - 5000, thirtyDaysAgoApprox + 5000);
+    }
+
+    [Fact]
+    public async Task TieredSync_OlderChat_Gets7DayWindow()
+    {
+        var handle = MakeHandle("+15551234567");
+        var olderDate = DateTimeOffset.UtcNow.AddDays(-14).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, olderDate);
+        var chats = new List<Chat> { MakeChat("chat-older", [handle], lastMsg) };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-older"] = [MakeMessage("msg-1", "hello", handle, olderDate - 1000)]
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, _) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        var call = api.ChatMessageCalls.First(c => c.Guid == "chat-older");
+        Assert.NotNull(call.After);
+        var sevenDaysAgoApprox = DateTimeOffset.UtcNow.AddDays(-7).ToUnixTimeMilliseconds();
+        Assert.InRange(call.After.Value, sevenDaysAgoApprox - 5000, sevenDaysAgoApprox + 5000);
+    }
+
+    [Fact]
+    public async Task TieredSync_SetsOldestSyncedMessageDate()
+    {
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var msgDate = DateTimeOffset.UtcNow.AddDays(-10).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-1", [handle], lastMsg) };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-1"] = [
+                MakeMessage("msg-1", "hello", handle, msgDate),
+                MakeMessage("msg-2", "world", handle, msgDate + 5000)
+            ]
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single();
+        Assert.NotNull(chat.OldestSyncedMessageDate);
+        Assert.Equal(msgDate, chat.OldestSyncedMessageDate);
+    }
+
+    [Fact]
+    public async Task TieredSync_PaginatesWithinWindow()
+    {
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-paginate", [handle], lastMsg) };
+
+        // Create 150 messages (more than one page of 100)
+        var msgs = Enumerable.Range(0, 150)
+            .Select(i => MakeMessage($"msg-{i}", $"text-{i}", handle,
+                recentDate - (150 - i) * 1000))
+            .ToList();
+
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-paginate"] = msgs
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        var calls = api.ChatMessageCalls.Where(c => c.Guid == "chat-paginate").ToList();
+        Assert.True(calls.Count >= 2, $"Expected at least 2 pagination calls, got {calls.Count}");
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal(150, db.Messages.Count());
+    }
+
+    [Fact]
+    public async Task TieredSync_CapsAt500MessagesPerChat()
+    {
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-big", [handle], lastMsg) };
+
+        // Create 600 messages (exceeds 500 cap)
+        var msgs = Enumerable.Range(0, 600)
+            .Select(i => MakeMessage($"msg-{i}", $"text-{i}", handle,
+                recentDate - (600 - i) * 1000))
+            .ToList();
+
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-big"] = msgs
+        };
+
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, factory) = CreateService(api);
+
+        await svc.RunFullSyncAsync();
+
+        using var db = factory.CreateDbContext();
+        Assert.True(db.Messages.Count() <= 500,
+            $"Expected at most 500 messages, got {db.Messages.Count()}");
+    }
+}
+
+internal class SyncTestProgress<T> : IProgress<T>
+{
+    private readonly Action<T> _handler;
+    public SyncTestProgress(Action<T> handler) => _handler = handler;
+    public void Report(T value) => _handler(value);
+}
+
+internal record ChatMessageCall(string Guid, long? Before, long? After, int Offset, int Limit);
+
+internal class SyncMockApiService : IBlueBubblesApiService
+{
+    public string? OriginOverride { get; set; }
+
+    private readonly List<Chat> _chats;
+    private readonly Dictionary<string, List<Message>> _chatMessages;
+    private readonly Action? _onQueryChats;
+
+    public int QueryChatsCallCount { get; private set; }
+    public List<ChatMessageCall> ChatMessageCalls { get; } = [];
+
+    public SyncMockApiService(
+        List<Chat> chats,
+        Dictionary<string, List<Message>>? chatMessages = null,
+        Action? onQueryChats = null)
+    {
+        _chats = chats;
+        _chatMessages = chatMessages ?? new();
+        _onQueryChats = onQueryChats;
+    }
+
+    public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var json = JsonSerializer.Deserialize<JsonElement>($"{{\"total\":{_chats.Count}}}");
+        return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", json, null));
+    }
+
+    public Task<ApiResponse<List<Chat>>> QueryChatsAsync(
+        List<string>? withQuery = null, int offset = 0, int limit = 100,
+        string? sort = null, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        QueryChatsCallCount++;
+        _onQueryChats?.Invoke();
+        var page = _chats.Skip(offset).Take(limit).ToList();
+        return Task.FromResult(new ApiResponse<List<Chat>>(200, "OK", page, null));
+    }
+
+    public Task<ApiResponse<List<Message>>> GetChatMessagesAsync(
+        string guid, string? withQuery = null, string sort = "DESC",
+        long? before = null, long? after = null,
+        int offset = 0, int limit = 100, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ChatMessageCalls.Add(new(guid, before, after, offset, limit));
+
+        var allMsgs = _chatMessages.TryGetValue(guid, out var m) ? m : [];
+
+        IEnumerable<Message> filtered = allMsgs;
+        if (after.HasValue)
+            filtered = filtered.Where(msg => msg.DateCreated > after.Value);
+        if (before.HasValue)
+            filtered = filtered.Where(msg => msg.DateCreated < before.Value);
+
+        var page = filtered.Skip(offset).Take(limit).ToList();
+        return Task.FromResult(new ApiResponse<List<Message>>(200, "OK", page, null));
+    }
+
+    // Stubs — only sync-related methods are implemented
+    public Task<ApiResponse<JsonElement>> PingAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<ServerInfo>> GetServerInfoAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> SoftRestartAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> HardRestartAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> CheckUpdateAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> InstallUpdateAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetStatTotalsAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetStatMediaAsync(bool byChat = false, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetServerLogsAsync(int count = 10000, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> LockMacAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> RestartImessageAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> AddFcmDeviceAsync(string name, string identifier, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetFcmClientAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Attachment>> GetAttachmentInfoAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> DownloadAttachmentAsync(string guid, bool original = false, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> DownloadLivePhotoAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> GetAttachmentBlurhashAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetAttachmentCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> GetChatAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> CreateChatAsync(List<string> addresses, string? message, string service, string method = "private-api", CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> UpdateChatAsync(string guid, string displayName, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> MarkChatReadAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> MarkChatUnreadAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> GetChatIconAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> SetChatIconAsync(string guid, Stream iconStream, string fileName, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteChatIconAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> AddParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> RemoveParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> LeaveChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> GetMessageAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> GetEmbeddedMediaAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetUpdatedMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetMyMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> SendTextAsync(string chatGuid, string tempGuid, string message, string? method = null, string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, bool? ddScan = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> SendAttachmentAsync(string chatGuid, string tempGuid, Stream fileStream, string fileName, string? method = null, string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, bool? isAudioMessage = null, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> SendMultipartAsync(string chatGuid, string tempGuid, List<Dictionary<string, object?>> parts, string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, bool? ddScan = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> SendTapbackAsync(string chatGuid, string selectedMessageText, string selectedMessageGuid, string reaction, int? partIndex = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> UnsendMessageAsync(string messageGuid, int partIndex = 0, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Message>> EditMessageAsync(string messageGuid, string editedMessage, string backwardsCompatMessage, int partIndex = 0, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> NotifyMessageAsync(string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<ScheduledMessage>>> GetScheduledMessagesAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<ScheduledMessage>> CreateScheduledMessageAsync(string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<ScheduledMessage>> UpdateScheduledMessageAsync(int id, string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteScheduledMessageAsync(int id, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<Handle>>> QueryHandlesAsync(List<string>? withQuery = null, string? address = null, int offset = 0, int limit = 100, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Handle>> GetHandleAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetHandleFocusStateAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetIMessageAvailabilityAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetFaceTimeAvailabilityAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetHandleCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<FindMyDevice>>> GetFindMyDevicesAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<FindMyDevice>>> RefreshFindMyDevicesAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<FindMyFriend>>> GetFindMyFriendsAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<FindMyFriend>>> RefreshFindMyFriendsAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetAccountInfoAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetAccountContactAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> SetAccountAliasAsync(string alias, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> AnswerFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> LeaveFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetThemeAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> SetThemeAsync(string name, Dictionary<string, object?> data, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteThemeAsync(string name, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetSettingsBackupAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> SetSettingsBackupAsync(string name, Dictionary<string, object?> data, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteSettingsBackupAsync(string name, CancellationToken ct = default) => throw new NotImplementedException();
+}
+
+internal class MockFirebaseService : IFirebaseService
+{
+    public Task FetchAndStoreConfigAsync(CancellationToken ct = default) => Task.CompletedTask;
+    public Task<string?> FetchNewServerUrlAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
+}
+
+internal class MockSettingsService : ISettingsService
+{
+    public void Save() { }
+    public void Load() { }
+}
+
+internal class MockChatsService : IChatsService
+{
+    public IReadOnlyList<ChatWithParticipants> Chats => [];
+    public IReadOnlyList<ChatWithParticipants> ArchivedChats => [];
+    public event EventHandler? ChatsChanged;
+    public event EventHandler<string>? ChatUpdated;
+    public event EventHandler? ArchivedChatsChanged;
+    public Task LoadChatsAsync() => Task.CompletedTask;
+    public Task LoadArchivedChatsAsync() => Task.CompletedTask;
+    public Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null) => Task.CompletedTask;
+    public Task MarkChatReadAsync(string chatGuid, bool read, bool notifyServer = true) => Task.CompletedTask;
+    public Task TogglePinAsync(string chatGuid) => Task.CompletedTask;
+    public Task ReorderPinsAsync(List<string> chatGuids) => Task.CompletedTask;
+    public Task ArchiveChatAsync(string chatGuid) => Task.CompletedTask;
+    public Task UnarchiveChatAsync(string chatGuid) => Task.CompletedTask;
+    public Task DeleteChatAsync(string chatGuid) => Task.CompletedTask;
+    public Task<bool> RenameChatAsync(string chatGuid, string newName) => Task.FromResult(true);
+    public Task ToggleMuteAsync(string chatGuid) => Task.CompletedTask;
+    public Task<bool> AddParticipantAsync(string chatGuid, string address) => Task.FromResult(true);
+    public Task<bool> RemoveParticipantAsync(string chatGuid, string address) => Task.FromResult(true);
+    public Task<bool> LeaveChatAsync(string chatGuid) => Task.FromResult(true);
+    public Task<bool> SetChatIconAsync(string chatGuid, Stream iconStream, string fileName) => Task.FromResult(true);
+    public Task<bool> DeleteChatIconAsync(string chatGuid) => Task.FromResult(true);
+    public string? FindExistingChatGuid(IEnumerable<string> addresses) => null;
+    public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
+}

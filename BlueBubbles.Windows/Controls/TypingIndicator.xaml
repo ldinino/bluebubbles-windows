@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BlueBubbles.Windows.Controls.TypingIndicator"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Hosted by the page; placement/margin is set by the parent. -->
+    <Border Background="{ThemeResource ControlFillColorDefaultBrush}"
+            CornerRadius="18,18,18,4"
+            Padding="14,11"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Bottom">
+        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+            <Ellipse x:Name="Dot1" Width="8" Height="8"
+                     Fill="{ThemeResource TextFillColorSecondaryBrush}" Opacity="0.25" />
+            <Ellipse x:Name="Dot2" Width="8" Height="8"
+                     Fill="{ThemeResource TextFillColorSecondaryBrush}" Opacity="0.25" />
+            <Ellipse x:Name="Dot3" Width="8" Height="8"
+                     Fill="{ThemeResource TextFillColorSecondaryBrush}" Opacity="0.25" />
+        </StackPanel>
+    </Border>
+</UserControl>

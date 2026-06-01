@@ -1,0 +1,563 @@
+using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Data;
+using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace BlueBubbles.Core.Services;
+
+public class ChatsService : IChatsService
+{
+    private readonly IDbContextFactory<BlueBubblesDbContext> _dbFactory;
+    private readonly IBlueBubblesApiService _api;
+    private readonly AppSettings _settings;
+    private readonly List<ChatWithParticipants> _chats = [];
+    private readonly List<ChatWithParticipants> _archivedChats = [];
+    private readonly object _lock = new();
+
+    public IReadOnlyList<ChatWithParticipants> Chats
+    {
+        get { lock (_lock) return _chats.ToList(); }
+    }
+
+    public IReadOnlyList<ChatWithParticipants> ArchivedChats
+    {
+        get { lock (_lock) return _archivedChats.ToList(); }
+    }
+
+    public event EventHandler? ChatsChanged;
+    public event EventHandler<string>? ChatUpdated;
+    public event EventHandler? ArchivedChatsChanged;
+
+    public ChatsService(
+        IDbContextFactory<BlueBubblesDbContext> dbFactory,
+        IBlueBubblesApiService api,
+        AppSettings settings)
+    {
+        _dbFactory = dbFactory;
+        _api = api;
+        _settings = settings;
+    }
+
+    public async Task LoadChatsAsync()
+    {
+        var items = await LoadChatsInternalAsync(archived: false);
+
+        lock (_lock)
+        {
+            _chats.Clear();
+            _chats.AddRange(items);
+        }
+
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task LoadArchivedChatsAsync()
+    {
+        var items = await LoadChatsInternalAsync(archived: true);
+
+        lock (_lock)
+        {
+            _archivedChats.Clear();
+            _archivedChats.AddRange(items);
+        }
+
+        ArchivedChatsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task<List<ChatWithParticipants>> LoadChatsInternalAsync(bool archived)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var chatEntities = await db.Chats
+            .Include(c => c.ChatParticipants)
+            .ThenInclude(cp => cp.Handle)
+            .Where(c => c.IsArchived == archived && c.DateDeleted == null)
+            .OrderByDescending(c => c.IsPinned)
+            .ThenByDescending(c => c.LatestMessageDate)
+            .ToListAsync();
+
+        var chatIds = chatEntities.Select(c => c.Id).ToList();
+
+        var lastMessageIds = await db.Messages
+            .Where(m => chatIds.Contains(m.ChatId) && m.DateDeleted == null && m.AssociatedMessageGuid == null)
+            .GroupBy(m => m.ChatId)
+            .Select(g => g.OrderByDescending(m => m.DateCreated).Select(m => m.Id).FirstOrDefault())
+            .ToListAsync();
+
+        var lastMessages = lastMessageIds.Count > 0
+            ? await db.Messages
+                .Where(m => lastMessageIds.Contains(m.Id))
+                .ToDictionaryAsync(m => m.ChatId, m => m)
+            : new Dictionary<int, MessageEntity>();
+
+        var groupChatIds = chatEntities
+            .Where(c => c.ChatParticipants.Count > 1)
+            .Select(c => c.Id)
+            .ToList();
+
+        var recentSendersByChat = new Dictionary<int, List<HandleEntity>>();
+        if (groupChatIds.Count > 0)
+        {
+            var senderData = await db.Messages
+                .Where(m => groupChatIds.Contains(m.ChatId)
+                    && !m.IsFromMe
+                    && m.HandleId != null
+                    && m.DateDeleted == null
+                    && m.AssociatedMessageGuid == null)
+                .GroupBy(m => new { m.ChatId, m.HandleId })
+                .Select(g => new { g.Key.ChatId, g.Key.HandleId, LatestDate = g.Max(m => m.DateCreated) })
+                .ToListAsync();
+
+            var topSenderIds = senderData
+                .GroupBy(s => s.ChatId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(s => s.LatestDate)
+                          .Take(2)
+                          .Select(s => s.HandleId!.Value)
+                          .ToList());
+
+            var allHandleIds = topSenderIds.Values.SelectMany(x => x).Distinct().ToList();
+            var handleMap = allHandleIds.Count > 0
+                ? await db.Handles.Where(h => allHandleIds.Contains(h.Id)).ToDictionaryAsync(h => h.Id)
+                : new Dictionary<int, HandleEntity>();
+
+            foreach (var (chatId, handleIds) in topSenderIds)
+            {
+                recentSendersByChat[chatId] = handleIds
+                    .Where(handleMap.ContainsKey)
+                    .Select(id => handleMap[id])
+                    .ToList();
+            }
+        }
+
+        var items = new List<ChatWithParticipants>(chatEntities.Count);
+        foreach (var chat in chatEntities)
+        {
+            var participants = chat.ChatParticipants
+                .Select(cp => cp.Handle)
+                .ToList();
+
+            lastMessages.TryGetValue(chat.Id, out var lastMsg);
+            recentSendersByChat.TryGetValue(chat.Id, out var recentSenders);
+            items.Add(new ChatWithParticipants(chat, participants, lastMsg?.Text, recentSenders,
+                lastMsg?.IsFromMe ?? false, lastMsg?.DateDelivered, lastMsg?.DateRead));
+        }
+
+        return items;
+    }
+
+    public string? FindExistingChatGuid(IEnumerable<string> addresses)
+    {
+        var normalized = addresses
+            .Select(a => ContactResolverService.NormalizeAddress(a))
+            .OrderBy(a => a)
+            .ToList();
+
+        lock (_lock)
+        {
+            foreach (var chat in _chats)
+            {
+                var chatAddresses = chat.Participants
+                    .Select(p => ContactResolverService.NormalizeAddress(p.Address))
+                    .OrderBy(a => a)
+                    .ToList();
+
+                if (normalized.Count == chatAddresses.Count && normalized.SequenceEqual(chatAddresses))
+                    return chat.Chat.Guid;
+            }
+        }
+
+        return null;
+    }
+
+    public async Task EnsureChatInDatabaseAsync(Chat chat, string? messageText)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var entity = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chat.Guid);
+        if (entity is null)
+        {
+            entity = new ChatEntity { Guid = chat.Guid };
+            db.Chats.Add(entity);
+        }
+
+        entity.ChatIdentifier = chat.ChatIdentifier;
+        entity.DisplayName = chat.DisplayName;
+        entity.IsArchived = chat.IsArchived;
+        entity.IsPinned = chat.IsPinned;
+        entity.HasUnreadMessage = chat.HasUnreadMessage;
+        entity.Service = chat.Service;
+        entity.MuteType = chat.MuteType;
+        entity.MuteArgs = chat.MuteArgs;
+        entity.AutoSendReadReceipts = chat.AutoSendReadReceipts;
+        entity.AutoSendTypingIndicators = chat.AutoSendTypingIndicators;
+        entity.DateDeleted = chat.DateDeleted;
+        entity.Style = chat.Style;
+        entity.LockChatName = chat.LockChatName;
+        entity.LockChatIcon = chat.LockChatIcon;
+        entity.LastReadMessageGuid = chat.LastReadMessageGuid;
+        entity.LatestMessageDate = chat.LastMessage?.DateCreated
+            ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await db.SaveChangesAsync();
+
+        if (chat.Participants is not null)
+        {
+            foreach (var h in chat.Participants)
+            {
+                var handle = await db.Handles.FirstOrDefaultAsync(
+                    x => x.Address == h.Address && x.Service == h.Service);
+                if (handle is null)
+                {
+                    handle = new HandleEntity { Address = h.Address, Service = h.Service };
+                    db.Handles.Add(handle);
+                    await db.SaveChangesAsync();
+                }
+
+                var linked = await db.ChatParticipants.AnyAsync(
+                    cp => cp.ChatId == entity.Id && cp.HandleId == handle.Id);
+                if (!linked)
+                {
+                    db.ChatParticipants.Add(new ChatParticipant
+                    {
+                        ChatId = entity.Id,
+                        HandleId = handle.Id
+                    });
+                }
+            }
+            await db.SaveChangesAsync();
+        }
+    }
+
+    public async Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.LatestMessageDate = dateCreated;
+        if (!isFromMe) chat.HasUnreadMessage = true;
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            var idx = _chats.FindIndex(c => c.Chat.Guid == chatGuid);
+            if (idx >= 0)
+            {
+                var existing = _chats[idx];
+                var recentSenders = existing.RecentSenders;
+
+                if (!isFromMe && senderAddress is not null && existing.Participants.Count > 1)
+                {
+                    var senderHandle = existing.Participants
+                        .FirstOrDefault(p => p.Address.Equals(senderAddress, StringComparison.OrdinalIgnoreCase));
+                    if (senderHandle is not null)
+                    {
+                        var newSenders = new List<HandleEntity> { senderHandle };
+                        if (recentSenders is not null)
+                        {
+                            foreach (var s in recentSenders)
+                            {
+                                if (s.Id != senderHandle.Id && newSenders.Count < 2)
+                                    newSenders.Add(s);
+                            }
+                        }
+                        recentSenders = newSenders;
+                    }
+                }
+
+                var updated = existing with
+                {
+                    Chat = existing.Chat,
+                    LastMessageText = messageText,
+                    RecentSenders = recentSenders,
+                    // A brand-new message isn't delivered/read yet, so it shows as "Sent" when it's ours.
+                    LastMessageIsFromMe = isFromMe,
+                    LastMessageDateDelivered = null,
+                    LastMessageDateRead = null
+                };
+                updated.Chat.LatestMessageDate = dateCreated;
+                if (!isFromMe) updated.Chat.HasUnreadMessage = true;
+
+                _chats.RemoveAt(idx);
+                var insertIdx = FindInsertIndex(updated.Chat);
+                _chats.Insert(insertIdx, updated);
+            }
+        }
+
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task MarkChatReadAsync(string chatGuid, bool read, bool notifyServer = true)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.HasUnreadMessage = !read;
+        var shouldNotify = notifyServer
+            && (chat.AutoSendReadReceipts ?? _settings.PrivateMarkChatAsRead);
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            var item = _chats.FirstOrDefault(c => c.Chat.Guid == chatGuid);
+            if (item is not null)
+                item.Chat.HasUnreadMessage = !read;
+        }
+
+        ChatUpdated?.Invoke(this, chatGuid);
+
+        if (shouldNotify)
+        {
+            try
+            {
+                if (read)
+                    await _api.MarkChatReadAsync(chatGuid);
+                else
+                    await _api.MarkChatUnreadAsync(chatGuid);
+            }
+            catch { }
+        }
+    }
+
+    public async Task TogglePinAsync(string chatGuid)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.IsPinned = !chat.IsPinned;
+        if (chat.IsPinned)
+        {
+            var maxPin = await db.Chats.Where(c => c.IsPinned).MaxAsync(c => (int?)c.PinIndex) ?? -1;
+            chat.PinIndex = maxPin + 1;
+        }
+        else
+        {
+            chat.PinIndex = null;
+        }
+        await db.SaveChangesAsync();
+
+        await LoadChatsAsync();
+    }
+
+    public async Task ReorderPinsAsync(List<string> chatGuids)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        for (var i = 0; i < chatGuids.Count; i++)
+        {
+            var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuids[i]);
+            if (chat is not null)
+                chat.PinIndex = i;
+        }
+        await db.SaveChangesAsync();
+        await LoadChatsAsync();
+    }
+
+    public async Task ArchiveChatAsync(string chatGuid)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.IsArchived = true;
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            _chats.RemoveAll(c => c.Chat.Guid == chatGuid);
+        }
+
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+
+        if (_archivedChats.Count > 0)
+            await LoadArchivedChatsAsync();
+    }
+
+    public async Task UnarchiveChatAsync(string chatGuid)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.IsArchived = false;
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            _archivedChats.RemoveAll(c => c.Chat.Guid == chatGuid);
+        }
+
+        ArchivedChatsChanged?.Invoke(this, EventArgs.Empty);
+        await LoadChatsAsync();
+    }
+
+    public async Task DeleteChatAsync(string chatGuid)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        db.Chats.Remove(chat);
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            _chats.RemoveAll(c => c.Chat.Guid == chatGuid);
+        }
+
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task<bool> RenameChatAsync(string chatGuid, string newName)
+    {
+        try
+        {
+            var response = await _api.UpdateChatAsync(chatGuid, newName);
+            if (response.Data is null) return false;
+        }
+        catch { return false; }
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is not null)
+        {
+            chat.DisplayName = newName;
+            await db.SaveChangesAsync();
+        }
+
+        lock (_lock)
+        {
+            var item = _chats.FirstOrDefault(c => c.Chat.Guid == chatGuid);
+            if (item is not null)
+                item.Chat.DisplayName = newName;
+        }
+
+        ChatUpdated?.Invoke(this, chatGuid);
+        return true;
+    }
+
+    public async Task ToggleMuteAsync(string chatGuid)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is null) return;
+
+        chat.MuteType = chat.MuteType is null ? "mute" : null;
+        chat.MuteArgs = null;
+        await db.SaveChangesAsync();
+
+        lock (_lock)
+        {
+            var item = _chats.FirstOrDefault(c => c.Chat.Guid == chatGuid);
+            if (item is not null)
+            {
+                item.Chat.MuteType = chat.MuteType;
+                item.Chat.MuteArgs = null;
+            }
+        }
+
+        ChatUpdated?.Invoke(this, chatGuid);
+    }
+
+    public async Task<bool> AddParticipantAsync(string chatGuid, string address)
+    {
+        try
+        {
+            var response = await _api.AddParticipantAsync(chatGuid, address);
+            if (response.Data is null) return false;
+        }
+        catch { return false; }
+
+        await LoadChatsAsync();
+        return true;
+    }
+
+    public async Task<bool> RemoveParticipantAsync(string chatGuid, string address)
+    {
+        try
+        {
+            var response = await _api.RemoveParticipantAsync(chatGuid, address);
+            if (response.Data is null) return false;
+        }
+        catch { return false; }
+
+        await LoadChatsAsync();
+        return true;
+    }
+
+    public async Task<bool> LeaveChatAsync(string chatGuid)
+    {
+        try
+        {
+            await _api.LeaveChatAsync(chatGuid);
+        }
+        catch { return false; }
+
+        await LoadChatsAsync();
+        return true;
+    }
+
+    public async Task<bool> SetChatIconAsync(string chatGuid, Stream iconStream, string fileName)
+    {
+        try
+        {
+            await _api.SetChatIconAsync(chatGuid, iconStream, fileName);
+        }
+        catch { return false; }
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is not null)
+        {
+            chat.CustomAvatarPath = fileName;
+            await db.SaveChangesAsync();
+        }
+
+        ChatUpdated?.Invoke(this, chatGuid);
+        return true;
+    }
+
+    public async Task<bool> DeleteChatIconAsync(string chatGuid)
+    {
+        try
+        {
+            await _api.DeleteChatIconAsync(chatGuid);
+        }
+        catch { return false; }
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+        if (chat is not null)
+        {
+            chat.CustomAvatarPath = null;
+            await db.SaveChangesAsync();
+        }
+
+        ChatUpdated?.Invoke(this, chatGuid);
+        return true;
+    }
+
+    private int FindInsertIndex(ChatEntity chat)
+    {
+        if (chat.IsPinned)
+        {
+            for (var i = 0; i < _chats.Count; i++)
+            {
+                if (!_chats[i].Chat.IsPinned) return i;
+                if ((chat.PinIndex ?? 0) < (_chats[i].Chat.PinIndex ?? 0)) return i;
+            }
+            return _chats.Count;
+        }
+
+        var pinnedCount = _chats.Count(c => c.Chat.IsPinned);
+        for (var i = pinnedCount; i < _chats.Count; i++)
+        {
+            if ((chat.LatestMessageDate ?? 0) > (_chats[i].Chat.LatestMessageDate ?? 0))
+                return i;
+        }
+        return _chats.Count;
+    }
+}

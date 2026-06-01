@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.GeneralSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900">
+
+            <TextBlock Text="General"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <TextBlock Text="Startup"
+                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                       Margin="4,8,0,4" />
+
+            <tk:SettingsCard Header="Launch at sign-in"
+                             Description="Start BlueBubbles automatically when you sign in to Windows">
+                <ToggleSwitch x:Name="LaunchAtStartupToggle"
+                              Toggled="OnLaunchAtStartupToggled" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Start minimized"
+                             Description="When launched at sign-in, start hidden in the system tray"
+                             IsEnabled="{x:Bind Settings.LaunchAtStartup, Mode=OneWay}">
+                <ToggleSwitch IsOn="{x:Bind Settings.LaunchAtStartupMinimized, Mode=TwoWay}"
+                              Toggled="OnStartMinimizedToggled" />
+            </tk:SettingsCard>
+
+            <InfoBar x:Name="StartupBlockedBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     Severity="Warning"
+                     Title="Couldn't update startup setting"
+                     Message="BlueBubbles couldn't write the launch-at-sign-in entry. Try again, or check that your account can modify the registry."
+                     Margin="0,4,0,4" />
+
+            <TextBlock Text="Window behavior"
+                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                       Margin="4,16,0,4" />
+
+            <tk:SettingsCard Header="Minimize to tray"
+                             Description="Keep BlueBubbles running in the system tray when minimized">
+                <ToggleSwitch IsOn="{x:Bind Settings.MinimizeToTray, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Close to tray"
+                             Description="Keep BlueBubbles running in the system tray when the window is closed">
+                <ToggleSwitch IsOn="{x:Bind Settings.CloseToTray, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

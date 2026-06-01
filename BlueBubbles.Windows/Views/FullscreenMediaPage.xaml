@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.FullscreenMediaPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="0" Padding="8,4"
+              Background="{ThemeResource LayerFillColorDefaultBrush}"
+              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+              BorderThickness="0,0,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="BackButton"
+                    Click="OnBackClick"
+                    ToolTipService.ToolTip="Back"
+                    AutomationProperties.Name="Back"
+                    Width="36" Height="36" Padding="0">
+                <FontIcon Glyph="&#xE72B;" FontSize="14" />
+            </Button>
+
+            <TextBlock x:Name="FileNameText"
+                       Grid.Column="1"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Center"
+                       Style="{StaticResource BodyTextBlockStyle}"
+                       MaxLines="1"
+                       TextTrimming="CharacterEllipsis" />
+
+            <Button x:Name="SaveButton"
+                    Grid.Column="2"
+                    Click="OnSaveClick"
+                    ToolTipService.ToolTip="Save as..."
+                    AutomationProperties.Name="Save as"
+                    Width="36" Height="36" Padding="0">
+                <FontIcon Glyph="&#xE74E;" FontSize="14" />
+            </Button>
+        </Grid>
+
+        <!-- Zoomable image -->
+        <ScrollViewer x:Name="ImageScroller"
+                      Grid.Row="1"
+                      ZoomMode="Enabled"
+                      MinZoomFactor="0.5"
+                      MaxZoomFactor="5"
+                      HorizontalScrollMode="Enabled"
+                      VerticalScrollMode="Enabled"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      SizeChanged="OnScrollerSizeChanged">
+            <!-- MaxWidth/MaxHeight are pinned to the viewport in code-behind so
+                 Stretch="Uniform" scales the image to fit at zoom 1.0; without a
+                 cap the ScrollViewer hands the Image infinite space and it renders
+                 at full pixel resolution. -->
+            <Image x:Name="FullImage"
+                   Stretch="Uniform"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center">
+                <Image.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="Zoom in" Click="OnZoomInClick">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8A3;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Zoom out" Click="OnZoomOutClick">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE71F;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Reset zoom" Click="OnZoomResetClick" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Copy image" Click="OnCopyClick">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8C8;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Image.ContextFlyout>
+            </Image>
+        </ScrollViewer>
+    </Grid>
+</Page>

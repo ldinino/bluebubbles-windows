@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.ServerManagementSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900">
+
+            <TextBlock Text="Server Management"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <InfoBar x:Name="StatusBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     Margin="0,0,0,8" />
+
+            <!-- Server info -->
+            <tk:SettingsExpander Header="Server information"
+                                 Description="Details reported by the BlueBubbles server"
+                                 IsExpanded="True">
+                <Button x:Name="RefreshInfoButton" Content="Refresh" Click="OnRefreshInfoClick" />
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <StackPanel Spacing="6">
+                                <TextBlock x:Name="ServerVersionText" Style="{StaticResource BodyTextBlockStyle}" />
+                                <TextBlock x:Name="OsVersionText" Style="{StaticResource BodyTextBlockStyle}" />
+                                <TextBlock x:Name="ProxyServiceText" Style="{StaticResource BodyTextBlockStyle}" />
+                                <TextBlock x:Name="PrivateApiText" Style="{StaticResource BodyTextBlockStyle}" />
+                                <TextBlock x:Name="HelperText" Style="{StaticResource BodyTextBlockStyle}" />
+                                <TextBlock x:Name="IcloudText" Style="{StaticResource BodyTextBlockStyle}" />
+                            </StackPanel>
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+            <!-- Statistics -->
+            <tk:SettingsExpander Header="Statistics"
+                                 Description="Totals reported by the server">
+                <Button x:Name="LoadStatsButton" Content="Load" Click="OnLoadStatsClick" />
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <TextBlock x:Name="StatsText"
+                                       Style="{StaticResource BodyTextBlockStyle}"
+                                       TextWrapping="Wrap"
+                                       Text="Not loaded" />
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+            <!-- Restart -->
+            <tk:SettingsCard Header="Soft restart"
+                             Description="Restart the BlueBubbles server services">
+                <Button x:Name="SoftRestartButton" Content="Soft Restart" Click="OnSoftRestartClick" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Hard restart"
+                             Description="Fully restart the BlueBubbles server application">
+                <Button x:Name="HardRestartButton" Content="Hard Restart" Click="OnHardRestartClick" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Restart iMessage"
+                             Description="Restart the Messages app on the Mac">
+                <Button x:Name="RestartImessageButton" Content="Restart iMessage" Click="OnRestartImessageClick" />
+            </tk:SettingsCard>
+
+            <!-- Updates -->
+            <tk:SettingsCard Header="Updates"
+                             Description="Check for and install server updates">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="CheckUpdateButton" Content="Check for Updates" Click="OnCheckUpdateClick" />
+                    <Button x:Name="InstallUpdateButton" Content="Install Update" Click="OnInstallUpdateClick" />
+                </StackPanel>
+            </tk:SettingsCard>
+
+            <!-- Logs -->
+            <tk:SettingsExpander Header="Server logs"
+                                 Description="Recent log output from the server">
+                <Button x:Name="LoadLogsButton" Content="Load Logs" Click="OnLoadLogsClick" />
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <TextBox x:Name="ServerLogsBox"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     TextWrapping="NoWrap"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     MinWidth="600"
+                                     MaxHeight="320"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+            <!-- Danger zone -->
+            <TextBlock Text="DANGER ZONE"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                       Margin="4,20,0,4" />
+            <tk:SettingsCard Header="Reset app"
+                             Description="Delete all local data (chats, messages, contacts, settings) and return to setup">
+                <Button x:Name="ResetAppButton"
+                        Content="Reset App"
+                        Click="OnResetAppClick"
+                        Background="{ThemeResource SystemFillColorCriticalBrush}"
+                        Foreground="White" />
+            </tk:SettingsCard>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

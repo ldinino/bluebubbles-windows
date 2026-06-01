@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.ConnectionSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900" HorizontalAlignment="Stretch">
+
+            <TextBlock Text="Connection"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <tk:SettingsCard Header="Status" HeaderIcon="{x:Null}">
+                <tk:SettingsCard.Description>
+                    <TextBlock x:Name="StatusText"
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                </tk:SettingsCard.Description>
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Server URL">
+                <tk:SettingsCard.Description>
+                    <TextBlock x:Name="UrlText"
+                               IsTextSelectionEnabled="True"
+                               TextWrapping="Wrap" />
+                </tk:SettingsCard.Description>
+                <Button x:Name="FetchUrlButton"
+                        Content="Fetch Latest URL"
+                        Click="OnFetchUrlClick" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Proxy Service"
+                             Description="How the app reaches your server">
+                <TextBlock x:Name="ProxyText"
+                           Style="{StaticResource BodyTextBlockStyle}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsExpander Header="Use Local Connection"
+                                 Description="Connect directly over the LAN when the server is on the same network">
+                <ToggleSwitch x:Name="LocalConnectionToggle"
+                              Toggled="OnLocalConnectionToggled" />
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard Header="Port">
+                        <TextBox x:Name="LocalPortTextBox"
+                                 PlaceholderText="1234"
+                                 Width="120"
+                                 InputScope="Number" />
+                    </tk:SettingsCard>
+                    <tk:SettingsCard Header="Test"
+                                     Description="Probe the server's LAN addresses on the configured port">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock x:Name="LocalStatusText"
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       MaxWidth="320"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Button x:Name="TestLocalButton"
+                                    Content="Test Connection"
+                                    Click="OnTestLocalClick" />
+                        </StackPanel>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+            <tk:SettingsCard Header="Contacts">
+                <tk:SettingsCard.Description>
+                    <TextBlock x:Name="VCardStatusText" TextWrapping="Wrap" />
+                </tk:SettingsCard.Description>
+                <Button x:Name="ImportVCardButton"
+                        Content="Import vCard"
+                        Click="OnImportVCardClick" />
+            </tk:SettingsCard>
+
+            <tk:SettingsExpander Header="Connection Log"
+                                 Description="Diagnostic output from the connection and sync services">
+                <tk:SettingsExpander.ItemsHeader>
+                    <StackPanel Orientation="Horizontal" Spacing="8" Padding="16,8" HorizontalAlignment="Right">
+                        <Button Content="Copy All" Click="OnCopyLogClick" />
+                        <Button Content="Clear" Click="OnClearLogClick" />
+                    </StackPanel>
+                </tk:SettingsExpander.ItemsHeader>
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <TextBox x:Name="LogTextBox"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     MinWidth="600"
+                                     MaxHeight="300"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

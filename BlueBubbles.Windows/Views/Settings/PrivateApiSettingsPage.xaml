@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.PrivateApiSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900">
+
+            <TextBlock Text="Private API"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <InfoBar x:Name="StatusInfoBar"
+                     IsOpen="True"
+                     IsClosable="False"
+                     Margin="0,0,0,8" />
+
+            <tk:SettingsCard Header="Send typing indicators"
+                             Description="Let the other person see when you are typing">
+                <ToggleSwitch IsOn="{x:Bind Settings.PrivateSendTypingIndicators, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Mark chats as read on the server"
+                             Description="Send read receipts and clear unread state on the Mac when you open a chat">
+                <ToggleSwitch IsOn="{x:Bind Settings.PrivateMarkChatAsRead, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Mark as read manually only"
+                             Description="Don't mark a chat read automatically — only when you choose to">
+                <ToggleSwitch IsOn="{x:Bind Settings.PrivateManualMarkAsRead, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Settings.MessagingSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tk="using:CommunityToolkit.WinUI.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+        <StackPanel Padding="32,24" Spacing="4" MaxWidth="900">
+
+            <TextBlock Text="Messaging"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       Margin="0,0,0,12" />
+
+            <tk:SettingsCard Header="Auto-download attachments"
+                             Description="Download incoming media automatically instead of on tap">
+                <ToggleSwitch IsOn="{x:Bind Settings.AutoDownload, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Send with Enter"
+                             Description="Press Enter to send; Shift+Enter inserts a new line">
+                <ToggleSwitch IsOn="{x:Bind Settings.SendWithReturn, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Show delivery timestamps"
+                             Description="Display the time beneath each message">
+                <ToggleSwitch IsOn="{x:Bind Settings.ShowDeliveryTimestamps, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Send/receive indicators on chat list"
+                             Description="Show delivery status on conversation tiles">
+                <ToggleSwitch IsOn="{x:Bind Settings.StatusIndicatorsOnChats, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Scroll to last unread"
+                             Description="Open conversations at the first unread message">
+                <ToggleSwitch IsOn="{x:Bind Settings.ScrollToLastUnread, Mode=TwoWay}" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Send delay"
+                             Description="Wait before sending so you can cancel (seconds)">
+                <NumberBox x:Name="SendDelayBox"
+                           Minimum="0"
+                           Maximum="10"
+                           SmallChange="1"
+                           SpinButtonPlacementMode="Compact"
+                           ValueChanged="OnSendDelayChanged" />
+            </tk:SettingsCard>
+
+        </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

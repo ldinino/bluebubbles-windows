@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="BlueBubbles.Windows.Controls.AttachmentHolder"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="RootGrid"
+          MinWidth="120" MinHeight="48"
+          MaxWidth="360" MaxHeight="320"
+          CornerRadius="8">
+
+        <!-- Image display (cached image attachments) -->
+        <Image x:Name="ImageContent"
+               Stretch="Uniform"
+               Visibility="Collapsed" />
+
+        <!-- Video thumbnail with play overlay -->
+        <Grid x:Name="VideoContent" Visibility="Collapsed">
+            <Image x:Name="VideoThumbnail" Stretch="Uniform" />
+            <Border Background="#60000000"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    CornerRadius="24"
+                    Width="48" Height="48">
+                <FontIcon Glyph="&#xE768;" FontSize="22"
+                          Foreground="White"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center" />
+            </Border>
+        </Grid>
+
+        <!-- Audio player -->
+        <Grid x:Name="AudioContent" Visibility="Collapsed"
+              Padding="8,6" MinWidth="200">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="AudioPlayBtn"
+                    Width="32" Height="32" Padding="0"
+                    CornerRadius="16"
+                    Click="OnAudioPlayClick">
+                <FontIcon x:Name="AudioPlayIcon" Glyph="&#xE768;" FontSize="14" />
+            </Button>
+            <Slider x:Name="AudioSlider"
+                    Grid.Column="1" Margin="8,0"
+                    VerticalAlignment="Center"
+                    Minimum="0" Maximum="100" />
+            <TextBlock x:Name="AudioDuration"
+                       Grid.Column="2"
+                       VerticalAlignment="Center"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Opacity="0.7" />
+        </Grid>
+
+        <!-- Generic file display -->
+        <Grid x:Name="FileContent" Visibility="Collapsed"
+              Padding="10,8" MinWidth="180">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <FontIcon x:Name="FileIcon" Glyph="&#xE7C3;" FontSize="28"
+                      VerticalAlignment="Center"
+                      Margin="0,0,10,0" />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="FileName"
+                           MaxLines="1"
+                           TextTrimming="CharacterEllipsis"
+                           Style="{StaticResource CaptionTextBlockStyle}" />
+                <TextBlock x:Name="FileSize"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Opacity="0.6" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Download overlay (not yet downloaded) -->
+        <Grid x:Name="DownloadOverlay" Visibility="Collapsed"
+              Background="#40000000" CornerRadius="8">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="4">
+                <Button x:Name="DownloadBtn"
+                        HorizontalAlignment="Center"
+                        Width="40" Height="40" Padding="0"
+                        CornerRadius="20"
+                        Click="OnDownloadClick">
+                    <FontIcon Glyph="&#xE896;" FontSize="18" />
+                </Button>
+                <TextBlock x:Name="DownloadSizeText"
+                           HorizontalAlignment="Center"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="White" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Downloading progress overlay -->
+        <Grid x:Name="ProgressOverlay" Visibility="Collapsed"
+              Background="#40000000" CornerRadius="8">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="4">
+                <ProgressRing x:Name="DownloadRing"
+                              IsActive="True"
+                              Width="32" Height="32" />
+                <TextBlock x:Name="ProgressText"
+                           HorizontalAlignment="Center"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="White" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Error overlay -->
+        <Grid x:Name="ErrorOverlay" Visibility="Collapsed"
+              Background="#40000000" CornerRadius="8">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="4">
+                <FontIcon Glyph="&#xE783;" FontSize="24" Foreground="#FF4444" />
+                <Button Content="Retry" Click="OnDownloadClick"
+                        HorizontalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

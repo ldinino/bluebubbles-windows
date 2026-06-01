@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="BlueBubbles.Windows.Views.Setup.ServerConnectPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:converters="using:BlueBubbles.Windows.Converters"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVis" />
+    </Page.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid VerticalAlignment="Center" HorizontalAlignment="Center"
+              MaxWidth="480" Padding="24">
+            <StackPanel Spacing="24">
+
+                <TextBlock Text="Connect to Server"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           HorizontalAlignment="Center" />
+
+                <Pivot x:Name="ConnectPivot">
+                    <!-- Manual Tab -->
+                    <PivotItem Header="Manual">
+                        <StackPanel Spacing="16" Padding="0,16,0,0">
+                            <TextBlock Text="Enter your BlueBubbles server URL and password."
+                                       Style="{StaticResource BodyTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBox x:Name="UrlTextBox"
+                                     Header="Server URL"
+                                     PlaceholderText="http://192.168.1.100:1234"
+                                     TextChanged="OnUrlTextChanged" />
+
+                            <PasswordBox x:Name="PasswordBox"
+                                         Header="Password"
+                                         PlaceholderText="Your server password"
+                                         PasswordChanged="OnPasswordChanged" />
+
+                            <Button x:Name="ConnectButton"
+                                    Content="Connect"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    HorizontalAlignment="Stretch"
+                                    Click="OnConnectClick" />
+
+                            <ProgressRing x:Name="ManualProgress"
+                                          IsActive="False"
+                                          HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </PivotItem>
+
+                    <!-- Google Tab -->
+                    <PivotItem Header="Google Sign-In">
+                        <StackPanel Spacing="16" Padding="0,16,0,0">
+                            <TextBlock Text="Sign in with Google to automatically discover your server."
+                                       Style="{StaticResource BodyTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+
+                            <!-- Before discovery -->
+                            <StackPanel x:Name="PreDiscoveryPanel" Spacing="12">
+                                <Button Content="Sign in with Google"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OnGoogleSignInClick" />
+                                <HyperlinkButton Content="Use your browser instead"
+                                                 HorizontalAlignment="Center"
+                                                 Click="OnBrowserSignInClick" />
+                            </StackPanel>
+
+                            <!-- Browser auth in progress -->
+                            <StackPanel x:Name="BrowserAuthPanel"
+                                        Visibility="Collapsed" Spacing="8">
+                                <ProgressRing IsActive="True" HorizontalAlignment="Center" />
+                                <TextBlock x:Name="BrowserAuthStatus"
+                                           Text="Waiting for browser sign-in..."
+                                           HorizontalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <HyperlinkButton Content="Cancel"
+                                                 HorizontalAlignment="Center"
+                                                 Click="OnCancelBrowserAuthClick" />
+                            </StackPanel>
+
+                            <!-- Discovery in progress -->
+                            <StackPanel x:Name="DiscoveringPanel"
+                                        Visibility="Collapsed" Spacing="8">
+                                <ProgressRing IsActive="True" HorizontalAlignment="Center" />
+                                <TextBlock x:Name="DiscoveryStatus"
+                                           Text="Discovering servers..."
+                                           HorizontalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+
+                            <!-- Discovered servers list -->
+                            <StackPanel x:Name="ServerListPanel"
+                                        Visibility="Collapsed" Spacing="12">
+                                <TextBlock Text="Select your server:"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}" />
+
+                                <ListView x:Name="ServerListView"
+                                          SelectionMode="Single"
+                                          MaxHeight="200">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                    <TextBlock Text="{Binding ServerUrl}"
+                                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                               Style="{StaticResource CaptionTextBlockStyle}" />
+                                                </StackPanel>
+                                                <FontIcon Grid.Column="1"
+                                                          Glyph="&#xE10B;"
+                                                          Foreground="Green"
+                                                          Visibility="{Binding IsReachable, Converter={StaticResource BoolToVis}}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+
+                                <PasswordBox x:Name="GooglePasswordBox"
+                                             Header="Server Password"
+                                             PlaceholderText="Your server password"
+                                             PasswordChanged="OnPasswordChanged" />
+
+                                <Button Content="Connect"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OnConnectDiscoveredClick" />
+                            </StackPanel>
+                        </StackPanel>
+                    </PivotItem>
+                </Pivot>
+
+                <!-- Error display -->
+                <InfoBar x:Name="ErrorBar"
+                         Severity="Error"
+                         IsOpen="False"
+                         IsClosable="True" />
+
+                <!-- Status display -->
+                <TextBlock x:Name="StatusText"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           HorizontalAlignment="Center"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>
