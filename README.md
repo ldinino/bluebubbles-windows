@@ -90,8 +90,7 @@ A two-project split keeps the protocol and logic independent of the UI:
 - **`BlueBubbles.Windows.Tests`** — xUnit test suite.
 
 Dependency flow is one-directional: **Views → ViewModels → Services → Models**, and real-time socket
-events are marshaled onto the UI thread. The full design is documented in
-[BlueBubbles-WinUI3-Design-Spec.md](BlueBubbles-WinUI3-Design-Spec.md).
+events are marshaled onto the UI thread.
 
 ## How it connects
 
