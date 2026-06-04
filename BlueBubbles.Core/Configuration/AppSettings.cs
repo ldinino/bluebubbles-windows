@@ -46,6 +46,8 @@ public partial class AppSettings : ObservableObject
     [ObservableProperty] public partial bool NotifyOnChatList { get; set; }
     [ObservableProperty] public partial bool NotifyReactions { get; set; }
     [ObservableProperty] public partial string NotificationSound { get; set; }
+    // Absolute path to a user-picked custom sound; used only when NotificationSound == "custom".
+    [ObservableProperty] public partial string NotificationSoundCustomPath { get; set; }
     [ObservableProperty] public partial bool FilterUnknownSenders { get; set; }
 
     // Private API
@@ -78,6 +80,7 @@ public partial class AppSettings : ObservableObject
         ServerAddress = string.Empty;
         LocalhostPort = "1234";
         VCardFilePath = string.Empty;
+        NotificationSoundCustomPath = string.Empty;
         LastSelectedChatGuid = string.Empty;
         ApiTimeout = 30000;
         AvatarScale = 1.0;

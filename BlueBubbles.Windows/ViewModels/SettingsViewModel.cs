@@ -20,7 +20,11 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ILocalhostDetectionService _localhostDetection;
     private readonly AppSettings _appSettings;
 
+    /// <summary>Sentinel filter value meaning "show every category".</summary>
+    public const string AllCategories = "All";
+
     [ObservableProperty] public partial string LogText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string LogCategoryFilter { get; set; } = AllCategories;
 
     [ObservableProperty] public partial SocketState ConnectionState { get; set; }
     [ObservableProperty] public partial string ServerUrl { get; set; }
@@ -80,7 +84,7 @@ public partial class SettingsViewModel : ObservableObject
             };
         }
 
-        LogText = string.Join(Environment.NewLine, AppLog.Entries);
+        RebuildLogText();
         AppLog.EntryAdded += OnLogEntry;
 
         RefreshVCardStatus();
@@ -116,12 +120,13 @@ public partial class SettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            AppLog.Error($"vCard import failed: {ex.Message}");
+            AppLog.Error(LogCategory.Contacts, $"vCard import failed: {ex.Message}");
         }
     }
 
     private void OnLogEntry(string entry)
     {
+        if (!MatchesFilter(entry)) return;
         RunOnUI(() =>
         {
             LogText = string.IsNullOrEmpty(LogText)
@@ -129,6 +134,14 @@ public partial class SettingsViewModel : ObservableObject
                 : LogText + Environment.NewLine + entry;
         });
     }
+
+    partial void OnLogCategoryFilterChanged(string value) => RebuildLogText();
+
+    private void RebuildLogText() =>
+        LogText = string.Join(Environment.NewLine, AppLog.Entries.Where(MatchesFilter));
+
+    private bool MatchesFilter(string entry) =>
+        LogCategoryFilter == AllCategories || entry.Contains($"[{LogCategoryFilter}]");
 
     private static void RunOnUI(Action action)
     {
@@ -145,21 +158,21 @@ public partial class SettingsViewModel : ObservableObject
         IsFetchingUrl = true;
         try
         {
-            AppLog.Info("Manual URL fetch requested");
+            AppLog.Info(LogCategory.Firebase, "Manual URL fetch requested");
 
             try { await _firebase.FetchAndStoreConfigAsync(); }
-            catch { AppLog.Warn("Server unreachable — using existing FCM data"); }
+            catch { AppLog.Warn(LogCategory.Firebase, "Server unreachable — using existing FCM data"); }
 
             if (!_config.HasValidFcmData)
             {
-                AppLog.Error("No Firebase config stored — cannot fetch URL");
+                AppLog.Error(LogCategory.Firebase, "No Firebase config stored — cannot fetch URL");
                 return;
             }
 
             var newUrl = await _firebase.FetchNewServerUrlAsync();
             if (newUrl is not null && newUrl != _config.ServerUrl)
             {
-                AppLog.Info($"URL changed: {_config.ServerUrl} -> {newUrl}");
+                AppLog.Info(LogCategory.Firebase, $"URL changed: {_config.ServerUrl} -> {newUrl}");
                 _config.ServerUrl = newUrl;
                 _settings.Save();
                 ServerUrl = newUrl;
@@ -167,17 +180,17 @@ public partial class SettingsViewModel : ObservableObject
             }
             else if (newUrl is not null)
             {
-                AppLog.Info("URL unchanged — reconnecting");
+                AppLog.Info(LogCategory.Firebase, "URL unchanged — reconnecting");
                 await _socketService.RestartSocketAsync();
             }
             else
             {
-                AppLog.Error("Could not resolve a server URL from Firebase");
+                AppLog.Error(LogCategory.Firebase, "Could not resolve a server URL from Firebase");
             }
         }
         catch (Exception ex)
         {
-            AppLog.Error($"Fetch URL failed: {ex.Message}");
+            AppLog.Error(LogCategory.Firebase, $"Fetch URL failed: {ex.Message}");
         }
         finally
         {

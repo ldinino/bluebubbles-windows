@@ -257,7 +257,7 @@ public partial class SetupViewModel : ObservableObject
             ErrorMessage = inner is not null
                 ? $"Sync failed: {inner}"
                 : $"Sync failed: {ex.Message}";
-            AppLog.Error($"Sync exception: {ex}");
+            AppLog.Error(LogCategory.Sync, $"Sync exception: {ex}");
         }
     }
 

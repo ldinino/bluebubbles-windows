@@ -19,7 +19,6 @@ public partial class ChatViewModel : ObservableObject
     private readonly IChatsService _chatsService;
     private readonly ISocketService _socketService;
     private readonly IAttachmentCacheService _attachmentCache;
-    private readonly IWindowStateService _windowState;
     private readonly ILinkPreviewService? _linkPreview;
     private readonly AppSettings _settings;
 
@@ -78,7 +77,6 @@ public partial class ChatViewModel : ObservableObject
         IChatsService chatsService,
         ISocketService socketService,
         IAttachmentCacheService attachmentCache,
-        IWindowStateService windowState,
         AppSettings settings,
         ILinkPreviewService? linkPreview = null)
     {
@@ -89,7 +87,6 @@ public partial class ChatViewModel : ObservableObject
         _chatsService = chatsService;
         _socketService = socketService;
         _attachmentCache = attachmentCache;
-        _windowState = windowState;
         _settings = settings;
         _linkPreview = linkPreview;
 
@@ -126,7 +123,6 @@ public partial class ChatViewModel : ObservableObject
 
         _chatId = tile.Chat.Id;
         _chatGuid = tile.ChatGuid;
-        _windowState.SetActiveChatGuid(_chatGuid);
         _isGroup = tile.IsGroup;
         _participantAddresses = tile.Participants.Select(p => p.Address).ToList();
         _chatDisplayNameRaw = tile.Chat.DisplayName;
@@ -152,6 +148,15 @@ public partial class ChatViewModel : ObservableObject
         try
         {
             var messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize);
+
+            // Safety net: a chat left empty by a missed/incomplete sync would otherwise show a
+            // permanently-blank thread. Pull its newest page from the server on open, once.
+            if (messages.Count == 0 &&
+                await _messagesService.EnsureChatHydratedAsync(_chatId, _chatGuid, PageSize))
+            {
+                messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize);
+            }
+
             if (messages.Count > 0) _oldestMessageDate = messages[0].DateCreated;
             FirstUnreadGuid = ComputeFirstUnread(tile.Chat, messages);
             BuildMessageList(messages);

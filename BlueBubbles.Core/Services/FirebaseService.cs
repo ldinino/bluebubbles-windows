@@ -27,20 +27,20 @@ public class FirebaseService : IFirebaseService
     {
         if (string.IsNullOrEmpty(_config.FcmApiKey))
         {
-            AppLog.Error("No FCM API key available for Firebase auth");
+            AppLog.Error(LogCategory.Firebase, "No FCM API key available for Firebase auth");
             return null;
         }
 
         try
         {
-            AppLog.Info("Requesting Firebase anonymous ID token...");
+            AppLog.Info(LogCategory.Firebase, "Requesting Firebase anonymous ID token...");
             var url = $"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={_config.FcmApiKey}";
             var content = new StringContent("{\"returnSecureToken\":true}", Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync(url, content, ct);
 
             if (!response.IsSuccessStatusCode)
             {
-                AppLog.Info("Firebase anonymous auth not available — proceeding without token");
+                AppLog.Info(LogCategory.Firebase, "Firebase anonymous auth not available — proceeding without token");
                 return null;
             }
 
@@ -48,27 +48,27 @@ public class FirebaseService : IFirebaseService
             var doc = JsonSerializer.Deserialize<JsonElement>(json);
             if (doc.TryGetProperty("idToken", out var token))
             {
-                AppLog.Info("Firebase ID token obtained");
+                AppLog.Info(LogCategory.Firebase, "Firebase ID token obtained");
                 return token.GetString();
             }
 
-            AppLog.Error("Firebase auth response missing idToken field");
+            AppLog.Error(LogCategory.Firebase, "Firebase auth response missing idToken field");
             return null;
         }
         catch
         {
-            AppLog.Info("Firebase anonymous auth not available — proceeding without token");
+            AppLog.Info(LogCategory.Firebase, "Firebase anonymous auth not available — proceeding without token");
             return null;
         }
     }
 
     public async Task FetchAndStoreConfigAsync(CancellationToken ct = default)
     {
-        AppLog.Info("Fetching FCM config from server...");
+        AppLog.Info(LogCategory.Firebase, "Fetching FCM config from server...");
         var response = await _api.GetFcmClientAsync(ct);
         if (response.Status != 200)
         {
-            AppLog.Warn($"FCM config fetch returned status {response.Status}");
+            AppLog.Warn(LogCategory.Firebase, $"FCM config fetch returned status {response.Status}");
             return;
         }
 
@@ -89,45 +89,45 @@ public class FirebaseService : IFirebaseService
         _config.FcmApplicationId = client?.ClientInfo?.MobileSdkAppId;
         _config.FcmApiKey = client?.ApiKey?.FirstOrDefault()?.CurrentKey;
         _config.FcmClientId = client?.OAuthClient?.FirstOrDefault()?.ClientId;
-        AppLog.Info($"FCM config stored: project={_config.FcmProjectId}, rtdb={_config.FcmFirebaseUrl ?? "none"}");
+        AppLog.Info(LogCategory.Firebase, $"FCM config stored: project={_config.FcmProjectId}, rtdb={_config.FcmFirebaseUrl ?? "none"}");
     }
 
     public async Task<string?> FetchNewServerUrlAsync(CancellationToken ct = default)
     {
         if (!_config.HasValidFcmData)
         {
-            AppLog.Error("No valid FCM data — cannot fetch server URL");
+            AppLog.Error(LogCategory.Firebase, "No valid FCM data — cannot fetch server URL");
             return null;
         }
 
-        AppLog.Info($"Fetching server URL (project={_config.FcmProjectId})");
+        AppLog.Info(LogCategory.Firebase, $"Fetching server URL (project={_config.FcmProjectId})");
         var idToken = await GetFirebaseIdTokenAsync(ct);
 
         if (!string.IsNullOrEmpty(_config.FcmFirebaseUrl))
         {
-            AppLog.Info($"Trying RTDB: {_config.FcmFirebaseUrl}");
+            AppLog.Info(LogCategory.Firebase, $"Trying RTDB: {_config.FcmFirebaseUrl}");
             var url = await FetchFromRtdbAsync(_config.FcmFirebaseUrl, idToken, ct);
             if (url is not null)
             {
-                AppLog.Info($"RTDB returned: {url}");
+                AppLog.Info(LogCategory.Firebase, $"RTDB returned: {url}");
                 return url;
             }
-            AppLog.Warn("RTDB returned no URL");
+            AppLog.Warn(LogCategory.Firebase, "RTDB returned no URL");
         }
 
         if (!string.IsNullOrEmpty(_config.FcmProjectId))
         {
-            AppLog.Info($"Trying Firestore: {_config.FcmProjectId}");
+            AppLog.Info(LogCategory.Firebase, $"Trying Firestore: {_config.FcmProjectId}");
             var url = await FetchFromFirestoreAsync(_config.FcmProjectId, idToken, ct);
             if (url is not null)
             {
-                AppLog.Info($"Firestore returned: {url}");
+                AppLog.Info(LogCategory.Firebase, $"Firestore returned: {url}");
                 return url;
             }
-            AppLog.Warn("Firestore returned no URL");
+            AppLog.Warn(LogCategory.Firebase, "Firestore returned no URL");
         }
 
-        AppLog.Error("All Firebase sources failed to return a URL");
+        AppLog.Error(LogCategory.Firebase, "All Firebase sources failed to return a URL");
         return null;
     }
 
@@ -148,7 +148,7 @@ public class FirebaseService : IFirebaseService
         }
         catch (Exception ex)
         {
-            AppLog.Error($"RTDB fetch failed: {ex.Message}");
+            AppLog.Error(LogCategory.Firebase, $"RTDB fetch failed: {ex.Message}");
             return null;
         }
     }
@@ -168,7 +168,7 @@ public class FirebaseService : IFirebaseService
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(ct);
-                AppLog.Error($"Firestore fetch failed: {response.StatusCode} — {body}");
+                AppLog.Error(LogCategory.Firebase, $"Firestore fetch failed: {response.StatusCode} — {body}");
                 return null;
             }
 
@@ -182,11 +182,11 @@ public class FirebaseService : IFirebaseService
                 return AddressHelpers.SanitizeServerAddress(value.GetString());
             }
 
-            AppLog.Warn($"Firestore doc missing serverUrl field. Fields: {doc}");
+            AppLog.Warn(LogCategory.Firebase, $"Firestore doc missing serverUrl field. Fields: {doc}");
         }
         catch (Exception ex)
         {
-            AppLog.Error($"Firestore fetch exception: {ex.Message}");
+            AppLog.Error(LogCategory.Firebase, $"Firestore fetch exception: {ex.Message}");
         }
 
         return null;

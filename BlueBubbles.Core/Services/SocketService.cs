@@ -16,12 +16,19 @@ public partial class SocketService : ObservableObject, ISocketService
     private readonly ISettingsService _settings;
     private readonly ISyncService _syncService;
     private readonly ILocalhostDetectionService _localhostDetection;
+    private readonly IBlueBubblesApiService _api;
     private readonly AppSettings _appSettings;
     private SocketIOClient.SocketIO? _socket;
     private Timer? _reconnectTimer;
+    private Timer? _heartbeatTimer;
     private readonly object _stateLock = new();
     private SocketState _lastState = SocketState.Disconnected;
     private int _reconnectAttempt;
+    private int _restarting;
+
+    // How often, while connected, to confirm the link is actually alive. A websocket can sit in a
+    // half-open "Connected" state after the machine sleeps; an HTTP ping flushes that out.
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
 
     [ObservableProperty] public partial SocketState State { get; set; }
     [ObservableProperty] public partial string LastError { get; set; }
@@ -33,6 +40,7 @@ public partial class SocketService : ObservableObject, ISocketService
         ISettingsService settings,
         ISyncService syncService,
         ILocalhostDetectionService localhostDetection,
+        IBlueBubblesApiService api,
         AppSettings appSettings)
     {
         _config = config;
@@ -41,6 +49,7 @@ public partial class SocketService : ObservableObject, ISocketService
         _settings = settings;
         _syncService = syncService;
         _localhostDetection = localhostDetection;
+        _api = api;
         _appSettings = appSettings;
         LastError = string.Empty;
     }
@@ -55,13 +64,15 @@ public partial class SocketService : ObservableObject, ISocketService
             _socket = null;
         }
 
+        // We own reconnection ourselves (ScheduleReconnect → RefreshUrlAndRestartAsync) so we can
+        // refresh the proxy URL (ngrok/zrok rotate after the Mac sleeps) between attempts —
+        // something the library's built-in loop can't do. Leaving the library's reconnection on
+        // would race our restarts, so it's disabled here.
         _socket = new SocketIOClient.SocketIO(_config.ServerUrl, new SocketIOOptions
         {
             Query = new Dictionary<string, string> { ["guid"] = _config.Password },
             Transport = TransportProtocol.WebSocket,
-            Reconnection = true,
-            ReconnectionAttempts = int.MaxValue,
-            ReconnectionDelay = 1000,
+            Reconnection = false,
             ConnectionTimeout = TimeSpan.FromSeconds(15),
             ExtraHeaders = BuildHeaders()
         });
@@ -95,7 +106,7 @@ public partial class SocketService : ObservableObject, ISocketService
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Socket] Error handling IncomingFacetime: {ex}");
+                AppLog.Error(LogCategory.Socket, $"Error handling IncomingFacetime: {ex}");
             }
         });
 
@@ -107,6 +118,8 @@ public partial class SocketService : ObservableObject, ISocketService
     {
         _reconnectTimer?.Dispose();
         _reconnectTimer = null;
+        _heartbeatTimer?.Dispose();
+        _heartbeatTimer = null;
 
         if (_socket is null) return;
         _ = _socket.DisconnectAsync();
@@ -179,7 +192,7 @@ public partial class SocketService : ObservableObject, ISocketService
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Socket] Error handling '{eventName}': {ex}");
+                AppLog.Error(LogCategory.Socket, $"Error handling '{eventName}': {ex}");
             }
         });
     }
@@ -219,26 +232,74 @@ public partial class SocketService : ObservableObject, ISocketService
                 _reconnectTimer?.Dispose();
                 _reconnectTimer = null;
                 _reconnectAttempt = 0;
-                System.Diagnostics.Debug.WriteLine("[Socket] Connected");
+                StartHeartbeat();
+                AppLog.Info(LogCategory.Socket, "Connected");
                 if (_appSettings.FinishedSetup)
                     _ = OnConnectedAsync();
                 break;
             case SocketState.Error:
             case SocketState.Disconnected:
+                _heartbeatTimer?.Dispose();
+                _heartbeatTimer = null;
                 ScheduleReconnect();
                 break;
         }
     }
 
+    private void StartHeartbeat()
+    {
+        _heartbeatTimer?.Dispose();
+        _heartbeatTimer = new Timer(
+            _ => _ = HeartbeatTickAsync(), null, HeartbeatInterval, HeartbeatInterval);
+    }
+
+    private async Task HeartbeatTickAsync()
+    {
+        if (State != SocketState.Connected) return;
+        try
+        {
+            var resp = await _api.PingAsync();
+            if (resp.Status != 200)
+            {
+                AppLog.Warn(LogCategory.Socket, $"Heartbeat ping returned {resp.Status}; restarting");
+                await EnsureHealthyAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Socket, $"Heartbeat ping failed ({ex.Message}); restarting");
+            await EnsureHealthyAsync();
+        }
+    }
+
+    public async Task EnsureHealthyAsync()
+    {
+        if (string.IsNullOrEmpty(_config.ServerUrl)) return;
+
+        // Not connected → just (re)connect. Connected → verify it's not half-open with a ping.
+        if (State == SocketState.Connected)
+        {
+            try
+            {
+                var resp = await _api.PingAsync();
+                if (resp.Status == 200) return;
+            }
+            catch { /* fall through to restart */ }
+        }
+
+        AppLog.Info(LogCategory.Socket, "EnsureHealthy: connection unhealthy, restarting");
+        await RefreshUrlAndRestartAsync();
+    }
+
     private async Task OnConnectedAsync()
     {
         try { await _syncService.RunIncrementalSyncAsync(); }
-        catch (Exception ex) { AppLog.Warn($"Incremental sync on connect failed: {ex.Message}"); }
+        catch (Exception ex) { AppLog.Warn(LogCategory.Socket, $"Incremental sync on connect failed: {ex.Message}"); }
 
         if (_appSettings.UseLocalConnection)
         {
             try { await _localhostDetection.TryActivateAsync(); }
-            catch (Exception ex) { AppLog.Warn($"Localhost detection on connect failed: {ex.Message}"); }
+            catch (Exception ex) { AppLog.Warn(LogCategory.Socket, $"Localhost detection on connect failed: {ex.Message}"); }
         }
     }
 
@@ -247,8 +308,7 @@ public partial class SocketService : ObservableObject, ISocketService
         _reconnectTimer?.Dispose();
         var delaySec = Math.Min(5 * (1 << Math.Min(_reconnectAttempt, 5)), 60);
         _reconnectAttempt++;
-        System.Diagnostics.Debug.WriteLine(
-            $"[Socket] Scheduling reconnect attempt {_reconnectAttempt} in {delaySec}s");
+        AppLog.Info(LogCategory.Socket, $"Scheduling reconnect attempt {_reconnectAttempt} in {delaySec}s");
         _reconnectTimer = new Timer(_ =>
         {
             if (State == SocketState.Connected) return;
@@ -258,21 +318,33 @@ public partial class SocketService : ObservableObject, ISocketService
 
     private async Task RefreshUrlAndRestartAsync()
     {
+        // Coalesce concurrent restart requests (reconnect timer + heartbeat + resume/network events).
+        if (Interlocked.Exchange(ref _restarting, 1) == 1) return;
+        try
+        {
+            await RefreshUrlAndRestartCoreAsync();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _restarting, 0);
+        }
+    }
+
+    private async Task RefreshUrlAndRestartCoreAsync()
+    {
         try
         {
             var newUrl = await _firebase.FetchNewServerUrlAsync();
             if (newUrl is not null && newUrl != _config.ServerUrl)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"[Socket] Server URL changed: {_config.ServerUrl} -> {newUrl}");
+                AppLog.Info(LogCategory.Socket, $"Server URL changed: {_config.ServerUrl} -> {newUrl}");
                 _config.ServerUrl = newUrl;
                 _settings.Save();
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine(
-                $"[Socket] Firebase URL refresh failed: {ex.Message}");
+            AppLog.Warn(LogCategory.Socket, $"Firebase URL refresh failed: {ex.Message}");
         }
 
         try
@@ -281,7 +353,7 @@ public partial class SocketService : ObservableObject, ISocketService
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[Socket] Restart failed: {ex.Message}");
+            AppLog.Error(LogCategory.Socket, $"Restart failed: {ex.Message}");
             UpdateState(SocketState.Error, ex.Message);
         }
     }

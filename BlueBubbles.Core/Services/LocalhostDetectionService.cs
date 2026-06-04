@@ -65,7 +65,7 @@ public class LocalhostDetectionService : ILocalhostDetectionService
             _api.OriginOverride = found;
 
             if (found is not null)
-                AppLog.Info($"Local connection active: {found}");
+                AppLog.Info(LogCategory.Socket, $"Local connection active: {found}");
 
             return found is not null;
         }

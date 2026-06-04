@@ -37,6 +37,42 @@
                            Text="Loading..." />
             </tk:SettingsCard>
 
+            <TextBlock Text="DIAGNOSTICS"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Margin="4,16,0,4" />
+
+            <tk:SettingsExpander Header="Diagnostic log"
+                                 Description="Recent activity from across the app — connection, sync, contacts, and more. Filter by category or export it to attach to a bug report.">
+                <tk:SettingsExpander.ItemsHeader>
+                    <StackPanel Orientation="Horizontal" Spacing="8" Padding="16,8"
+                                VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock Text="Category" VerticalAlignment="Center" />
+                        <ComboBox x:Name="LogCategoryCombo"
+                                  MinWidth="120"
+                                  SelectionChanged="OnLogCategoryChanged" />
+                        <Button Content="Export Logs" Click="OnExportLogsClick" />
+                        <Button Content="Copy All" Click="OnCopyLogClick" />
+                        <Button Content="Clear" Click="OnClearLogClick" />
+                    </StackPanel>
+                </tk:SettingsExpander.ItemsHeader>
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <TextBox x:Name="LogTextBox"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     MinWidth="600"
+                                     MaxHeight="300"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
             <TextBlock Text="LINKS"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"

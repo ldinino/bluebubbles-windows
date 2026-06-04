@@ -202,6 +202,9 @@ public class DependencyInjectionTests
         public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> FetchOlderMessagesFromServerAsync(
             int chatId, string chatGuid, int limit = 25, CancellationToken ct = default)
             => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.MessageEntity>());
+        public Task<bool> EnsureChatHydratedAsync(
+            int chatId, string chatGuid, int limit = 50, CancellationToken ct = default)
+            => Task.FromResult(false);
         public Task SaveIncomingMessageAsync(string chatGuid, BlueBubbles.Core.Models.Message message)
             => Task.CompletedTask;
         public Task UpdateMessageAsync(BlueBubbles.Core.Models.Message message)
