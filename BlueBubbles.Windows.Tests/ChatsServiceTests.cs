@@ -129,6 +129,26 @@ public class ChatsServiceTests
     }
 
     [Fact]
+    public async Task HandleNewMessageAsync_ResurrectsSoftDeletedChat()
+    {
+        var (svc, factory) = CreateService();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-zombie", DateDeleted = 12345, LatestMessageDate = 1000 });
+            await db.SaveChangesAsync();
+        }
+        await svc.LoadChatsAsync();
+        Assert.Empty(svc.Chats);   // soft-deleted, hidden
+
+        await svc.HandleNewMessageAsync("chat-zombie", "back from the dead", 5000, false);
+
+        Assert.Single(svc.Chats);
+        Assert.Equal("chat-zombie", svc.Chats[0].Chat.Guid);
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-zombie").DateDeleted);
+    }
+
+    [Fact]
     public async Task MarkChatReadAsync_ClearsUnread()
     {
         var (svc, factory) = CreateService();

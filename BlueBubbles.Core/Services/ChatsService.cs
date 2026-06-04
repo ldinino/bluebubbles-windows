@@ -236,9 +236,24 @@ public class ChatsService : IChatsService
         var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
         if (chat is null) return;
 
+        // A message arriving for a soft-deleted chat (e.g. one pruned as empty during a prior
+        // sync) means it's live again — undo the delete so it resurfaces.
+        var wasResurrected = chat.DateDeleted is not null;
+        if (wasResurrected) chat.DateDeleted = null;
+
         chat.LatestMessageDate = dateCreated;
         if (!isFromMe) chat.HasUnreadMessage = true;
         await db.SaveChangesAsync();
+
+        // A resurrected chat — or one that simply isn't in the in-memory list yet — needs a full
+        // reload so it appears with its participants rather than being silently dropped below.
+        var inList = false;
+        lock (_lock) { inList = _chats.Any(c => c.Chat.Guid == chatGuid); }
+        if (wasResurrected || !inList)
+        {
+            await LoadChatsAsync();
+            return;
+        }
 
         lock (_lock)
         {

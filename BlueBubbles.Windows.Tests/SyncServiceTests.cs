@@ -187,8 +187,10 @@ public class SyncServiceTests
     }
 
     [Fact]
-    public async Task TieredSync_RecentChat_Gets30DayWindow()
+    public async Task InitialSync_FetchesLatestPage_NoAfterFloor()
     {
+        // Regression: the old tiered window applied an `after` date floor that could exclude a
+        // chat's most recent messages. The newest page must be fetched with no `after`.
         var handle = MakeHandle("+15551234567");
         var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
         var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
@@ -204,36 +206,36 @@ public class SyncServiceTests
         await svc.RunFullSyncAsync();
 
         var call = api.ChatMessageCalls.First(c => c.Guid == "chat-recent");
-        Assert.NotNull(call.After);
-        var thirtyDaysAgoApprox = DateTimeOffset.UtcNow.AddDays(-30).ToUnixTimeMilliseconds();
-        Assert.InRange(call.After.Value, thirtyDaysAgoApprox - 5000, thirtyDaysAgoApprox + 5000);
+        Assert.Null(call.After);
     }
 
     [Fact]
-    public async Task TieredSync_OlderChat_Gets7DayWindow()
+    public async Task InitialSync_IdleChat_NotSoftDeleted_AndMessagesSynced()
     {
+        // Regression for S1/S3: a chat idle for far longer than the old 7-day floor must still
+        // pull its latest messages and stay active rather than being pruned as "empty".
         var handle = MakeHandle("+15551234567");
-        var olderDate = DateTimeOffset.UtcNow.AddDays(-14).ToUnixTimeMilliseconds();
+        var olderDate = DateTimeOffset.UtcNow.AddDays(-90).ToUnixTimeMilliseconds();
         var lastMsg = MakeMessage("last-msg", "hi", handle, olderDate);
-        var chats = new List<Chat> { MakeChat("chat-older", [handle], lastMsg) };
+        var chats = new List<Chat> { MakeChat("chat-idle", [handle], lastMsg) };
         var messages = new Dictionary<string, List<Message>>
         {
-            ["chat-older"] = [MakeMessage("msg-1", "hello", handle, olderDate - 1000)]
+            ["chat-idle"] = [MakeMessage("msg-1", "hello", handle, olderDate - 1000)]
         };
 
         var api = new SyncMockApiService(chats, messages);
-        var (svc, _) = CreateService(api);
+        var (svc, factory) = CreateService(api);
 
-        await svc.RunFullSyncAsync();
+        await svc.RunFullSyncAsync(skipEmptyChats: true);
 
-        var call = api.ChatMessageCalls.First(c => c.Guid == "chat-older");
-        Assert.NotNull(call.After);
-        var sevenDaysAgoApprox = DateTimeOffset.UtcNow.AddDays(-7).ToUnixTimeMilliseconds();
-        Assert.InRange(call.After.Value, sevenDaysAgoApprox - 5000, sevenDaysAgoApprox + 5000);
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single();
+        Assert.Null(chat.DateDeleted);                 // not pruned
+        Assert.Equal(1, db.Messages.Count(m => m.ChatId == chat.Id));   // history synced
     }
 
     [Fact]
-    public async Task TieredSync_SetsOldestSyncedMessageDate()
+    public async Task InitialSync_SetsOldestSyncedMessageDate()
     {
         var handle = MakeHandle("+15551234567");
         var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
@@ -260,63 +262,94 @@ public class SyncServiceTests
     }
 
     [Fact]
-    public async Task TieredSync_PaginatesWithinWindow()
+    public async Task InitialSync_CapsAtOnePagePerChat()
     {
-        var handle = MakeHandle("+15551234567");
-        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
-        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
-        var chats = new List<Chat> { MakeChat("chat-paginate", [handle], lastMsg) };
-
-        // Create 150 messages (more than one page of 100)
-        var msgs = Enumerable.Range(0, 150)
-            .Select(i => MakeMessage($"msg-{i}", $"text-{i}", handle,
-                recentDate - (150 - i) * 1000))
-            .ToList();
-
-        var messages = new Dictionary<string, List<Message>>
-        {
-            ["chat-paginate"] = msgs
-        };
-
-        var api = new SyncMockApiService(chats, messages);
-        var (svc, factory) = CreateService(api);
-
-        await svc.RunFullSyncAsync();
-
-        var calls = api.ChatMessageCalls.Where(c => c.Guid == "chat-paginate").ToList();
-        Assert.True(calls.Count >= 2, $"Expected at least 2 pagination calls, got {calls.Count}");
-
-        using var db = factory.CreateDbContext();
-        Assert.Equal(150, db.Messages.Count());
-    }
-
-    [Fact]
-    public async Task TieredSync_CapsAt500MessagesPerChat()
-    {
+        // Initial sync pulls a single newest page (~100) per chat; deeper history is on-demand.
         var handle = MakeHandle("+15551234567");
         var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
         var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
         var chats = new List<Chat> { MakeChat("chat-big", [handle], lastMsg) };
 
-        // Create 600 messages (exceeds 500 cap)
-        var msgs = Enumerable.Range(0, 600)
+        var msgs = Enumerable.Range(0, 150)
             .Select(i => MakeMessage($"msg-{i}", $"text-{i}", handle,
-                recentDate - (600 - i) * 1000))
+                recentDate - (150 - i) * 1000))
             .ToList();
-
-        var messages = new Dictionary<string, List<Message>>
-        {
-            ["chat-big"] = msgs
-        };
+        var messages = new Dictionary<string, List<Message>> { ["chat-big"] = msgs };
 
         var api = new SyncMockApiService(chats, messages);
         var (svc, factory) = CreateService(api);
 
         await svc.RunFullSyncAsync();
 
+        var calls = api.ChatMessageCalls.Where(c => c.Guid == "chat-big").ToList();
+        Assert.Single(calls);
+        Assert.Equal(100, calls[0].Limit);
+
         using var db = factory.CreateDbContext();
-        Assert.True(db.Messages.Count() <= 500,
-            $"Expected at most 500 messages, got {db.Messages.Count()}");
+        Assert.Equal(100, db.Messages.Count());
+    }
+
+    [Fact]
+    public async Task IncrementalSync_CheckpointsWatermarkPerBatch()
+    {
+        // A delta interrupted mid-backfill must persist the cursor for the batches it did complete,
+        // so the next run resumes instead of refetching from the original cursor.
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-delta", [handle]);
+
+        // First batch: a full page (1000) so the loop continues; second call throws (simulated drop).
+        var batch1 = Enumerable.Range(1, 1000)
+            .Select(i => MakeMessage($"d-{i}", $"t{i}", handle, 1700000000000 + i) with
+            {
+                OriginalRowId = i,
+                Chats = [chat]
+            })
+            .ToList();
+
+        var api = new SyncMockApiService([], queryMessages: offset =>
+            offset == 0 ? batch1 : throw new InvalidOperationException("network dropped"));
+
+        var factory = TestDbContextFactory.Create();
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        // The completed batch's max ROWID was checkpointed before the second batch failed.
+        Assert.Equal(1000, appSettings.LastIncrementalSyncRowId);
+        using var db = factory.CreateDbContext();
+        Assert.Equal(1000, db.Messages.Count());
+    }
+
+    [Fact]
+    public async Task IncrementalSync_ResurrectsSoftDeletedChat()
+    {
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-zombie", [handle]);
+
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-zombie", DateDeleted = 12345 });
+            db.SaveChanges();
+        }
+
+        var batch = new List<Message>
+        {
+            MakeMessage("d-1", "back", handle, 1700000000500) with { OriginalRowId = 5, Chats = [chat] }
+        };
+        var api = new SyncMockApiService([], queryMessages: offset => offset == 0 ? batch : []);
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        var resurrected = db2.Chats.Single(c => c.Guid == "chat-zombie");
+        Assert.Null(resurrected.DateDeleted);
     }
 }
 
@@ -336,6 +369,7 @@ internal class SyncMockApiService : IBlueBubblesApiService
     private readonly List<Chat> _chats;
     private readonly Dictionary<string, List<Message>> _chatMessages;
     private readonly Action? _onQueryChats;
+    private readonly Func<int, List<Message>>? _queryMessages;
 
     public int QueryChatsCallCount { get; private set; }
     public List<ChatMessageCall> ChatMessageCalls { get; } = [];
@@ -343,11 +377,13 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public SyncMockApiService(
         List<Chat> chats,
         Dictionary<string, List<Message>>? chatMessages = null,
-        Action? onQueryChats = null)
+        Action? onQueryChats = null,
+        Func<int, List<Message>>? queryMessages = null)
     {
         _chats = chats;
         _chatMessages = chatMessages ?? new();
         _onQueryChats = onQueryChats;
+        _queryMessages = queryMessages;
     }
 
     public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default)
@@ -383,6 +419,11 @@ internal class SyncMockApiService : IBlueBubblesApiService
             filtered = filtered.Where(msg => msg.DateCreated > after.Value);
         if (before.HasValue)
             filtered = filtered.Where(msg => msg.DateCreated < before.Value);
+
+        // Mirror the server: DESC = newest first, so a limited page returns the most recent messages.
+        filtered = sort.Equals("DESC", StringComparison.OrdinalIgnoreCase)
+            ? filtered.OrderByDescending(msg => msg.DateCreated)
+            : filtered.OrderBy(msg => msg.DateCreated);
 
         var page = filtered.Skip(offset).Take(limit).ToList();
         return Task.FromResult(new ApiResponse<List<Message>>(200, "OK", page, null));
@@ -420,7 +461,12 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<Chat>> RemoveParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> LeaveChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (_queryMessages is null) throw new NotImplementedException();
+        return Task.FromResult(new ApiResponse<List<Message>>(200, "OK", _queryMessages(offset), null));
+    }
     public Task<ApiResponse<Message>> GetMessageAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetEmbeddedMediaAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();

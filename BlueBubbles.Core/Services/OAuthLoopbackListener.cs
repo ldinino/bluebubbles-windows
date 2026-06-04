@@ -51,11 +51,11 @@ public static class OAuthLoopbackListener
         using var listener = new HttpListener();
         listener.Prefixes.Add(ListenerPrefix);
         listener.Start();
-        AppLog.Info($"OAuth: loopback listening on {ListenerPrefix}");
+        AppLog.Info(LogCategory.OAuth, $"loopback listening on {ListenerPrefix}");
 
         using var _ = ct.Register(() =>
         {
-            AppLog.Warn("OAuth: sign-in cancelled — stopping loopback listener");
+            AppLog.Warn(LogCategory.OAuth, "sign-in cancelled — stopping loopback listener");
             try { listener.Stop(); } catch { }
         });
 
@@ -67,11 +67,11 @@ public static class OAuthLoopbackListener
             {
                 HttpListenerContext context;
                 try { context = await listener.GetContextAsync(); }
-                catch (ObjectDisposedException) { AppLog.Warn("OAuth: listener disposed before token"); return null; }
-                catch (HttpListenerException) { AppLog.Warn("OAuth: listener stopped before token"); return null; }
+                catch (ObjectDisposedException) { AppLog.Warn(LogCategory.OAuth, "listener disposed before token"); return null; }
+                catch (HttpListenerException) { AppLog.Warn(LogCategory.OAuth, "listener stopped before token"); return null; }
 
                 var path = context.Request.Url?.AbsolutePath?.TrimEnd('/');
-                AppLog.Info($"OAuth: loopback request {path}");
+                AppLog.Info(LogCategory.OAuth, $"loopback request {path}");
 
                 if (path == "/oauth/callback")
                 {
@@ -83,7 +83,7 @@ public static class OAuthLoopbackListener
                     await WriteHtmlAsync(context.Response, SuccessHtml);
                     if (!string.IsNullOrEmpty(token))
                     {
-                        AppLog.Info("OAuth: access token received");
+                        AppLog.Info(LogCategory.OAuth, "access token received");
                         return token;
                     }
                 }

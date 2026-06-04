@@ -358,6 +358,10 @@ internal class RecordingMessagesService : IMessagesService
         int chatId, string chatGuid, int limit = 25, CancellationToken ct = default)
         => Task.FromResult(new List<MessageEntity>());
 
+    public Task<bool> EnsureChatHydratedAsync(
+        int chatId, string chatGuid, int limit = 50, CancellationToken ct = default)
+        => Task.FromResult(false);
+
     public Task SaveIncomingMessageAsync(string chatGuid, Message message)
     {
         SavedMessages.Add((chatGuid, message));

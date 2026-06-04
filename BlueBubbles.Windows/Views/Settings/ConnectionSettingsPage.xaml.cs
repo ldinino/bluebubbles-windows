@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -22,7 +21,6 @@ public sealed partial class ConnectionSettingsPage : Page
         _config = App.Services.GetRequiredService<ServerConfiguration>();
         InitializeComponent();
 
-        LogTextBox.Text = _vm.LogText;
         UpdateConnectionDisplay();
         UpdateVCardDisplay();
         UpdateLocalConnectionDisplay();
@@ -44,13 +42,6 @@ public sealed partial class ConnectionSettingsPage : Page
                 {
                     FetchUrlButton.IsEnabled = !_vm.IsFetchingUrl;
                     FetchUrlButton.Content = _vm.IsFetchingUrl ? "Fetching..." : "Fetch Latest URL";
-                });
-                break;
-            case nameof(SettingsViewModel.LogText):
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    LogTextBox.Text = _vm.LogText;
-                    LogTextBox.SelectionStart = LogTextBox.Text.Length;
                 });
                 break;
             case nameof(SettingsViewModel.VCardStatus):
@@ -129,14 +120,4 @@ public sealed partial class ConnectionSettingsPage : Page
         if (file is not null)
             await _vm.ImportVCardCommand.ExecuteAsync(file.Path);
     }
-
-    private void OnCopyLogClick(object sender, RoutedEventArgs e)
-    {
-        var dp = new DataPackage();
-        dp.SetText(_vm.LogText);
-        Clipboard.SetContent(dp);
-    }
-
-    private void OnClearLogClick(object sender, RoutedEventArgs e)
-        => _vm.ClearLogCommand.Execute(null);
 }

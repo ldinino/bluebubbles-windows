@@ -26,6 +26,30 @@
                 <ToggleSwitch IsOn="{x:Bind Settings.NotifyReactions, Mode=TwoWay}" />
             </tk:SettingsCard>
 
+            <tk:SettingsCard Header="Notification sound"
+                             Description="Plays when a notification appears. “Default” uses your Windows notification sound.">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="PreviewButton" Click="OnPreviewClick"
+                            ToolTipService.ToolTip="Preview sound">
+                        <FontIcon Glyph="&#xE768;" FontSize="14" />
+                    </Button>
+                    <ComboBox x:Name="SoundPicker" MinWidth="220"
+                              DisplayMemberPath="Label"
+                              SelectionChanged="OnSoundSelectionChanged" />
+                </StackPanel>
+            </tk:SettingsCard>
+
+            <tk:SettingsCard x:Name="CustomFileCard" Header="Custom sound file"
+                             Description="Choose a .wav, .mp3, .m4a, .flac or .wma file"
+                             Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock x:Name="CustomPathText" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="320"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Button Content="Browse…" Click="OnBrowseClick" />
+                </StackPanel>
+            </tk:SettingsCard>
+
             <tk:SettingsCard Header="Filter unknown senders"
                              Description="Suppress notifications from addresses not in your contacts">
                 <ToggleSwitch IsOn="{x:Bind Settings.FilterUnknownSenders, Mode=TwoWay}" />

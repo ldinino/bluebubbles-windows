@@ -24,12 +24,11 @@ public class SyncService : ISyncService
 
     private const int ChatPageSize = 200;
     private const int IncrementalBatchSize = 1000;
-    private const int TieredMessagePageSize = 100;
-    private const int RecentChatDays = 7;
-    private const int RecentSyncWindowDays = 30;
-    private const int OlderSyncWindowDays = 7;
-    private const int MaxSyncHistoryDays = 365;
-    private const int MaxMessagesPerChat = 500;
+    // Initial sync pulls the newest page per chat regardless of age — deeper history loads
+    // on demand via MessagesService.FetchOlderMessagesFromServerAsync (scroll-up). The old
+    // tiered date-window approach is gone: an absolute `after` floor could exclude a chat's
+    // entire (idle) history and get it mis-classified as empty and soft-deleted.
+    private const int InitialMessagesPerChat = 100;
 
     private static readonly List<string> IncrementalWithQuery =
         ["chats", "chats.participants", "attachment", "handle", "attributedBody", "messageSummaryInfo", "payloadData"];
@@ -68,7 +67,7 @@ public class SyncService : ISyncService
         var totalChats = countResp.Data!.GetProperty("total").GetInt32();
 
         var handleCache = new Dictionary<string, int>();
-        var chatEntityIds = new List<(string Guid, int Id, bool HasParticipants, long? LatestMessageDate)>();
+        var chatEntityIds = new List<(string Guid, int Id, bool HasParticipants)>();
         int chatsProcessed = 0;
 
         for (int offset = 0; offset < totalChats; offset += ChatPageSize)
@@ -140,7 +139,7 @@ public class SyncService : ISyncService
                     await db.SaveChangesAsync(ct);
                 }
 
-                chatEntityIds.Add((chat.Guid, chatEntity.Id, chat.Participants is { Count: > 0 }, chat.LastMessage?.DateCreated));
+                chatEntityIds.Add((chat.Guid, chatEntity.Id, chat.Participants is { Count: > 0 }));
                 chatsProcessed++;
             }
 
@@ -148,13 +147,10 @@ public class SyncService : ISyncService
                 $"Synced {chatsProcessed}/{totalChats} chats"));
         }
 
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var oneYearAgo = DateTimeOffset.UtcNow.AddDays(-MaxSyncHistoryDays).ToUnixTimeMilliseconds();
-
         for (int i = 0; i < chatEntityIds.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var (chatGuid, chatId, hasParticipants, latestMessageDate) = chatEntityIds[i];
+            var (chatGuid, chatId, hasParticipants) = chatEntityIds[i];
 
             progress?.Report(new(SyncPhase.SyncingMessages, i + 1, chatEntityIds.Count,
                 $"Messages for chat {i + 1}/{chatEntityIds.Count}"));
@@ -167,65 +163,42 @@ public class SyncService : ISyncService
 
             try
             {
-                var isRecent = latestMessageDate.HasValue &&
-                    (now - latestMessageDate.Value) < TimeSpan.FromDays(RecentChatDays).TotalMilliseconds;
-                var windowDays = isRecent ? RecentSyncWindowDays : OlderSyncWindowDays;
-                var afterTimestamp = Math.Max(
-                    DateTimeOffset.UtcNow.AddDays(-windowDays).ToUnixTimeMilliseconds(),
-                    oneYearAgo);
+                // Fetch the newest page for this chat with NO date floor, so a chat that's been
+                // idle for months still pulls its latest messages instead of coming back empty.
+                var msgResp = await _api.GetChatMessagesAsync(
+                    chatGuid,
+                    withQuery: "attachment,handle,attributedBody,messageSummaryInfo,payloadData",
+                    sort: "DESC",
+                    offset: 0,
+                    limit: InitialMessagesPerChat,
+                    ct: ct);
 
-                int offset = 0;
-                int totalSaved = 0;
-                long? overallOldestDate = null;
-                bool isEmpty = true;
+                var messages = msgResp.Data ?? [];
 
-                while (totalSaved < MaxMessagesPerChat)
-                {
-                    var msgResp = await _api.GetChatMessagesAsync(
-                        chatGuid,
-                        withQuery: "attachment,handle,attributedBody,messageSummaryInfo,payloadData",
-                        sort: "DESC",
-                        after: afterTimestamp,
-                        offset: offset,
-                        limit: TieredMessagePageSize,
-                        ct: ct);
-
-                    var messages = msgResp.Data ?? [];
-                    if (messages.Count == 0) break;
-
-                    isEmpty = false;
-                    await SaveMessagesAsync(chatId, messages, handleCache, ct);
-
-                    var batchOldest = messages
-                        .Where(m => m.DateCreated.HasValue)
-                        .Min(m => m.DateCreated);
-                    if (batchOldest.HasValue &&
-                        (overallOldestDate is null || batchOldest < overallOldestDate))
-                        overallOldestDate = batchOldest;
-
-                    totalSaved += messages.Count;
-                    offset += TieredMessagePageSize;
-
-                    if (messages.Count < TieredMessagePageSize) break;
-                }
-
-                if (isEmpty)
+                // "Empty" means the server has no messages for this chat — not "nothing in an
+                // arbitrary recent window". Only genuinely-empty chats are soft-deleted.
+                if (messages.Count == 0)
                 {
                     if (skipEmptyChats)
                         await SoftDeleteChatAsync(chatId, ct);
+                    continue;
                 }
-                else
+
+                await SaveMessagesAsync(chatId, messages, handleCache, ct);
+
+                var oldestDate = messages
+                    .Where(m => m.DateCreated.HasValue)
+                    .Min(m => m.DateCreated);
+
+                await using var db = await _dbFactory.CreateDbContextAsync(ct);
+                var chatEntity = await db.Chats.FindAsync([chatId], ct);
+                if (chatEntity is not null)
                 {
-                    await using var db = await _dbFactory.CreateDbContextAsync(ct);
-                    var chatEntity = await db.Chats.FindAsync([chatId], ct);
-                    if (chatEntity is not null)
-                    {
-                        chatEntity.OldestSyncedMessageDate = overallOldestDate ?? afterTimestamp;
-                        await db.SaveChangesAsync(ct);
-                    }
+                    chatEntity.OldestSyncedMessageDate = oldestDate;
+                    await db.SaveChangesAsync(ct);
                 }
             }
-            catch (Exception ex) { AppLog.Warn($"Failed to sync messages for chat {chatGuid}: {ex.Message}"); }
+            catch (Exception ex) { AppLog.Warn(LogCategory.Sync, $"Failed to sync messages for chat {chatGuid}: {ex.Message}"); }
         }
 
         progress?.Report(new(SyncPhase.FetchingFcmConfig, 0, 0, "Fetching Firebase config..."));
@@ -258,7 +231,6 @@ public class SyncService : ISyncService
         catch { }
         try
         {
-            var syncStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             long lastSyncedRowId = startRowId;
             long lastSyncedTimestamp = syncStart;
 
@@ -326,24 +298,24 @@ public class SyncService : ISyncService
                     await SaveMessagesAsync(chatId, chatMessages, handleCache, ct);
                 }
 
+                // Checkpoint the watermark after every persisted batch, not just at the very
+                // end. If the delta is interrupted (sleep, network drop, app exit) mid-backfill,
+                // the next run resumes from here instead of refetching from the original cursor.
+                if (lastSyncedRowId > _appSettings.LastIncrementalSyncRowId)
+                    _appSettings.LastIncrementalSyncRowId = lastSyncedRowId;
+                if (lastSyncedTimestamp > _appSettings.LastIncrementalSync)
+                    _appSettings.LastIncrementalSync = lastSyncedTimestamp;
+                _settingsService.Save();
+
                 offset += IncrementalBatchSize;
                 hasMore = messages.Count == IncrementalBatchSize;
             }
 
-            if (syncStart > 0)
-                _appSettings.LastIncrementalSync = syncStartedAt;
-            else if (lastSyncedTimestamp > syncStart)
-                _appSettings.LastIncrementalSync = lastSyncedTimestamp;
-
-            if (lastSyncedRowId > startRowId)
-                _appSettings.LastIncrementalSyncRowId = lastSyncedRowId;
-
-            _settingsService.Save();
             await _chatsService.LoadChatsAsync();
         }
         catch (Exception ex)
         {
-            AppLog.Warn($"Incremental sync failed: {ex.Message}");
+            AppLog.Warn(LogCategory.Sync, $"Incremental sync failed: {ex.Message}");
         }
         finally
         {
@@ -359,10 +331,46 @@ public class SyncService : ISyncService
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
-        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid, ct);
-        if (chat is not null) return chat.Id;
-
         var chatData = sampleMessage.Chats?.FirstOrDefault(c => c.Guid == chatGuid);
+
+        var chat = await db.Chats
+            .Include(c => c.ChatParticipants)
+            .FirstOrDefaultAsync(c => c.Guid == chatGuid, ct);
+        if (chat is not null)
+        {
+            // A new message means the chat is live again — undo any prior soft-delete (e.g. it
+            // had been pruned as empty) so it resurfaces in the list.
+            var dirty = false;
+            if (chat.DateDeleted is not null)
+            {
+                chat.DateDeleted = null;
+                dirty = true;
+            }
+
+            // Backfill participants if we have them and the stored set is empty (a chat first
+            // created from a sparse payload can land without participants → renders blank).
+            if (chat.ChatParticipants.Count == 0 && chatData?.Participants is { Count: > 0 })
+            {
+                await SaveHandlesAsync(db, chatData.Participants, handleCache, ct);
+                foreach (var h in chatData.Participants)
+                {
+                    var key = h.Address + "|" + h.Service;
+                    if (handleCache.TryGetValue(key, out var handleId))
+                    {
+                        chat.ChatParticipants.Add(new ChatParticipant
+                        {
+                            ChatId = chat.Id,
+                            HandleId = handleId
+                        });
+                        dirty = true;
+                    }
+                }
+            }
+
+            if (dirty) await db.SaveChangesAsync(ct);
+            return chat.Id;
+        }
+
         chat = new ChatEntity
         {
             Guid = chatGuid,
@@ -471,7 +479,7 @@ public class SyncService : ISyncService
     private async Task FetchFcmConfigAsync(CancellationToken ct)
     {
         try { await _firebase.FetchAndStoreConfigAsync(ct); }
-        catch (Exception ex) { AppLog.Warn($"FCM config fetch failed: {ex.Message}"); }
+        catch (Exception ex) { AppLog.Warn(LogCategory.Sync, $"FCM config fetch failed: {ex.Message}"); }
     }
 
     private static string? Serialize<T>(T? value) where T : class =>

@@ -15,6 +15,7 @@ public partial class ConversationListViewModel : ObservableObject
     private readonly ISocketService _socketService;
     private readonly IIncomingMessageProcessor _incomingProcessor;
     private readonly ISyncService _syncService;
+    private readonly IWindowStateService _windowState;
     private readonly AppSettings _appSettings;
 
     private List<ConversationTileViewModel> _allTiles = [];
@@ -37,6 +38,7 @@ public partial class ConversationListViewModel : ObservableObject
         ISocketService socketService,
         IIncomingMessageProcessor incomingProcessor,
         ISyncService syncService,
+        IWindowStateService windowState,
         AppSettings appSettings)
     {
         _chatsService = chatsService;
@@ -45,6 +47,7 @@ public partial class ConversationListViewModel : ObservableObject
         _socketService = socketService;
         _incomingProcessor = incomingProcessor;
         _syncService = syncService;
+        _windowState = windowState;
         _appSettings = appSettings;
         SearchQuery = string.Empty;
 
@@ -99,6 +102,11 @@ public partial class ConversationListViewModel : ObservableObject
 
     partial void OnSelectedConversationChanged(ConversationTileViewModel? value)
     {
+        // Single source of truth for "which chat is on screen", consumed by the notification
+        // suppression logic. Setting null on deselection (e.g. navigating back to the list) is the
+        // point — otherwise the last-opened chat would stay suppressed while it's no longer visible.
+        _windowState.SetActiveChatGuid(value?.ChatGuid);
+
         if (value is not null)
             _ = _chatsService.MarkChatReadAsync(value.ChatGuid, true);
     }

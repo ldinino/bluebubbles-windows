@@ -60,6 +60,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <!-- Bundled notification sounds (four Flutter WAVs + three for-charm MP3s). Copied next to the
+         published .exe — Content alone is NOT copied into the unpackaged self-contained publish — so
+         NotificationSoundService can resolve them by file path via AppContext.BaseDirectory. -->
+    <Content Include="Assets\Sounds\*.wav;Assets\Sounds\*.mp3">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

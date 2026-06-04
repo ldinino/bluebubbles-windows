@@ -436,6 +436,60 @@ public class MessagesServiceTests
         Assert.Equal(oldestSynced, call.Before);
     }
 
+    // ── EnsureChatHydratedAsync (on-open backfill safety net) ──
+
+    [Fact]
+    public async Task EnsureHydrated_EmptyChat_FetchesAndSaves()
+    {
+        var handle = MakeHandle("+15551234567");
+        var msgDate = DateTimeOffset.UtcNow.AddDays(-3).ToUnixTimeMilliseconds();
+        var chatMessages = new Dictionary<string, List<Message>>
+        {
+            ["chat-hydrate"] = [
+                MakeMessage("h-1", "hi", handle, msgDate),
+                MakeMessage("h-2", "there", handle, msgDate + 1000)
+            ]
+        };
+        var api = new SyncMockApiService([], chatMessages);
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-hydrate");
+
+        var hydrated = await svc.EnsureChatHydratedAsync(chat.Id, chat.Guid);
+
+        Assert.True(hydrated);
+        using var db = factory.CreateDbContext();
+        Assert.Equal(2, db.Messages.Count(m => m.ChatId == chat.Id));
+        Assert.Equal(msgDate, db.Chats.First(c => c.Id == chat.Id).OldestSyncedMessageDate);
+    }
+
+    [Fact]
+    public async Task EnsureHydrated_ChatWithMessages_IsNoOp()
+    {
+        var api = new SyncMockApiService([]);
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-has-msgs");
+        SeedMessages(factory, chat.Id, 3);
+
+        var hydrated = await svc.EnsureChatHydratedAsync(chat.Id, chat.Guid);
+
+        Assert.False(hydrated);
+        Assert.Empty(api.ChatMessageCalls);   // never hit the server
+    }
+
+    [Fact]
+    public async Task EnsureHydrated_ServerEmpty_ReturnsFalse()
+    {
+        var api = new SyncMockApiService([]);
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-still-empty");
+
+        var hydrated = await svc.EnsureChatHydratedAsync(chat.Id, chat.Guid);
+
+        Assert.False(hydrated);
+        using var db = factory.CreateDbContext();
+        Assert.Empty(db.Messages);
+    }
+
     [Fact]
     public async Task FetchOlder_ServerReturnsEmpty_SetsExhaustedSentinel()
     {

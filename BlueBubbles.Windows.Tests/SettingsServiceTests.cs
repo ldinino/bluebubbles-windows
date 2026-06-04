@@ -98,6 +98,43 @@ public class SettingsServiceTests
     }
 
     [Fact]
+    public void SaveAndLoad_RoundTripsNotificationSettings()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bb_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var filePath = Path.Combine(tempDir, "settings.json");
+
+        try
+        {
+            var appSettings = new AppSettings
+            {
+                NotifyOnChatList = true,
+                NotifyReactions = false, // flip the on-by-default to prove it persists, not defaults
+                NotificationSound = "custom",
+                NotificationSoundCustomPath = @"D:\sounds\my alert.mp3",
+                FilterUnknownSenders = true
+            };
+
+            var svc = new SettingsService(appSettings, new ServerConfiguration(), filePath);
+            svc.Save();
+
+            var appSettings2 = new AppSettings();
+            var svc2 = new SettingsService(appSettings2, new ServerConfiguration(), filePath);
+            svc2.Load();
+
+            Assert.True(appSettings2.NotifyOnChatList);
+            Assert.False(appSettings2.NotifyReactions);
+            Assert.Equal("custom", appSettings2.NotificationSound);
+            Assert.Equal(@"D:\sounds\my alert.mp3", appSettings2.NotificationSoundCustomPath);
+            Assert.True(appSettings2.FilterUnknownSenders);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void Load_OldFileMissingNewFields_PreservesDefaults()
     {
         // A settings file written before these fields existed must not clobber the

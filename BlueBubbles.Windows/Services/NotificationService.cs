@@ -1,5 +1,6 @@
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Services;
+using BlueBubbles.Core.Utils;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 
@@ -7,10 +8,28 @@ namespace BlueBubbles.Windows.Services;
 
 internal sealed class NotificationService : INotificationService
 {
+    // Activation-argument keys, shared with the handler in App.xaml.cs.
+    internal const string ActionKey = "action";
+    internal const string ChatGuidKey = "chatGuid";
+    internal const string MessageGuidKey = "messageGuid";
+    internal const string SelectedTextKey = "selectedText";
+    internal const string ReactionKey = "reaction";
+    internal const string ReplyInputId = "replyText";
+    internal const string ActionOpenChat = "openChat";
+    internal const string ActionOpenApp = "openApp";
+    internal const string ActionReply = "reply";
+    internal const string ActionReact = "react";
+
+    // The quick tapbacks offered on a toast. A toast allows at most five buttons; the inline-reply
+    // send button consumes one, leaving these four. Mirrors iMessage's first four tapbacks.
+    private static readonly string[] ToastReactions =
+        [ReactionTypes.Love, ReactionTypes.Like, ReactionTypes.Dislike, ReactionTypes.Laugh];
+
     private readonly AppSettings _settings;
     private readonly IWindowStateService _windowState;
     private readonly IContactResolverService _contacts;
     private readonly IChatsService _chats;
+    private readonly INotificationSoundService _sound;
 
     private readonly object _lock = new();
     private readonly Dictionary<string, int> _notificationCounts = new();
@@ -19,12 +38,14 @@ internal sealed class NotificationService : INotificationService
         AppSettings settings,
         IWindowStateService windowState,
         IContactResolverService contacts,
-        IChatsService chats)
+        IChatsService chats,
+        INotificationSoundService sound)
     {
         _settings = settings;
         _windowState = windowState;
         _contacts = contacts;
         _chats = chats;
+        _sound = sound;
 
         _chats.ChatUpdated += OnChatUpdated;
     }
@@ -53,11 +74,10 @@ internal sealed class NotificationService : INotificationService
             if (resolved == n.SenderAddress) return;
         }
 
-        if (_windowState.IsWindowFocused)
-        {
-            if (_windowState.ActiveChatGuid == n.ChatGuid) return;
-            if (_windowState.ActiveChatGuid is null && !_settings.NotifyOnChatList) return;
-        }
+        if (!NotificationPolicy.ShouldShowForWindowState(
+                _windowState.IsWindowFocused, _windowState.ActiveChatGuid,
+                n.ChatGuid, _settings.NotifyOnChatList))
+            return;
 
         ShowToast(n, chat);
     }
@@ -116,18 +136,57 @@ internal sealed class NotificationService : INotificationService
 
         try
         {
+            // Top-level arguments are used when the toast body is clicked (openChat); each button
+            // added in AddInlineActions carries its own arguments, used when that button is pressed.
             var builder = new AppNotificationBuilder()
-                .AddArgument("action", "openChat")
-                .AddArgument("chatGuid", n.ChatGuid)
+                .AddArgument(ActionKey, ActionOpenChat)
+                .AddArgument(ChatGuidKey, n.ChatGuid)
                 .AddText(title)
                 .AddText(body)
                 .SetGroup(group)
                 .SetTag(tag);
 
+            AddInlineActions(builder, n);
+
+            // When the user has chosen a custom sound we render it ourselves; mute the toast so the
+            // OS doesn't also play the default sound on top of it.
+            if (_sound.WillPlayCustomSound)
+                builder.MuteAudio();
+
             AppNotificationManager.Default.Show(builder.BuildNotification());
+            _sound.PlayConfiguredSound();
         }
         catch { }
     }
+
+    /// <summary>Adds the inline quick-reply box and — for real messages, not reactions — the
+    /// quick-tapback buttons. The reply box's send button is bound to the text input so it renders
+    /// inline beside it. The full (untruncated) chat/message GUIDs travel as arguments because the
+    /// toast tag/group are truncated and can't be used to address the send.</summary>
+    private static void AddInlineActions(AppNotificationBuilder builder, NewMessageNotification n)
+    {
+        builder.AddTextBox(ReplyInputId, "Reply", string.Empty);
+        builder.AddButton(new AppNotificationButton("Send")
+            .AddArgument(ActionKey, ActionReply)
+            .AddArgument(ChatGuidKey, n.ChatGuid)
+            .SetInputId(ReplyInputId));
+
+        if (n.IsReaction) return;
+
+        var selectedText = Truncate(n.MessageText ?? string.Empty, 256);
+        foreach (var reaction in ToastReactions)
+        {
+            builder.AddButton(new AppNotificationButton(ReactionTypes.ToEmoji(reaction))
+                .AddArgument(ActionKey, ActionReact)
+                .AddArgument(ChatGuidKey, n.ChatGuid)
+                .AddArgument(MessageGuidKey, n.MessageGuid)
+                .AddArgument(ReactionKey, reaction)
+                .AddArgument(SelectedTextKey, selectedText));
+        }
+    }
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max];
 
     private void ShowSummaryToast()
     {
@@ -142,12 +201,16 @@ internal sealed class NotificationService : INotificationService
         try
         {
             var builder = new AppNotificationBuilder()
-                .AddArgument("action", "openApp")
+                .AddArgument(ActionKey, ActionOpenApp)
                 .AddText("BlueBubbles")
                 .AddText($"{totalMessages} messages from {chatCount} chats")
                 .SetTag("summary");
 
+            if (_sound.WillPlayCustomSound)
+                builder.MuteAudio();
+
             AppNotificationManager.Default.Show(builder.BuildNotification());
+            _sound.PlayConfiguredSound();
         }
         catch { }
     }

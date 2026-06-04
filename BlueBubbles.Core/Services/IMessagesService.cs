@@ -8,6 +8,12 @@ public interface IMessagesService
     Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null);
     Task<List<MessageEntity>> FetchOlderMessagesFromServerAsync(
         int chatId, string chatGuid, int limit = 25, CancellationToken ct = default);
+
+    /// <summary>Safety net for chats that ended up empty locally (a missed/incomplete sync). When the
+    /// chat has no local messages, fetches its newest page from the server and persists it so opening
+    /// a chat never shows a permanently-blank thread. No-op when the chat already has messages.
+    /// Returns true if any messages were fetched and saved.</summary>
+    Task<bool> EnsureChatHydratedAsync(int chatId, string chatGuid, int limit = 50, CancellationToken ct = default);
     Task SaveIncomingMessageAsync(string chatGuid, Message message);
     Task UpdateMessageAsync(Message message);
 

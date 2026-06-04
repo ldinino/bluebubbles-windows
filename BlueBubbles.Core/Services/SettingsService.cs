@@ -75,6 +75,7 @@ public class SettingsService : ISettingsService
             NotifyOnChatList = _appSettings.NotifyOnChatList,
             NotifyReactions = _appSettings.NotifyReactions,
             NotificationSound = _appSettings.NotificationSound,
+            NotificationSoundCustomPath = _appSettings.NotificationSoundCustomPath,
             FilterUnknownSenders = _appSettings.FilterUnknownSenders,
             // Private API
             ServerPrivateAPI = _appSettings.ServerPrivateAPI,
@@ -147,6 +148,7 @@ public class SettingsService : ISettingsService
             _appSettings.NotifyOnChatList = data.NotifyOnChatList;
             _appSettings.NotifyReactions = data.NotifyReactions;
             _appSettings.NotificationSound = data.NotificationSound ?? "default";
+            _appSettings.NotificationSoundCustomPath = data.NotificationSoundCustomPath ?? string.Empty;
             _appSettings.FilterUnknownSenders = data.FilterUnknownSenders;
             // Private API
             _appSettings.ServerPrivateAPI = data.ServerPrivateAPI;
@@ -220,6 +222,7 @@ public class SettingsService : ISettingsService
         public bool NotifyOnChatList { get; init; }
         public bool NotifyReactions { get; init; } = true;
         public string? NotificationSound { get; init; } = "default";
+        public string? NotificationSoundCustomPath { get; init; }
         public bool FilterUnknownSenders { get; init; }
         // Private API
         public bool? ServerPrivateAPI { get; init; }

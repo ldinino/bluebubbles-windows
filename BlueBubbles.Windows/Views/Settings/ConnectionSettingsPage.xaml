@@ -76,31 +76,6 @@
                         Click="OnImportVCardClick" />
             </tk:SettingsCard>
 
-            <tk:SettingsExpander Header="Connection Log"
-                                 Description="Diagnostic output from the connection and sync services">
-                <tk:SettingsExpander.ItemsHeader>
-                    <StackPanel Orientation="Horizontal" Spacing="8" Padding="16,8" HorizontalAlignment="Right">
-                        <Button Content="Copy All" Click="OnCopyLogClick" />
-                        <Button Content="Clear" Click="OnClearLogClick" />
-                    </StackPanel>
-                </tk:SettingsExpander.ItemsHeader>
-                <tk:SettingsExpander.Items>
-                    <tk:SettingsCard>
-                        <tk:SettingsCard.Header>
-                            <TextBox x:Name="LogTextBox"
-                                     IsReadOnly="True"
-                                     AcceptsReturn="True"
-                                     TextWrapping="Wrap"
-                                     FontFamily="Consolas"
-                                     FontSize="12"
-                                     MinWidth="600"
-                                     MaxHeight="300"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                        </tk:SettingsCard.Header>
-                    </tk:SettingsCard>
-                </tk:SettingsExpander.Items>
-            </tk:SettingsExpander>
-
         </StackPanel>
         </Grid>
     </ScrollViewer>

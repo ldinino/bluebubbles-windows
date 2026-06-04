@@ -100,6 +100,62 @@ public class MessagesService : IMessagesService
         return await LoadMessagesAsync(chatId, limit, oldestSynced);
     }
 
+    public async Task<bool> EnsureChatHydratedAsync(
+        int chatId, string chatGuid, int limit = 50, CancellationToken ct = default)
+    {
+        // Only hydrate when the chat is locally empty — never re-fetch a chat that already has
+        // history (older pages are the job of FetchOlderMessagesFromServerAsync).
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var hasAny = await db.Messages.AnyAsync(
+                m => m.ChatId == chatId && m.DateDeleted == null && m.AssociatedMessageGuid == null, ct);
+            if (hasAny) return false;
+        }
+
+        List<Message> messages;
+        try
+        {
+            var response = await _api.GetChatMessagesAsync(
+                chatGuid,
+                withQuery: MessageWithQuery,
+                sort: "DESC",
+                limit: limit,
+                ct: ct);
+            messages = response.Data ?? [];
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Hydrate fetch failed for chat {chatGuid}: {ex.Message}");
+            return false;
+        }
+
+        if (messages.Count == 0) return false;
+
+        await _saveLock.WaitAsync(ct);
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var chat = await db.Chats.FindAsync([chatId], ct);
+            if (chat is null) return false;
+
+            var handleCache = new Dictionary<string, int>();
+            var (batchOldest, _, _) = await MessagePersistenceHelper.SaveMessagesAsync(
+                db, chatId, messages, handleCache, ct);
+
+            if (batchOldest.HasValue &&
+                (chat.OldestSyncedMessageDate is null || batchOldest < chat.OldestSyncedMessageDate))
+                chat.OldestSyncedMessageDate = batchOldest;
+
+            await db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+
+        return true;
+    }
+
     public async Task SaveIncomingMessageAsync(string chatGuid, Message message)
     {
         await _saveLock.WaitAsync();

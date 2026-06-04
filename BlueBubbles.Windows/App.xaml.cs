@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data;
 using BlueBubbles.Core.Services;
@@ -17,6 +18,10 @@ public partial class App : Application
 {
     private Window? _window;
 
+    // Debounces connectivity-recovery bursts (NetworkAddressChanged can fire many times for a single
+    // network switch) so we don't fire a flurry of pings/restarts.
+    private Timer? _recoverDebounce;
+
     public static IServiceProvider Services { get; private set; } = null!;
 
     public static MainWindow MainWindow => (MainWindow)((App)Current)._window!;
@@ -29,6 +34,10 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Set up file logging first so the session banner precedes all other startup work and any
+        // failures below are captured to disk.
+        AppLog.Initialize();
+
         // Load persisted settings before creating the window
         var settingsService = Services.GetRequiredService<ISettingsService>();
         settingsService.Load();
@@ -71,6 +80,39 @@ public partial class App : Application
         // Reconcile the launch-at-startup registry entry with the persisted preference and, if
         // launched via that entry with the minimized flag, start hidden in the tray.
         ReconcileStartupState(mainWindow);
+
+        // Self-healing sync: recover the connection + run a catch-up delta whenever the machine wakes
+        // from sleep or the network changes (Wi-Fi switch, VPN toggle). A socket can sit half-open
+        // after sleep, so we can't rely on socket events alone.
+        mainWindow.SystemResumed += (_, _) => ScheduleConnectivityRecovery();
+        NetworkChange.NetworkAddressChanged += (_, _) => ScheduleConnectivityRecovery();
+
+        // Launch-time catch-up: kick a delta immediately (independent of the socket's OnConnected),
+        // so a relaunch backfills anything missed even before the socket settles.
+        var appSettings = Services.GetRequiredService<AppSettings>();
+        if (appSettings.FinishedSetup)
+            _ = Services.GetRequiredService<ISyncService>().RunIncrementalSyncAsync();
+    }
+
+    /// <summary>Coalesces resume/network-change signals and, after a short settle delay, verifies the
+    /// socket is healthy then runs a safety-net delta sync.</summary>
+    private void ScheduleConnectivityRecovery()
+    {
+        _recoverDebounce?.Dispose();
+        _recoverDebounce = new Timer(_ => _ = RecoverConnectivityAsync(), null,
+            TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+    }
+
+    private static async Task RecoverConnectivityAsync()
+    {
+        var settings = Services.GetRequiredService<AppSettings>();
+        if (!settings.FinishedSetup) return;
+
+        try { await Services.GetRequiredService<ISocketService>().EnsureHealthyAsync(); }
+        catch (Exception ex) { AppLog.Warn(LogCategory.Socket, $"Connectivity recovery (socket) failed: {ex.Message}"); }
+
+        try { await Services.GetRequiredService<ISyncService>().RunIncrementalSyncAsync(); }
+        catch (Exception ex) { AppLog.Warn(LogCategory.Sync, $"Connectivity recovery (delta) failed: {ex.Message}"); }
     }
 
     private static void ReconcileStartupState(MainWindow mainWindow)
@@ -110,34 +152,86 @@ public partial class App : Application
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs e)
     {
-        var arguments = e.Arguments;
-        if (!arguments.TryGetValue("action", out var action)) return;
+        var args = e.Arguments;
+        if (!args.TryGetValue(NotificationService.ActionKey, out var action)) return;
 
-        if (action == "openChat" && arguments.TryGetValue("chatGuid", out var chatGuid))
+        switch (action)
         {
-            MainWindow.DispatcherQueue.TryEnqueue(() =>
-            {
-                MainWindow.RestoreFromTray();
-                NavigateToChat(chatGuid);
-            });
+            // Inline actions: send in the background — don't yank the window to the foreground.
+            case NotificationService.ActionReply:
+                HandleReply(args, e.UserInput);
+                break;
+            case NotificationService.ActionReact:
+                HandleReaction(args);
+                break;
+
+            // Body click: surface the window and deep-link to the chat.
+            case NotificationService.ActionOpenChat
+                when args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid):
+                MainWindow.DispatcherQueue.TryEnqueue(() =>
+                {
+                    MainWindow.RestoreFromTray();
+                    NavigateToChat(chatGuid);
+                });
+                break;
+            case NotificationService.ActionOpenApp:
+                MainWindow.DispatcherQueue.TryEnqueue(() => MainWindow.RestoreFromTray());
+                break;
         }
-        else if (action == "openApp")
-        {
-            MainWindow.DispatcherQueue.TryEnqueue(() => MainWindow.RestoreFromTray());
-        }
+    }
+
+    /// <summary>Inline quick-reply: send straight through the outgoing (private-API) queue. The
+    /// server echo persists the message via the normal incoming path, so the chat need not be open.</summary>
+    private static void HandleReply(IDictionary<string, string> args, IDictionary<string, string> userInput)
+    {
+        if (!args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid)) return;
+        if (!userInput.TryGetValue(NotificationService.ReplyInputId, out var text) ||
+            string.IsNullOrWhiteSpace(text))
+            return;
+
+        Services.GetRequiredService<IOutgoingMessageService>().EnqueueText(chatGuid, text.Trim());
+        MarkChatActedOn(chatGuid);
+    }
+
+    /// <summary>Inline tapback: react to the originating message through the private-API send path.</summary>
+    private static void HandleReaction(IDictionary<string, string> args)
+    {
+        if (!args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid)) return;
+        if (!args.TryGetValue(NotificationService.MessageGuidKey, out var messageGuid)) return;
+        if (!args.TryGetValue(NotificationService.ReactionKey, out var reaction)) return;
+        args.TryGetValue(NotificationService.SelectedTextKey, out var selectedText);
+
+        _ = Services.GetRequiredService<IOutgoingMessageService>()
+            .SendTapbackAsync(chatGuid, selectedText ?? string.Empty, messageGuid, reaction);
+        MarkChatActedOn(chatGuid);
+    }
+
+    /// <summary>Acting on a toast implies the message was seen: clear that chat's toasts and mark it read.</summary>
+    private static void MarkChatActedOn(string chatGuid)
+    {
+        Services.GetRequiredService<INotificationService>().ClearNotificationsForChat(chatGuid);
+        _ = Services.GetRequiredService<IChatsService>().MarkChatReadAsync(chatGuid, true);
     }
 
     private static void NavigateToChat(string chatGuid)
     {
         var convListVm = Services.GetRequiredService<ConversationListViewModel>();
-        var tile = convListVm.Conversations
-            .Concat(convListVm.PinnedConversations)
-            .FirstOrDefault(t => t.ChatGuid == chatGuid);
 
-        if (tile is null) return;
+        var tile = FindTile(convListVm, chatGuid);
+        if (tile is null && !string.IsNullOrEmpty(convListVm.SearchQuery))
+        {
+            // A live search filter can hide the target chat — clear it and look again. ApplyFilter
+            // runs synchronously on this (UI) thread, so the rebuilt lists are immediately current.
+            convListVm.SearchQuery = string.Empty;
+            tile = FindTile(convListVm, chatGuid);
+        }
 
-        convListVm.SelectedConversation = tile;
+        if (tile is not null)
+            convListVm.SelectedConversation = tile;
     }
+
+    private static ConversationTileViewModel? FindTile(ConversationListViewModel vm, string chatGuid)
+        => vm.Conversations.Concat(vm.PinnedConversations).FirstOrDefault(t => t.ChatGuid == chatGuid);
 
     private static IServiceProvider ConfigureServices()
     {
@@ -193,6 +287,7 @@ public partial class App : Application
                 sp.GetRequiredService<ISettingsService>(),
                 sp.GetRequiredService<ISyncService>(),
                 sp.GetRequiredService<ILocalhostDetectionService>(),
+                sp.GetRequiredService<IBlueBubblesApiService>(),
                 sp.GetRequiredService<AppSettings>()));
         services.AddSingleton<IServerDiscoveryService>(sp =>
             new ServerDiscoveryService(
@@ -205,12 +300,14 @@ public partial class App : Application
         services.AddSingleton<IChatsService, ChatsService>();
         services.AddSingleton<IMessagesService, MessagesService>();
         services.AddSingleton<IOutgoingMessageService, OutgoingMessageService>();
+        services.AddSingleton<INotificationSoundService, NotificationSoundService>();
         services.AddSingleton<INotificationService>(sp =>
             new NotificationService(
                 sp.GetRequiredService<AppSettings>(),
                 sp.GetRequiredService<IWindowStateService>(),
                 sp.GetRequiredService<IContactResolverService>(),
-                sp.GetRequiredService<IChatsService>()));
+                sp.GetRequiredService<IChatsService>(),
+                sp.GetRequiredService<INotificationSoundService>()));
         services.AddSingleton<IIncomingMessageProcessor, IncomingMessageProcessor>();
         services.AddSingleton<IAttachmentCacheService>(sp =>
         {
