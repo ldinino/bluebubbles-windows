@@ -169,7 +169,13 @@ public partial class ConversationListViewModel : ObservableObject
 
     private async void OnIncomingMessageProcessed(object? sender, IncomingMessageProcessedEventArgs e)
     {
-        if (!e.IsFromMe && SelectedConversation?.ChatGuid == e.ChatGuid)
+        // Only auto-mark-read when you're actually looking at the chat: the window must be focused AND
+        // this chat the one on screen. Marking read while the window is minimized/in the tray/unfocused
+        // would immediately clear the toast we just raised for it — NotificationService drops a chat's
+        // toasts as soon as it reads as read. That was the N1 "no notification for the selected chat" bug.
+        if (!e.IsFromMe
+            && SelectedConversation?.ChatGuid == e.ChatGuid
+            && _windowState.IsWindowFocused)
         {
             try { await _chatsService.MarkChatReadAsync(e.ChatGuid, true); }
             catch { }

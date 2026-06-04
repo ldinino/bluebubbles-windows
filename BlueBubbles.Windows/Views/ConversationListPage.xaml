@@ -26,14 +26,28 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Connection Status -->
-        <InfoBar x:Name="ConnectionBar"
-                 Grid.Row="0"
-                 IsOpen="False"
-                 IsClosable="False"
-                 Severity="Warning"
-                 Title="Disconnected"
-                 Margin="0,0,0,0" />
+        <!-- Connection / sync status: a slim, single-line bar (spinner or icon + text) -->
+        <Border x:Name="ConnectionBar"
+                Grid.Row="0"
+                Padding="12,6"
+                Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal"
+                        Spacing="8"
+                        VerticalAlignment="Center">
+                <ProgressRing x:Name="ConnectionBarRing"
+                              Width="14"
+                              Height="14"
+                              IsActive="False"
+                              Visibility="Collapsed" />
+                <FontIcon x:Name="ConnectionBarIcon"
+                          FontSize="14"
+                          Glyph="&#xE7BA;"
+                          Visibility="Collapsed" />
+                <TextBlock x:Name="ConnectionBarText"
+                           VerticalAlignment="Center"
+                           FontSize="13" />
+            </StackPanel>
+        </Border>
 
         <!-- Archived Header (visible only when browsing archive) -->
         <StackPanel x:Name="ArchivedHeader"

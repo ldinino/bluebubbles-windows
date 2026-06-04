@@ -73,3 +73,12 @@ Filename: "{app}\{#MyExeName}"; Description: "Launch {#MyAppName}"; Flags: nowai
 ; Force-close any running instance (including one minimized/closed to the system tray) before the
 ; files are removed, so the uninstall isn't blocked and no orphaned process or tray icon lingers.
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#MyExeName}"; Flags: runhidden runascurrentuser; RunOnceId: "KillBlueBubbles"
+; Remove the run-on-login entry the app writes at runtime (HKCU\...\Run\BlueBubbles). It isn't an
+; installer-created value, so reg.exe deletes it directly; /f makes a missing value a no-op.
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v {#MyAppName} /f"; Flags: runhidden runascurrentuser; RunOnceId: "DelRunKey"
+
+[UninstallDelete]
+; The unpackaged installer has no OS-managed app-data container (MSIX did), so purge the user-data
+; folder ourselves on uninstall — db + SQLite sidecars, attachments\, logs\, settings.json,
+; contacts.vcf, credential.bin, and any future data file. Silent wipe, matching old MSIX behavior.
+Type: filesandordirs; Name: "{localappdata}\{#MyAppName}"

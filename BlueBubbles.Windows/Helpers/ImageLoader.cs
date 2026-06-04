@@ -13,13 +13,20 @@ namespace BlueBubbles.Windows.Helpers;
 public static class ImageLoader
 {
     /// <summary>Loads a local image file at full resolution (or capped by
-    /// <paramref name="decodePixelWidth"/> when &gt; 0).</summary>
-    public static async Task<BitmapImage?> FromFileAsync(string path, int decodePixelWidth = 0)
+    /// <paramref name="decodePixelWidth"/> when &gt; 0). When <paramref name="decodeLogical"/>
+    /// is set the cap is interpreted in logical (effective) pixels, so the decode tracks the
+    /// display DPI — the bitmap lands already sized for its on-screen footprint (crisp at any
+    /// scale) instead of decoding full-res and letting the GPU downscale it.</summary>
+    public static async Task<BitmapImage?> FromFileAsync(string path, int decodePixelWidth = 0, bool decodeLogical = false)
     {
         try
         {
             var bitmap = new BitmapImage();
-            if (decodePixelWidth > 0) bitmap.DecodePixelWidth = decodePixelWidth;
+            if (decodePixelWidth > 0)
+            {
+                bitmap.DecodePixelWidth = decodePixelWidth;
+                if (decodeLogical) bitmap.DecodePixelType = DecodePixelType.Logical;
+            }
             using var stream = File.OpenRead(path);
             await bitmap.SetSourceAsync(stream.AsRandomAccessStream());
             return bitmap;

@@ -6,6 +6,12 @@ namespace BlueBubbles.Core.Services;
 public interface IMessagesService
 {
     Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null);
+
+    /// <summary>Loads a chat's messages newer than <paramref name="afterDate"/> (ascending). Used to
+    /// catch an already-open thread up after a background delta sync persists messages the socket
+    /// never pushed (it's silent while the app was asleep/disconnected). Excludes deleted rows and
+    /// reactions (associated messages).</summary>
+    Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate);
     Task<List<MessageEntity>> FetchOlderMessagesFromServerAsync(
         int chatId, string chatGuid, int limit = 25, CancellationToken ct = default);
 
@@ -14,6 +20,12 @@ public interface IMessagesService
     /// a chat never shows a permanently-blank thread. No-op when the chat already has messages.
     /// Returns true if any messages were fetched and saved.</summary>
     Task<bool> EnsureChatHydratedAsync(int chatId, string chatGuid, int limit = 50, CancellationToken ct = default);
+
+    /// <summary>Re-fetches a chat's newest page from the server and upserts it. Recovers in-place
+    /// mutations the ROWID-watermark delta sync structurally can't see — edits, unsends, and
+    /// read/delivery receipts all update an existing row without changing its ROWID — so an open chat
+    /// can be made fully correct after an offline window. Returns true if the server returned messages.</summary>
+    Task<bool> RefreshLatestFromServerAsync(int chatId, string chatGuid, int limit = 50, CancellationToken ct = default);
     Task SaveIncomingMessageAsync(string chatGuid, Message message);
     Task UpdateMessageAsync(Message message);
 

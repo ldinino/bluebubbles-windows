@@ -91,6 +91,11 @@ public sealed partial class AttachmentHolder : UserControl
         }
     }
 
+    // Must match the RootGrid MaxWidth/MaxHeight in AttachmentHolder.xaml — these bound the
+    // displayed footprint and the decode target.
+    private const double MaxImageWidth = 360;
+    private const double MaxImageHeight = 320;
+
     private void ShowCachedImage(AttachmentViewModel vm)
     {
         ImageContent.Visibility = Visibility.Visible;
@@ -102,19 +107,45 @@ public sealed partial class AttachmentHolder : UserControl
 
         if (vm.LocalPath is null) return;
 
+        // Pre-size the Image from the known dimensions so the bubble reserves its final
+        // footprint immediately. The bitmap then fills that box without a layout reflow —
+        // the reflow-on-arrival (bubble pops from MinHeight to full height) is what reads as
+        // a flicker, and it's worst on big images that decode slowly. Always set explicitly
+        // (value or NaN) since list containers recycle and could carry a prior image's size.
+        var (dispW, dispH) = FitDisplaySize(vm.Width, vm.Height);
+        ImageContent.Width = dispW;
+        ImageContent.Height = dispH;
+
         // Already showing this exact image — don't re-decode (and don't blink it).
         if (vm.LocalPath == _loadedImagePath && ImageContent.Source is not null) return;
 
         var generation = Interlocked.Increment(ref _bindGeneration);
         _loadedImagePath = vm.LocalPath;
-        _ = LoadImageAsync(vm.LocalPath, generation);
+
+        // Decode at the display size in logical pixels: crisp at any DPI, and a high-res
+        // photo decodes straight to its ~360px footprint instead of full-res-then-downscale.
+        var decodeWidth = double.IsNaN(dispW) ? (int)MaxImageWidth : (int)Math.Ceiling(dispW);
+        _ = LoadImageAsync(vm.LocalPath, generation, decodeWidth);
     }
 
-    private async Task LoadImageAsync(string path, long generation)
+    private async Task LoadImageAsync(string path, long generation, int decodeWidth)
     {
-        var bitmap = await Helpers.ImageLoader.FromFileAsync(path);
+        var bitmap = await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true);
         if (Interlocked.Read(ref _bindGeneration) != generation) return;
         ImageContent.Source = bitmap;
+    }
+
+    /// <summary>Uniform-fits the source dimensions into the bubble's max box. Doesn't upscale
+    /// (matches the prior natural-size behavior for small images). Returns NaN when the
+    /// dimensions are unknown, so the Image auto-sizes to the decoded bitmap as before.</summary>
+    private static (double Width, double Height) FitDisplaySize(int? width, int? height)
+    {
+        if (width is not > 0 || height is not > 0)
+            return (double.NaN, double.NaN);
+
+        var scale = Math.Min(MaxImageWidth / width.Value, MaxImageHeight / height.Value);
+        scale = Math.Min(scale, 1.0);
+        return (width.Value * scale, height.Value * scale);
     }
 
     private void ShowCachedVideo(AttachmentViewModel vm)

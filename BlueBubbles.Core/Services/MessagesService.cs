@@ -43,6 +43,19 @@ public class MessagesService : IMessagesService
         return messages;
     }
 
+    public async Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        return await db.Messages
+            .Include(m => m.Handle)
+            .Include(m => m.Attachments)
+            .Where(m => m.ChatId == chatId && m.DateDeleted == null
+                && m.AssociatedMessageGuid == null && m.DateCreated > afterDate)
+            .OrderBy(m => m.DateCreated)
+            .ToListAsync();
+    }
+
     public async Task<List<MessageEntity>> FetchOlderMessagesFromServerAsync(
         int chatId, string chatGuid, int limit = 25, CancellationToken ct = default)
     {
@@ -147,6 +160,47 @@ public class MessagesService : IMessagesService
                 chat.OldestSyncedMessageDate = batchOldest;
 
             await db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+
+        return true;
+    }
+
+    public async Task<bool> RefreshLatestFromServerAsync(
+        int chatId, string chatGuid, int limit = 50, CancellationToken ct = default)
+    {
+        List<Message> messages;
+        try
+        {
+            var response = await _api.GetChatMessagesAsync(
+                chatGuid,
+                withQuery: MessageWithQuery,
+                sort: "DESC",
+                limit: limit,
+                ct: ct);
+            messages = response.Data ?? [];
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Refresh fetch failed for chat {chatGuid}: {ex.Message}");
+            return false;
+        }
+
+        if (messages.Count == 0) return false;
+
+        await _saveLock.WaitAsync(ct);
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            if (await db.Chats.FindAsync([chatId], ct) is null) return false;
+
+            // SaveMessagesAsync upserts by GUID, so re-fetched rows reconcile their edited text,
+            // retracted parts, and read/delivery timestamps onto what's already stored.
+            var handleCache = new Dictionary<string, int>();
+            await MessagePersistenceHelper.SaveMessagesAsync(db, chatId, messages, handleCache, ct);
         }
         finally
         {

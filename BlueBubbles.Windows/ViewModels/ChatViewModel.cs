@@ -19,6 +19,7 @@ public partial class ChatViewModel : ObservableObject
     private readonly IChatsService _chatsService;
     private readonly ISocketService _socketService;
     private readonly IAttachmentCacheService _attachmentCache;
+    private readonly ISyncService _syncService;
     private readonly ILinkPreviewService? _linkPreview;
     private readonly AppSettings _settings;
 
@@ -77,6 +78,7 @@ public partial class ChatViewModel : ObservableObject
         IChatsService chatsService,
         ISocketService socketService,
         IAttachmentCacheService attachmentCache,
+        ISyncService syncService,
         AppSettings settings,
         ILinkPreviewService? linkPreview = null)
     {
@@ -87,6 +89,7 @@ public partial class ChatViewModel : ObservableObject
         _chatsService = chatsService;
         _socketService = socketService;
         _attachmentCache = attachmentCache;
+        _syncService = syncService;
         _settings = settings;
         _linkPreview = linkPreview;
 
@@ -101,6 +104,14 @@ public partial class ChatViewModel : ObservableObject
         _actionHandler.TypingIndicatorChanged += (s, e) => RunOnUI(() => OnTypingIndicatorChanged(s, e));
         _outgoingService.MessageStateChanged += (s, e) => RunOnUI(() => OnOutgoingMessageStateChanged(s, e));
         _contacts.ContactsChanged += (s, e) => RunOnUI(RefreshContactInfo);
+
+        // A background delta sync (after sleep / reconnect) writes missed messages straight to the
+        // DB — the socket never pushes them — so an already-open thread wouldn't see them until it
+        // was reloaded. Catch the open chat up from the DB whenever a sync finishes.
+        _syncService.SyncStateChanged += (s, syncing) =>
+        {
+            if (!syncing) RunOnUI(() => _ = ReconcileAfterSyncAsync());
+        };
     }
 
     /// <summary>Re-resolves the open chat's header (name, initials, 1:1 avatar) after the
@@ -611,6 +622,20 @@ public partial class ChatViewModel : ObservableObject
                 ?? []
         };
 
+        var bubbles = AppendMessageBubbles(entity);
+
+        if (bubbles.Any(b => b.IsReply && !b.ReplyContextReady))
+            _ = ResolveReplySnippetsAsync();
+
+        SetTypingBubble(false);   // the other party sent — they've stopped typing
+        NewMessageAppended?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Appends one message's bubble(s) to the end of the list, inserting a day separator and
+    /// fixing the previous bubble's tail. Shared by the live-socket and post-sync catch-up paths;
+    /// callers own typing-bubble / reply-resolution / scroll side effects.</summary>
+    private List<MessageBubbleViewModel> AppendMessageBubbles(MessageEntity entity)
+    {
         var msgDate = entity.DateCreated.HasValue
             ? DateTimeOffset.FromUnixTimeMilliseconds(entity.DateCreated.Value).LocalDateTime.Date
             : (DateTime?)null;
@@ -634,12 +659,107 @@ public partial class ChatViewModel : ObservableObject
             Items.Add(bubble);
             TriggerAutoDownload(bubble);
         }
+        return bubbles;
+    }
 
-        if (bubbles.Any(b => b.IsReply && !b.ReplyContextReady))
-            _ = ResolveReplySnippetsAsync();
+    /// <summary>Brings the open thread fully up to date after a background delta sync, without rebuilding
+    /// the list (so the user's scroll position is kept). The ROWID-watermark delta only sees brand-new
+    /// rows, and even those arrive in the DB rather than via the socket's live event — so we (1) re-fetch
+    /// the newest page from the server and upsert it, recovering in-place edits / unsends / read receipts
+    /// the delta structurally can't; (2) append any messages newer than the last visible bubble; and
+    /// (3) reconcile already-visible bubbles' status, edits, unsends, and reactions from the DB.</summary>
+    private async Task ReconcileAfterSyncAsync()
+    {
+        if (string.IsNullOrEmpty(_chatGuid) || IsLoading) return;
 
-        SetTypingBubble(false);   // the other party sent — they've stopped typing
+        var chatGuid = _chatGuid;
+        var chatId = _chatId;
+
+        // 1. Re-pull the newest page from the server (best-effort) so in-place mutations are reconciled.
+        await _messagesService.RefreshLatestFromServerAsync(chatId, chatGuid, PageSize);
+        if (_chatGuid != chatGuid) return;   // user navigated away while we were fetching
+
+        // 2. Append messages now in the DB that are newer than the last visible bubble.
+        await AppendNewerMessagesFromDbAsync(chatId, chatGuid);
+        if (_chatGuid != chatGuid) return;
+
+        // 3. Reconcile the already-visible bubbles in place.
+        await ReconcileVisibleBubblesAsync(chatGuid);
+    }
+
+    private async Task AppendNewerMessagesFromDbAsync(int chatId, string chatGuid)
+    {
+        var newest = Items.OfType<MessageBubbleViewModel>()
+            .Select(b => b.DateCreated)
+            .DefaultIfEmpty(0)
+            .Max();
+        if (newest <= 0) return;   // nothing loaded yet — open/hydrate paths cover the empty case
+
+        var newer = await _messagesService.LoadMessagesAfterAsync(chatId, newest);
+        if (newer.Count == 0 || _chatGuid != chatGuid) return;
+
+        var shownGuids = Items.OfType<MessageBubbleViewModel>()
+            .Select(b => b.MessageGuid)
+            .ToHashSet();
+
+        var appended = false;
+        foreach (var msg in newer)
+        {
+            if (shownGuids.Contains(msg.Guid)) continue;
+            AppendMessageBubbles(msg);
+            appended = true;
+        }
+        if (!appended) return;
+
+        await ResolveReplySnippetsAsync();
         NewMessageAppended?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Re-reconciles every visible message bubble against the DB's authoritative state: read /
+    /// delivery receipts, edits, unsends, and the full reaction set (including reactions removed while
+    /// offline). Skips optimistic (temp-GUID) bubbles so an in-flight send isn't clobbered.</summary>
+    private async Task ReconcileVisibleBubblesAsync(string chatGuid)
+    {
+        var guids = Items.OfType<MessageBubbleViewModel>()
+            .Select(b => b.MessageGuid)
+            .Where(g => !string.IsNullOrEmpty(g) && !g.StartsWith("temp-", StringComparison.Ordinal))
+            .ToHashSet();
+        if (guids.Count == 0) return;
+
+        var entities = await _messagesService.GetMessagesByGuidsAsync(guids);
+        var reactions = await _messagesService.LoadReactionsAsync(guids);
+        if (_chatGuid != chatGuid) return;
+
+        var byGuid = entities.ToDictionary(m => m.Guid);
+        foreach (var bubble in Items.OfType<MessageBubbleViewModel>().ToList())
+        {
+            if (!byGuid.TryGetValue(bubble.MessageGuid, out var entity)) continue;
+
+            if (MessageEdits.IsPartRetracted(entity.MessageSummaryInfoJson, 0))
+            {
+                if (!bubble.IsUnsent) bubble.ApplyUnsend();
+                continue;
+            }
+
+            // Only the text-bearing bubble of a text+attachment pair carries the edit.
+            if (entity.DateEdited is > 0 && entity.DateEdited != bubble.DateEdited
+                && !string.IsNullOrEmpty(bubble.Text))
+                bubble.ApplyEdit(entity.Text, entity.DateEdited);
+
+            bubble.UpdateDeliveryStatus(entity);
+        }
+
+        // Reactions live on the last bubble for a GUID. Replace the whole set (empty when a reaction was
+        // removed while offline) so badges added or cleared during the gap both reconcile.
+        var byParent = reactions.GroupBy(r => r.AssociatedMessageGuid!)
+            .ToDictionary(g => g.Key, g => g.ToList());
+        foreach (var guid in guids)
+        {
+            var host = LastBubbleForGuid(guid);
+            host?.SetReactions(byParent.TryGetValue(guid, out var rs)
+                ? rs.Select(ToReactionRecord)
+                : []);
+        }
     }
 
     private void OnMessageUpdated(object? sender, MessageEventArgs e)

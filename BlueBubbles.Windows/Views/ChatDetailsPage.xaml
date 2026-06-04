@@ -10,8 +10,10 @@
     mc:Ignorable="d">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Padding="24" Spacing="20" MaxWidth="600"
-                    HorizontalAlignment="Left">
+        <!-- Stretch + MaxWidth = fill the pane up to the cap, then center: the content tracks the
+             window width instead of hugging the left edge at a fixed size (L1). -->
+        <StackPanel Padding="24" Spacing="20" MaxWidth="640"
+                    HorizontalAlignment="Stretch">
 
             <!-- Header with back button -->
             <StackPanel Orientation="Horizontal" Spacing="8">

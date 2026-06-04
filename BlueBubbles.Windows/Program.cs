@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
+using Microsoft.Windows.AppNotifications;
 
 namespace BlueBubbles.Windows;
 
@@ -48,9 +49,20 @@ public static class Program
 
     private static void OnActivated(object? sender, AppActivationArguments args)
     {
-        // A second launch was redirected here — bring the existing window forward.
-        if (Application.Current is App app)
-            app.OnRedirectedActivation();
+        if (Application.Current is not App app) return;
+
+        // A toast interaction can spawn a fresh process that gets redirected here. Route it to the
+        // notification handler so inline actions (reply / tapback) and body-click deep-links still fire —
+        // otherwise the action is lost and we'd only surface the window.
+        if (args.Kind == ExtendedActivationKind.AppNotification &&
+            args.Data is AppNotificationActivatedEventArgs notificationArgs)
+        {
+            app.HandleNotificationActivation(notificationArgs);
+            return;
+        }
+
+        // An ordinary second launch (e.g. re-running the exe) — just bring the existing window forward.
+        app.OnRedirectedActivation();
     }
 
     // RedirectActivationToAsync must complete before this process exits, so block on it

@@ -151,9 +151,24 @@ public partial class App : Application
     }
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs e)
+        => HandleNotificationActivation(e);
+
+    /// <summary>Routes a toast interaction (body click or inline button) to the right action. Reached two
+    /// ways: the in-process <see cref="AppNotificationManager.NotificationInvoked"/> event when the app is
+    /// already running, and — because this app is single-instanced — the redirected activation path
+    /// (<see cref="Program"/>'s <c>OnActivated</c>) when the toast spawned a fresh process that forwarded
+    /// to us. Without the second route, clicking a toast button just brought the window forward and the
+    /// action (e.g. a tapback) was dropped.</summary>
+    internal void HandleNotificationActivation(AppNotificationActivatedEventArgs e)
     {
         var args = e.Arguments;
-        if (!args.TryGetValue(NotificationService.ActionKey, out var action)) return;
+        if (!args.TryGetValue(NotificationService.ActionKey, out var action))
+        {
+            AppLog.Warn(LogCategory.Ui, "Toast activation had no action argument; ignoring.");
+            return;
+        }
+
+        AppLog.Info(LogCategory.Ui, $"Toast activation: action={action}");
 
         switch (action)
         {
@@ -201,8 +216,10 @@ public partial class App : Application
         if (!args.TryGetValue(NotificationService.ReactionKey, out var reaction)) return;
         args.TryGetValue(NotificationService.SelectedTextKey, out var selectedText);
 
+        // partIndex 0 mirrors the in-app reaction path; the private-API message/react endpoint expects
+        // a concrete part index (a null index silently no-ops the tapback on the server).
         _ = Services.GetRequiredService<IOutgoingMessageService>()
-            .SendTapbackAsync(chatGuid, selectedText ?? string.Empty, messageGuid, reaction);
+            .SendTapbackAsync(chatGuid, selectedText ?? string.Empty, messageGuid, reaction, partIndex: 0);
         MarkChatActedOn(chatGuid);
     }
 
