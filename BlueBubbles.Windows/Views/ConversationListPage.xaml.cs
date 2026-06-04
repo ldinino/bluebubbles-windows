@@ -102,34 +102,62 @@ public sealed partial class ConversationListPage : Page
         switch (_vm.ConnectionState)
         {
             case SocketState.Connected when _vm.IsSyncing:
-                ConnectionBar.IsOpen = true;
-                ConnectionBar.Severity = InfoBarSeverity.Informational;
-                ConnectionBar.Title = "Syncing new messages...";
-                ConnectionBar.Content = new Microsoft.UI.Xaml.Controls.ProgressRing
-                {
-                    IsActive = true,
-                    Width = 16,
-                    Height = 16
-                };
-                break;
-            case SocketState.Connected:
-                ConnectionBar.IsOpen = false;
-                ConnectionBar.Content = null;
+                ShowConnectionBar("Syncing new messages…", spinner: true, glyph: null,
+                    background: "SystemFillColorAttentionBackgroundBrush",
+                    foreground: "TextFillColorPrimaryBrush");
                 break;
             case SocketState.Connecting:
-                ConnectionBar.IsOpen = true;
-                ConnectionBar.Severity = InfoBarSeverity.Informational;
-                ConnectionBar.Title = "Connecting...";
-                ConnectionBar.Content = null;
+                ShowConnectionBar("Connecting…", spinner: true, glyph: null,
+                    background: "SystemFillColorAttentionBackgroundBrush",
+                    foreground: "TextFillColorPrimaryBrush");
                 break;
             case SocketState.Error:
             case SocketState.Disconnected:
-                ConnectionBar.IsOpen = true;
-                ConnectionBar.Severity = InfoBarSeverity.Warning;
-                ConnectionBar.Title = "Disconnected from server";
-                ConnectionBar.Content = null;
+                ShowConnectionBar("Disconnected from server", spinner: false, glyph: "",
+                    background: "SystemFillColorCautionBackgroundBrush",
+                    foreground: "SystemFillColorCautionBrush");
+                break;
+            case SocketState.Connected:
+            default:
+                ConnectionBar.Visibility = Visibility.Collapsed;
+                ConnectionBarRing.IsActive = false;
                 break;
         }
+    }
+
+    private void ShowConnectionBar(string text, bool spinner, string? glyph, string background, string foreground)
+    {
+        var fg = ResolveBrush(foreground);
+
+        ConnectionBar.Background = ResolveBrush(background);
+        ConnectionBar.Visibility = Visibility.Visible;
+
+        ConnectionBarRing.IsActive = spinner;
+        ConnectionBarRing.Visibility = spinner ? Visibility.Visible : Visibility.Collapsed;
+
+        if (glyph is null)
+        {
+            ConnectionBarIcon.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            ConnectionBarIcon.Glyph = glyph;
+            ConnectionBarIcon.Foreground = fg;
+            ConnectionBarIcon.Visibility = Visibility.Visible;
+        }
+
+        ConnectionBarText.Text = text;
+        ConnectionBarText.Foreground = fg;
+    }
+
+    // System theme brushes (SystemFillColor*) live in the framework resource dictionary; look them up
+    // defensively so a renamed/missing key degrades to a sane default instead of throwing.
+    private Microsoft.UI.Xaml.Media.Brush ResolveBrush(string key)
+    {
+        if (Application.Current.Resources.TryGetValue(key, out var value)
+            && value is Microsoft.UI.Xaml.Media.Brush brush)
+            return brush;
+        return (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
     }
 
     private void OnSearchTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)

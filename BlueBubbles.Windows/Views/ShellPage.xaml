@@ -84,14 +84,9 @@
                            HorizontalAlignment="Center" />
             </StackPanel>
 
-            <!-- Chat frame (populated in Phase 6) -->
-            <Frame x:Name="ChatFrame" Visibility="Collapsed">
-                <Frame.ContentTransitions>
-                    <TransitionCollection>
-                        <NavigationThemeTransition />
-                    </TransitionCollection>
-                </Frame.ContentTransitions>
-            </Frame>
+            <!-- Chat frame (populated in Phase 6). No ContentTransitions: opening a conversation should
+                 swap in instantly, not slide/fade (L2). -->
+            <Frame x:Name="ChatFrame" Visibility="Collapsed" />
         </Grid>
     </Grid>
 </Page>

@@ -2,6 +2,7 @@ using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
+using BlueBubbles.Windows.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ICredentialService _credentials;
     private readonly IDbContextFactory<BlueBubblesDbContext> _dbFactory;
     private readonly ILocalhostDetectionService _localhostDetection;
+    private readonly StartupTaskService _startupTask;
     private readonly AppSettings _appSettings;
 
     /// <summary>Sentinel filter value meaning "show every category".</summary>
@@ -50,6 +52,7 @@ public partial class SettingsViewModel : ObservableObject
         ICredentialService credentials,
         IDbContextFactory<BlueBubblesDbContext> dbFactory,
         ILocalhostDetectionService localhostDetection,
+        StartupTaskService startupTask,
         AppSettings appSettings)
     {
         _socketService = socketService;
@@ -60,6 +63,7 @@ public partial class SettingsViewModel : ObservableObject
         _credentials = credentials;
         _dbFactory = dbFactory;
         _localhostDetection = localhostDetection;
+        _startupTask = startupTask;
         _appSettings = appSettings;
 
         ServerUrl = _config.ServerUrl;
@@ -257,19 +261,50 @@ public partial class SettingsViewModel : ObservableObject
         _socketService.Disconnect();
         _credentials.DeletePassword();
 
+        // Drop the DB, then release SQLite's pooled connections so the -wal/-shm sidecars aren't
+        // left locked when we wipe the directory below.
         using (var db = await _dbFactory.CreateDbContextAsync())
             await db.Database.EnsureDeletedAsync();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
+        // Remove the run-on-login entry so a stale autostart can't point at a reset/wiped install.
+        _startupTask.SetEnabled(false, startMinimized: false);
+
+        // Whole-directory wipe (replaces the old file-by-file deletes that missed attachments\,
+        // logs\, and the Run key). Covers db + sidecars, attachments\, logs\, settings.json,
+        // contacts.vcf, credential.bin, and any future data file — a true return to first-run.
+        await ClearDataDirectoryAsync();
+
+        _appSettings.FinishedSetup = false;
+        ResetRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Recursively delete <c>%LocalAppData%\BlueBubbles</c>, then recreate the empty base + logs
+    /// dirs so the still-running app keeps writing without first-run path errors. Best-effort with
+    /// a short retry, since a just-released SQLite/attachment handle can briefly hold a lock.
+    /// </summary>
+    private static async Task ClearDataDirectoryAsync()
+    {
         var dataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "BlueBubbles");
 
-        foreach (var file in new[] { "settings.json", "contacts.vcf" })
+        if (Directory.Exists(dataDir))
         {
-            try { File.Delete(Path.Combine(dataDir, file)); } catch { }
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try { Directory.Delete(dataDir, recursive: true); break; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    AppLog.Warn(LogCategory.App, $"Reset: data dir delete attempt {attempt + 1} failed: {ex.Message}");
+                    await Task.Delay(150);
+                }
+            }
         }
 
-        _appSettings.FinishedSetup = false;
-        ResetRequested?.Invoke(this, EventArgs.Empty);
+        // Recreates both BlueBubbles\ (DB on next setup, settings) and BlueBubbles\logs\ (so file
+        // logging resumes immediately rather than only after the next daily roll).
+        try { Directory.CreateDirectory(AppLog.LogDirectory); } catch { }
     }
 }
