@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build a free, double-click installer for BlueBubbles (Windows) — no certificate, no MSIX.
+    Build a free, double-click installer for BlueBubbles (Windows) - no certificate, no MSIX.
 
 .DESCRIPTION
     Publishes the app *unpackaged and self-contained* (the .NET + Windows App SDK runtimes are
@@ -39,16 +39,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root     = $PSScriptRoot
+. (Join-Path $root 'build-common.ps1')   # Write-* helpers + Clear-BuildOutputs
+
 $proj     = Join-Path $root 'BlueBubbles.Windows\BlueBubbles.Windows.csproj'
 $iss      = Join-Path $root 'installer\BlueBubbles.iss'
 $distDir  = Join-Path $root 'dist'
 $tfm      = 'net8.0-windows10.0.26100.0'
 $rid      = "win-$Platform"
 $pubDir   = Join-Path $root "BlueBubbles.Windows\bin\$Configuration\$tfm\$rid\publish"
-
-function Write-Step([string]$m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
-function Write-Ok  ([string]$m) { Write-Host "    $m"   -ForegroundColor Green }
-function Write-Fail([string]$m) { Write-Host "    $m"   -ForegroundColor Red }
 
 # --- Version (single source of truth: csproj <Version>) ---
 $version = (Select-Xml -Path $proj -XPath '/Project/PropertyGroup/Version' |
@@ -60,18 +58,17 @@ Write-Ok "Version: $version  Platform: $Platform"
 if (-not $SkipPublish) {
     Write-Step "Publishing unpackaged self-contained app ($Configuration / $Platform)..."
 
-    # Wipe the intermediate (obj) and build (bin) trees before publishing. The WinUI3 XAML
-    # compiler's incremental build is unreliable: an edited .xaml often is NOT recompiled to its
-    # embedded .xbf, so `dotnet publish` relinks the assembly with STALE compiled XAML while C#
-    # changes flow through fine. The result is a release where UI/layout/animation fixes silently
-    # don't ship even though other changes do. A from-scratch build is the only reliable guard.
-    # (Both the platform-qualified `obj\x64\...` and the platform-neutral `obj\...` trees are
-    # removed, since different invocations land in different schemes.)
-    $projDir = Split-Path $proj -Parent
-    foreach ($d in @('obj', 'bin')) {
-        $path = Join-Path $projDir $d
-        if (Test-Path $path) { Remove-Item $path -Recurse -Force }
-    }
+    # Wipe obj/bin across the project graph before publishing. The WinUI3 XAML compiler's
+    # incremental build is unreliable: an edited .xaml often is NOT recompiled to its embedded
+    # .xbf, so `dotnet publish` relinks the assembly with STALE compiled XAML while C# changes
+    # flow through fine - a release where UI/layout/animation fixes silently don't ship. A
+    # from-scratch build is the only reliable guard. Clear-BuildOutputs (build-common.ps1) also
+    # kills any running app and shuts the .NET build servers down first, so the delete doesn't
+    # fail with "directory is not empty" on locked handles. Same clean as build-and-run.ps1.
+    Clear-BuildOutputs @(
+        (Join-Path $root 'BlueBubbles.Windows'),
+        (Join-Path $root 'BlueBubbles.Core')
+    )
 
     & dotnet publish $proj -c $Configuration "-p:Platform=$Platform"
     if ($LASTEXITCODE -ne 0) { Write-Fail 'Publish failed.'; exit $LASTEXITCODE }
@@ -111,7 +108,7 @@ if ($iscc) {
     Write-Host 'Run anyway" prompt because the build is unsigned. See INSTALL.md.' -ForegroundColor Cyan
 }
 else {
-    Write-Step 'Inno Setup not found — producing a portable .zip instead.'
+    Write-Step 'Inno Setup not found - producing a portable .zip instead.'
     $zip = Join-Path $distDir "BlueBubbles-$version-$Platform-portable.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $pubDir '*') -DestinationPath $zip
