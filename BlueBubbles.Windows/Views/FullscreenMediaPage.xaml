@@ -48,7 +48,7 @@
             </Button>
         </Grid>
 
-        <!-- Zoomable image -->
+        <!-- Zoomable image (images only; collapsed for video) -->
         <ScrollViewer x:Name="ImageScroller"
                       Grid.Row="1"
                       ZoomMode="Enabled"
@@ -92,5 +92,15 @@
                 </Image.ContextFlyout>
             </Image>
         </ScrollViewer>
+
+        <!-- Inline video player (video only; collapsed for images). Uses Windows'
+             built-in codecs via MediaPlayerElement; if the format can't be decoded
+             the page falls back to the external player (see MediaFailed handling). -->
+        <MediaPlayerElement x:Name="VideoPlayer"
+                            Grid.Row="1"
+                            Visibility="Collapsed"
+                            AreTransportControlsEnabled="True"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch" />
     </Grid>
 </Page>

@@ -312,13 +312,15 @@ public sealed partial class ChatDetailsPage : Page
     {
         if (e.ClickedItem is not AttachmentViewModel att) return;
 
-        if (att.Category == AttachmentCategory.Image)
+        // Images and videos open in the in-app viewer/player (the player itself
+        // hands off to the external app if Windows can't decode the format).
+        if (att.Category is AttachmentCategory.Image or AttachmentCategory.Video)
         {
             Frame.Navigate(typeof(FullscreenMediaPage), att);
             return;
         }
 
-        // Video / other: ensure it's downloaded, then open with the default app.
+        // Other files: ensure it's downloaded, then open with the default app.
         if (att.LocalPath is null) await att.DownloadAsync();
         if (att.LocalPath is null) return;
         try

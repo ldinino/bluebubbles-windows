@@ -117,4 +117,22 @@ public sealed partial class AboutSettingsPage : Page
 
     private async void OnDocsClick(object sender, RoutedEventArgs e)
         => await Launcher.LaunchUriAsync(new Uri(DocsUrl));
+
+    private async void OnResetAppClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Reset App?",
+            Content = "This will delete all local data — chats, messages, contacts, and settings — and return to setup. This cannot be undone.",
+            PrimaryButtonText = "Reset",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        await _vm.ResetAppCommand.ExecuteAsync(null);
+        App.MainWindow.RootNavigationFrame.Navigate(typeof(Setup.SetupPage));
+    }
 }
