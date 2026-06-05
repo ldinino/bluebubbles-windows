@@ -22,7 +22,7 @@ public sealed partial class AvatarControl : UserControl
 
     public static readonly DependencyProperty InitialsProperty =
         DependencyProperty.Register(nameof(Initials), typeof(string), typeof(AvatarControl),
-            new PropertyMetadata("?", OnPropertyChanged));
+            new PropertyMetadata("", OnPropertyChanged));
 
     public static readonly DependencyProperty AvatarImageProperty =
         DependencyProperty.Register(nameof(AvatarImage), typeof(byte[]), typeof(AvatarControl),
@@ -34,11 +34,11 @@ public sealed partial class AvatarControl : UserControl
 
     public static readonly DependencyProperty GroupInitials1Property =
         DependencyProperty.Register(nameof(GroupInitials1), typeof(string), typeof(AvatarControl),
-            new PropertyMetadata("?", OnPropertyChanged));
+            new PropertyMetadata("", OnPropertyChanged));
 
     public static readonly DependencyProperty GroupInitials2Property =
         DependencyProperty.Register(nameof(GroupInitials2), typeof(string), typeof(AvatarControl),
-            new PropertyMetadata("?", OnPropertyChanged));
+            new PropertyMetadata("", OnPropertyChanged));
 
     public static readonly DependencyProperty GroupAvatarImage1Property =
         DependencyProperty.Register(nameof(GroupAvatarImage1), typeof(byte[]), typeof(AvatarControl),
@@ -121,10 +121,10 @@ public sealed partial class AvatarControl : UserControl
             GroupBack.Width = GroupBack.Height = subSize;
 
             ConfigureGroupCircle(
-                GroupFrontEllipse, GroupFrontInitials, GroupFrontImage,
+                GroupFrontEllipse, GroupFrontInitials, GroupFrontGlyph, GroupFrontImage,
                 GroupInitials1, GroupAvatarImage1, subSize, generation, colorful);
             ConfigureGroupCircle(
-                GroupBackEllipse, GroupBackInitials, GroupBackImage,
+                GroupBackEllipse, GroupBackInitials, GroupBackGlyph, GroupBackImage,
                 GroupInitials2, GroupAvatarImage2, subSize, generation, colorful);
             return;
         }
@@ -146,9 +146,24 @@ public sealed partial class AvatarControl : UserControl
             PersonPic.Visibility = Visibility.Collapsed;
             InitialsCircle.Visibility = Visibility.Visible;
             InitialsCircle.Width = InitialsCircle.Height = size;
-            InitialsText.Text = Initials;
-            InitialsText.FontSize = size * 0.4;
-            InitialsEllipse.Fill = new SolidColorBrush(colorful ? GetColorForText(Initials) : NeutralAvatarColor);
+
+            if (string.IsNullOrWhiteSpace(Initials))
+            {
+                // No contact name → generic person glyph on a neutral circle (Microsoft-style
+                // default avatar), rather than punctuation from a raw phone number/email.
+                InitialsText.Visibility = Visibility.Collapsed;
+                PersonGlyph.Visibility = Visibility.Visible;
+                PersonGlyph.FontSize = size * 0.5;
+                InitialsEllipse.Fill = new SolidColorBrush(NeutralAvatarColor);
+            }
+            else
+            {
+                PersonGlyph.Visibility = Visibility.Collapsed;
+                InitialsText.Visibility = Visibility.Visible;
+                InitialsText.Text = Initials;
+                InitialsText.FontSize = size * 0.4;
+                InitialsEllipse.Fill = new SolidColorBrush(colorful ? GetColorForText(Initials) : NeutralAvatarColor);
+            }
         }
     }
 
@@ -169,25 +184,37 @@ public sealed partial class AvatarControl : UserControl
     }
 
     private void ConfigureGroupCircle(
-        Ellipse ellipse, TextBlock initialsText, Ellipse imageEllipse,
+        Ellipse ellipse, TextBlock initialsText, FontIcon glyph, Ellipse imageEllipse,
         string initials, byte[]? imageBytes, double size, int generation, bool colorful)
     {
-        initialsText.FontSize = size * 0.4;
-
         if (imageBytes is { Length: > 0 })
         {
             ellipse.Visibility = Visibility.Collapsed;
             initialsText.Visibility = Visibility.Collapsed;
+            glyph.Visibility = Visibility.Collapsed;
             imageEllipse.Visibility = Visibility.Visible;
             imageEllipse.Width = imageEllipse.Height = size;
             _ = SetEllipseImageAsync(imageEllipse, imageBytes, generation);
+            return;
+        }
+
+        imageEllipse.Visibility = Visibility.Collapsed;
+        ellipse.Visibility = Visibility.Visible;
+
+        if (string.IsNullOrWhiteSpace(initials))
+        {
+            // Unknown participant → generic person glyph on a neutral circle.
+            initialsText.Visibility = Visibility.Collapsed;
+            glyph.Visibility = Visibility.Visible;
+            glyph.FontSize = size * 0.5;
+            ellipse.Fill = new SolidColorBrush(NeutralAvatarColor);
         }
         else
         {
-            imageEllipse.Visibility = Visibility.Collapsed;
-            ellipse.Visibility = Visibility.Visible;
+            glyph.Visibility = Visibility.Collapsed;
             initialsText.Visibility = Visibility.Visible;
             initialsText.Text = initials;
+            initialsText.FontSize = size * 0.4;
             ellipse.Fill = new SolidColorBrush(colorful ? GetColorForText(initials) : NeutralAvatarColor);
         }
     }

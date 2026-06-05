@@ -50,7 +50,7 @@ public partial class ConversationTileViewModel : ObservableObject
 
         var addresses = Participants.Select(p => p.Address).ToList();
         DisplayName = contacts.GetChatDisplayName(addresses, data.Chat.DisplayName);
-        Initials = contacts.GetInitials(DisplayName);
+        Initials = contacts.GetChatInitials(addresses, data.Chat.DisplayName);
         Preview = data.LastMessageText ?? string.Empty;
         Timestamp = data.Chat.LatestMessageDate ?? 0;
         HasUnread = data.Chat.HasUnreadMessage;
@@ -58,8 +58,8 @@ public partial class ConversationTileViewModel : ObservableObject
         IsArchived = data.Chat.IsArchived;
         IsGroup = Participants.Count > 1;
         AvatarBytes = Participants.Count == 1 ? contacts.GetAvatar(Participants[0].Address) : null;
-        GroupInitials1 = "?";
-        GroupInitials2 = "?";
+        GroupInitials1 = string.Empty;
+        GroupInitials2 = string.Empty;
         ResolveGroupAvatars(data);
         CaptureLastMessageStatus(data);
         ApplyAppearance(_settings);
@@ -69,7 +69,7 @@ public partial class ConversationTileViewModel : ObservableObject
     {
         var addresses = data.Participants.Select(p => p.Address).ToList();
         DisplayName = _contacts.GetChatDisplayName(addresses, data.Chat.DisplayName);
-        Initials = _contacts.GetInitials(DisplayName);
+        Initials = _contacts.GetChatInitials(addresses, data.Chat.DisplayName);
         Preview = data.LastMessageText ?? string.Empty;
         Timestamp = data.Chat.LatestMessageDate ?? 0;
         HasUnread = data.Chat.HasUnreadMessage;
@@ -114,44 +114,17 @@ public partial class ConversationTileViewModel : ObservableObject
 
     private void ResolveGroupAvatars(ChatWithParticipants data)
     {
-        if (!IsGroup) return;
-
-        string? frontAddress = null; // left circle = second most recent
-        string? backAddress = null;  // right circle = most recent
-
-        if (data.RecentSenders is { Count: > 0 })
+        if (!IsGroup)
         {
-            backAddress = data.RecentSenders[0].Address;
-            frontAddress = data.RecentSenders.Count > 1
-                ? data.RecentSenders[1].Address
-                : data.Participants.FirstOrDefault(p =>
-                    !p.Address.Equals(backAddress, StringComparison.OrdinalIgnoreCase))?.Address;
+            GroupInitials1 = GroupInitials2 = string.Empty;
+            GroupAvatarBytes1 = GroupAvatarBytes2 = null;
+            return;
         }
 
-        frontAddress ??= data.Participants.ElementAtOrDefault(0)?.Address;
-        backAddress ??= data.Participants.ElementAtOrDefault(1)?.Address
-                     ?? data.Participants.ElementAtOrDefault(0)?.Address;
-
-        if (frontAddress is not null)
-        {
-            GroupInitials1 = _contacts.GetInitials(_contacts.GetDisplayName(frontAddress));
-            GroupAvatarBytes1 = _contacts.GetAvatar(frontAddress);
-        }
-        else
-        {
-            GroupInitials1 = "?";
-            GroupAvatarBytes1 = null;
-        }
-
-        if (backAddress is not null)
-        {
-            GroupInitials2 = _contacts.GetInitials(_contacts.GetDisplayName(backAddress));
-            GroupAvatarBytes2 = _contacts.GetAvatar(backAddress);
-        }
-        else
-        {
-            GroupInitials2 = "?";
-            GroupAvatarBytes2 = null;
-        }
+        var group = GroupAvatarResolver.Resolve(data, _contacts);
+        GroupInitials1 = group.Initials1;
+        GroupInitials2 = group.Initials2;
+        GroupAvatarBytes1 = group.Bytes1;
+        GroupAvatarBytes2 = group.Bytes2;
     }
 }

@@ -108,6 +108,68 @@ public class ContactResolverServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task HasContactName_TrueForSavedContact_FalseForRawAddress()
+    {
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:John Doe
+            TEL:+15551234567
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+
+        Assert.True(svc.HasContactName("5551234567"));
+        Assert.False(svc.HasContactName("5559876543"));
+    }
+
+    [Fact]
+    public async Task GetAvatarInitials_ReturnsInitialsForContact_EmptyForRawAddress()
+    {
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:John Doe
+            TEL:+15551234567
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+
+        Assert.Equal("JD", svc.GetAvatarInitials("5551234567"));
+        // Unknown number: empty initials so the avatar shows a generic glyph, not "(" or "+".
+        Assert.Equal("", svc.GetAvatarInitials("5559876543"));
+        Assert.Equal("", svc.GetAvatarInitials("+15559876543"));
+    }
+
+    [Fact]
+    public async Task GetChatInitials_PrefersCustomName_ThenContact_ElseEmpty()
+    {
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:John Doe
+            TEL:+15551234567
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+
+        // Custom (group) name wins.
+        Assert.Equal("FC", svc.GetChatInitials(["5551234567", "5559876543"], "Family Chat"));
+        // 1:1 with a saved contact → that contact's initials.
+        Assert.Equal("JD", svc.GetChatInitials(["5551234567"], null));
+        // 1:1 unknown raw address → empty (generic glyph).
+        Assert.Equal("", svc.GetChatInitials(["5559876543"], null));
+        // Group with no custom name → empty; the single avatar isn't shown for groups.
+        Assert.Equal("", svc.GetChatInitials(["5551234567", "5559876543"], null));
+    }
+
+    [Fact]
     public void GetChatDisplayName_PrefersExplicitName()
     {
         var svc = new ContactResolverService(_settings);

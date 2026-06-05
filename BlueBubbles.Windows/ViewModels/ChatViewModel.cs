@@ -53,6 +53,10 @@ public partial class ChatViewModel : ObservableObject
     [ObservableProperty] public partial string Initials { get; set; }
     [ObservableProperty] public partial byte[]? AvatarBytes { get; set; }
     [ObservableProperty] public partial bool IsGroupChat { get; set; }
+    [ObservableProperty] public partial string GroupInitials1 { get; set; }
+    [ObservableProperty] public partial string GroupInitials2 { get; set; }
+    [ObservableProperty] public partial byte[]? GroupAvatarBytes1 { get; set; }
+    [ObservableProperty] public partial byte[]? GroupAvatarBytes2 { get; set; }
     [ObservableProperty] public partial bool IsTyping { get; set; }
     [ObservableProperty] public partial bool IsLoading { get; set; }
     [ObservableProperty] public partial bool HasMoreMessages { get; set; }
@@ -96,6 +100,8 @@ public partial class ChatViewModel : ObservableObject
         ChatDisplayName = string.Empty;
         ParticipantSummary = string.Empty;
         Initials = string.Empty;
+        GroupInitials1 = string.Empty;
+        GroupInitials2 = string.Empty;
         MessageText = string.Empty;
 
         _actionHandler.NewMessageReceived += (s, e) => RunOnUI(() => OnNewMessageReceived(s, e));
@@ -114,18 +120,33 @@ public partial class ChatViewModel : ObservableObject
         };
     }
 
-    /// <summary>Re-resolves the open chat's header (name, initials, 1:1 avatar) after the
-    /// contact set changes — e.g. a vCard import — so it doesn't stay on the raw address.</summary>
+    /// <summary>Re-resolves the open chat's header (name, initials, avatars) after the contact set
+    /// changes — e.g. a vCard import — so it doesn't stay on the raw address.</summary>
     private void RefreshContactInfo()
     {
         if (string.IsNullOrEmpty(_chatGuid)) return;
         ChatDisplayName = _contacts.GetChatDisplayName(_participantAddresses, _chatDisplayNameRaw);
-        Initials = _contacts.GetInitials(ChatDisplayName);
+        Initials = _contacts.GetChatInitials(_participantAddresses, _chatDisplayNameRaw);
         AvatarBytes = _participantAddresses.Count == 1
             ? _contacts.GetAvatar(_participantAddresses[0])
             : null;
-        if (!_isGroup)
+        if (_isGroup)
+            RefreshGroupAvatars();
+        else
             ParticipantSummary = _participantAddresses.FirstOrDefault() ?? string.Empty;
+    }
+
+    /// <summary>Re-resolves the two stacked group sub-avatars from the latest chat data, picking the
+    /// same recent-sender faces the list tile uses so the header mirrors the list.</summary>
+    private void RefreshGroupAvatars()
+    {
+        var data = _chatsService.Chats.FirstOrDefault(c => c.Chat.Guid == _chatGuid);
+        if (data is null) return;
+        var group = GroupAvatarResolver.Resolve(data, _contacts);
+        GroupInitials1 = group.Initials1;
+        GroupInitials2 = group.Initials2;
+        GroupAvatarBytes1 = group.Bytes1;
+        GroupAvatarBytes2 = group.Bytes2;
     }
 
     public async Task LoadChatAsync(ConversationTileViewModel tile)
@@ -141,6 +162,12 @@ public partial class ChatViewModel : ObservableObject
         Initials = tile.Initials;
         AvatarBytes = tile.AvatarBytes;
         IsGroupChat = tile.IsGroup;
+        // Mirror the list tile's two-face group avatar in the header (it would otherwise show the
+        // AvatarControl's empty placeholder for groups).
+        GroupInitials1 = tile.GroupInitials1;
+        GroupInitials2 = tile.GroupInitials2;
+        GroupAvatarBytes1 = tile.GroupAvatarBytes1;
+        GroupAvatarBytes2 = tile.GroupAvatarBytes2;
         SetTypingBubble(false);
 
         ParticipantSummary = _isGroup

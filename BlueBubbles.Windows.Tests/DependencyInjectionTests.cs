@@ -159,6 +159,10 @@ public class DependencyInjectionTests
         public Task LoadFromVCardAsync(string vcfFilePath) => Task.CompletedTask;
         public string GetDisplayName(string address) => address;
         public string GetInitials(string displayName) => "?";
+        public bool HasContactName(string address) => false;
+        public string GetAvatarInitials(string address) => string.Empty;
+        public string GetChatInitials(IEnumerable<string> participantAddresses, string? chatDisplayName)
+            => chatDisplayName is null ? string.Empty : "?";
         public byte[]? GetAvatar(string address) => null;
         public string GetChatDisplayName(IEnumerable<string> participantAddresses, string? chatDisplayName)
             => chatDisplayName ?? "Chat";
