@@ -187,8 +187,12 @@ public sealed partial class AttachmentHolder : UserControl
 
     private async Task LoadVideoThumbnailAsync(string path, long generation)
     {
-        // The shell extracts a representative frame from the video — no decoders bundled.
-        var poster = await Helpers.ImageLoader.ThumbnailAsync(path, (uint)MaxImageWidth);
+        // Decode a real frame through Windows' media pipeline so the bubble shows the video's
+        // actual first frame (like iMessage), not a placeholder. Fall back to the shell thumbnail
+        // only when the codec can't be decoded — and even then reject the shell's generic icon
+        // (imageOnly) so we never blow a media-file glyph up to bubble size.
+        var poster = await Helpers.ImageLoader.VideoFrameAsync(path, (uint)MaxImageWidth)
+                     ?? await Helpers.ImageLoader.ThumbnailAsync(path, (uint)MaxImageWidth, imageOnly: true);
         if (Interlocked.Read(ref _bindGeneration) != generation) return;
         VideoThumbnail.Source = poster;
     }
