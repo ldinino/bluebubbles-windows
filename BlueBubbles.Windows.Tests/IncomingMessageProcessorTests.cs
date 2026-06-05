@@ -281,11 +281,19 @@ public class IncomingMessageProcessorTests
         var saved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         msgSvc.ReactionSaved += () => saved.TrySetResult();
 
+        // The notification is raised on a separate async hop after the reaction is
+        // persisted, so wait for it explicitly instead of relying on ordering.
+        var notified = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notifSvc.NotificationAdded += () => notified.TrySetResult();
+
         handler.HandleEvent(SocketEvents.NewMessage,
             ReactionJson("react-1", "p:0/msg-parent", "love", isFromMe: false), "Test");
 
         await Task.WhenAny(saved.Task, Task.Delay(3000));
         Assert.True(saved.Task.IsCompleted, "Reaction was not persisted");
+
+        await Task.WhenAny(notified.Task, Task.Delay(3000));
+        Assert.True(notified.Task.IsCompleted, "Notification was not raised");
 
         Assert.Single(msgSvc.SavedReactions);
         Assert.Equal("iMessage;-;+11234567890", msgSvc.SavedReactions[0].ChatGuid);
@@ -411,7 +419,12 @@ internal class RecordingMessagesService : IMessagesService
 internal class RecordingNotificationService : INotificationService
 {
     public List<NewMessageNotification> Notifications { get; } = [];
-    public void HandleNewMessage(NewMessageNotification notification) => Notifications.Add(notification);
+    public event Action? NotificationAdded;
+    public void HandleNewMessage(NewMessageNotification notification)
+    {
+        Notifications.Add(notification);
+        NotificationAdded?.Invoke();
+    }
     public void ClearNotificationsForChat(string chatGuid) { }
     public void ClearAllNotifications() { }
 }
