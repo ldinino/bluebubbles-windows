@@ -257,6 +257,73 @@ public sealed partial class ConversationListPage : Page
         BottomBar.Visibility = showing ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    // --- Notification deep-link ---
+    // A toast body-click asks us to open a specific chat. On a cold start (app launched BY the click)
+    // the conversation list may not have populated yet, so when the tile isn't there we watch the
+    // lists and retry as they fill, giving up after a few seconds so we never watch forever.
+    private string? _pendingDeepLinkGuid;
+    private DispatcherTimer? _deepLinkTimeout;
+
+    /// <summary>Opens a conversation by GUID (notification deep-link), reusing the normal selection
+    /// path so the chat frame navigates and the tile highlights. If the list hasn't loaded yet, waits
+    /// for the target tile to appear (cold start) rather than silently doing nothing.</summary>
+    public void SelectChatByGuid(string chatGuid)
+    {
+        if (string.IsNullOrEmpty(chatGuid)) return;
+
+        StopDeepLinkWatch();                 // cancel any earlier pending deep-link
+        if (TrySelectByGuid(chatGuid)) return;
+
+        _pendingDeepLinkGuid = chatGuid;
+        _vm.Conversations.CollectionChanged += OnDeepLinkListChanged;
+        _vm.PinnedConversations.CollectionChanged += OnDeepLinkListChanged;
+        (_deepLinkTimeout ??= CreateDeepLinkTimeout()).Start();
+    }
+
+    private bool TrySelectByGuid(string chatGuid)
+    {
+        // A live search filter can hide the target tile — clear it so the tile materializes, then look.
+        if (!string.IsNullOrEmpty(_vm.SearchQuery))
+            _vm.SearchQuery = string.Empty;
+
+        var tile = _vm.Conversations.Concat(_vm.PinnedConversations)
+            .FirstOrDefault(t => t.ChatGuid == chatGuid);
+        if (tile is null) return false;
+
+        // Drive the same selection state a user click produces: highlight in the owning list, clear the
+        // other, set the VM selection, and raise ConversationSelected so the shell navigates the frame.
+        var pinned = _vm.PinnedConversations.Contains(tile);
+        ConversationList.SelectedItem = pinned ? null : tile;
+        PinnedGrid.SelectedItem = pinned ? tile : null;
+        _vm.SelectedConversation = tile;
+        ConversationSelected?.Invoke(this, tile);
+        return true;
+    }
+
+    private void OnDeepLinkListChanged(object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (_pendingDeepLinkGuid is not null && TrySelectByGuid(_pendingDeepLinkGuid))
+            StopDeepLinkWatch();
+    }
+
+    private DispatcherTimer CreateDeepLinkTimeout()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        timer.Tick += (_, _) => StopDeepLinkWatch();
+        return timer;
+    }
+
+    private void StopDeepLinkWatch()
+    {
+        _deepLinkTimeout?.Stop();
+        if (_pendingDeepLinkGuid is null) return;
+
+        _pendingDeepLinkGuid = null;
+        _vm.Conversations.CollectionChanged -= OnDeepLinkListChanged;
+        _vm.PinnedConversations.CollectionChanged -= OnDeepLinkListChanged;
+    }
+
     /// <summary>Moves focus to the search box (Ctrl+F accelerator).</summary>
     public void FocusSearch() => SearchBox.Focus(FocusState.Programmatic);
 

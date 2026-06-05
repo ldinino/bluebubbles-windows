@@ -155,8 +155,12 @@ internal sealed class NotificationService : INotificationService
 
             AppNotificationManager.Default.Show(builder.BuildNotification());
             _sound.PlayConfiguredSound();
+            AppLog.Info(LogCategory.Ui, $"Toast shown for chat {group} (msg {tag}).");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Error(LogCategory.Ui, $"Toast show failed: {ex.Message}");
+        }
     }
 
     /// <summary>Adds the inline quick-reply box and — for real messages, not reactions — the

@@ -19,6 +19,18 @@ public sealed partial class ChatPage : Page
 
     public event EventHandler<ConversationTileViewModel>? DetailsRequested;
 
+    /// <summary>Raised when the narrow-layout back button is tapped, asking the shell to return
+    /// to the conversation list (the list isn't visible alongside the chat in narrow layout).</summary>
+    public event EventHandler? BackToListRequested;
+
+    /// <summary>Shows or hides the in-header "back to conversations" button. The shell calls this
+    /// to reflect the current adaptive layout: visible only when the list pane is hidden.</summary>
+    public void SetNarrow(bool isNarrow)
+        => NarrowBackButton.Visibility = isNarrow ? Visibility.Visible : Visibility.Collapsed;
+
+    private void OnBackToListClick(object sender, RoutedEventArgs e)
+        => BackToListRequested?.Invoke(this, EventArgs.Empty);
+
     public ChatPage()
     {
         _vm = App.Services.GetRequiredService<ChatViewModel>();

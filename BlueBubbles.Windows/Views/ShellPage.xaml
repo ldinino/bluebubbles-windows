@@ -10,37 +10,16 @@
     NavigationCacheMode="Required"
     mc:Ignorable="d">
 
-    <Grid>
+    <!-- Adaptive master/detail. Wide: list + detail side by side. Narrow (< ~768px there isn't room
+         for both): a single pane fills the window and we swap between the list and the open chat,
+         driven from code-behind (ApplyPaneLayout) because the choice depends on both width AND
+         whether a chat is open — a condition pure AdaptiveTriggers can't express. -->
+    <Grid SizeChanged="OnRootSizeChanged">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="N" Invoked="OnNewChatAccelerator" />
             <KeyboardAccelerator Modifiers="Control" Key="F" Invoked="OnFindAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
         </Grid.KeyboardAccelerators>
-
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="LayoutStates">
-                <VisualState x:Name="WideLayout">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="768" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="LeftPane.Visibility" Value="Visible" />
-                        <Setter Target="PaneDivider.Visibility" Value="Visible" />
-                        <Setter Target="RightPane.Visibility" Value="Visible" />
-                    </VisualState.Setters>
-                </VisualState>
-                <VisualState x:Name="NarrowLayout">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="0" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="LeftPane.Visibility" Value="Visible" />
-                        <Setter Target="PaneDivider.Visibility" Value="Collapsed" />
-                        <Setter Target="RightPane.Visibility" Value="Collapsed" />
-                    </VisualState.Setters>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
 
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="LeftColumn" Width="320" MinWidth="280" MaxWidth="400" />

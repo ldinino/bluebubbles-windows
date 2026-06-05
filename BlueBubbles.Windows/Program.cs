@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using BlueBubbles.Core.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
@@ -31,24 +32,36 @@ public static class Program
         });
     }
 
+    // Keeps the registered single-instance AppInstance alive for the whole process lifetime.
+    // CRITICAL: this must NOT be a local. The WinRT `Activated` event subscription below lives on
+    // this RCW; if the RCW is garbage-collected (which happens within seconds of startup), the
+    // subscription is silently torn down and every redirected activation is dropped on the floor.
+    // Toast-click activations arrive this way — the shell spawns a short-lived process that forwards
+    // the activation here via RedirectActivationToAsync — so a collected RCW means toast taps, inline
+    // replies, and tapbacks all stop working in every window state, with no error. (Matches the
+    // Windows App SDK single-instancing sample, which likewise holds a static reference.)
+    private static AppInstance? _keyInstance;
+
     /// <returns>true if this launch was redirected to the primary instance and should exit.</returns>
     private static bool DecideRedirection()
     {
         var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
-        var keyInstance = AppInstance.FindOrRegisterForKey("BlueBubbles-Main");
+        _keyInstance = AppInstance.FindOrRegisterForKey("BlueBubbles-Main");
 
-        if (keyInstance.IsCurrent)
+        if (_keyInstance.IsCurrent)
         {
-            keyInstance.Activated += OnActivated;
+            _keyInstance.Activated += OnActivated;
             return false;
         }
 
-        RedirectActivationTo(activationArgs, keyInstance);
+        AppLog.Info(LogCategory.Ui, $"Redirecting activation (kind={activationArgs.Kind}) to primary instance.");
+        RedirectActivationTo(activationArgs, _keyInstance);
         return true;
     }
 
     private static void OnActivated(object? sender, AppActivationArguments args)
     {
+        AppLog.Info(LogCategory.Ui, $"AppInstance.Activated received: kind={args.Kind}");
         if (Application.Current is not App app) return;
 
         // A toast interaction can spawn a fresh process that gets redirected here. Route it to the
