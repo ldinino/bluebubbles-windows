@@ -125,12 +125,22 @@ public sealed partial class AttachmentHolder : UserControl
         // Decode at the display size in logical pixels: crisp at any DPI, and a high-res
         // photo decodes straight to its ~360px footprint instead of full-res-then-downscale.
         var decodeWidth = double.IsNaN(dispW) ? (int)MaxImageWidth : (int)Math.Ceiling(dispW);
+
+        // Recycle fast-path: if this image is already decoded, assign it synchronously so a
+        // scrolled-back-into-view bubble never flashes a blank box waiting on a disk decode.
+        var cached = Helpers.ImageLoader.TryGetCached(vm.LocalPath, decodeWidth);
+        if (cached is not null)
+        {
+            ImageContent.Source = cached;
+            return;
+        }
+
         _ = LoadImageAsync(vm.LocalPath, generation, decodeWidth);
     }
 
     private async Task LoadImageAsync(string path, long generation, int decodeWidth)
     {
-        var bitmap = await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true);
+        var bitmap = await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true, cache: true);
         if (Interlocked.Read(ref _bindGeneration) != generation) return;
         ImageContent.Source = bitmap;
     }
