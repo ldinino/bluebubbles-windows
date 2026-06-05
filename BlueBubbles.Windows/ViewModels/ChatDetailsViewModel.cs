@@ -60,8 +60,8 @@ public partial class ChatDetailsViewModel : ObservableObject
         ChatDisplayName = string.Empty;
         EditableName = string.Empty;
         Initials = string.Empty;
-        GroupInitials1 = "?";
-        GroupInitials2 = "?";
+        GroupInitials1 = string.Empty;
+        GroupInitials2 = string.Empty;
         ParticipantCountText = string.Empty;
         NewParticipantAddress = string.Empty;
 
@@ -92,7 +92,7 @@ public partial class ChatDetailsViewModel : ObservableObject
             Participants.Add(new ParticipantItemViewModel(
                 handle,
                 _contacts.GetDisplayName(handle.Address),
-                _contacts.GetInitials(_contacts.GetDisplayName(handle.Address)),
+                _contacts.GetAvatarInitials(handle.Address),
                 _contacts.GetAvatar(handle.Address)));
         }
         UpdateParticipantCount();
@@ -290,7 +290,7 @@ public partial class ChatDetailsViewModel : ObservableObject
             Participants.Add(new ParticipantItemViewModel(
                 handle,
                 _contacts.GetDisplayName(handle.Address),
-                _contacts.GetInitials(_contacts.GetDisplayName(handle.Address)),
+                _contacts.GetAvatarInitials(handle.Address),
                 _contacts.GetAvatar(handle.Address)));
         }
         UpdateParticipantCount();

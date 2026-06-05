@@ -110,6 +110,10 @@ public sealed partial class ChatPage : Page
         HeaderAvatar.Initials = _vm.Initials;
         HeaderAvatar.AvatarImage = _vm.AvatarBytes;
         HeaderAvatar.IsGroup = _vm.IsGroupChat;
+        HeaderAvatar.GroupInitials1 = _vm.GroupInitials1;
+        HeaderAvatar.GroupInitials2 = _vm.GroupInitials2;
+        HeaderAvatar.GroupAvatarImage1 = _vm.GroupAvatarBytes1;
+        HeaderAvatar.GroupAvatarImage2 = _vm.GroupAvatarBytes2;
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -123,6 +127,10 @@ public sealed partial class ChatPage : Page
                 case nameof(ChatViewModel.Initials):
                 case nameof(ChatViewModel.AvatarBytes):
                 case nameof(ChatViewModel.IsGroupChat):
+                case nameof(ChatViewModel.GroupInitials1):
+                case nameof(ChatViewModel.GroupInitials2):
+                case nameof(ChatViewModel.GroupAvatarBytes1):
+                case nameof(ChatViewModel.GroupAvatarBytes2):
                     UpdateHeader();
                     break;
                 case nameof(ChatViewModel.IsTyping):

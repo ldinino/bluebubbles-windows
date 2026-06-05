@@ -90,6 +90,27 @@ public class ContactResolverService : IContactResolverService
         };
     }
 
+    /// <summary>True when the address resolves to a saved contact name, as opposed to only a raw
+    /// (formatted) phone number or email.</summary>
+    public bool HasContactName(string address) => _nameCache.ContainsKey(NormalizeAddress(address));
+
+    public string GetAvatarInitials(string address)
+        => HasContactName(address) ? GetInitials(GetDisplayName(address)) : string.Empty;
+
+    public string GetChatInitials(IEnumerable<string> participantAddresses, string? chatDisplayName)
+    {
+        // A custom (group) name wins. Otherwise use the sole 1:1 peer's initials, or an empty
+        // string when the peer is an unknown raw address — the avatar then shows a generic person
+        // glyph instead of punctuation from a phone number ("+", "(") or a leading digit.
+        if (!string.IsNullOrWhiteSpace(chatDisplayName))
+            return GetInitials(chatDisplayName);
+
+        var addresses = participantAddresses as IReadOnlyList<string> ?? participantAddresses.ToList();
+        // Group avatars are rendered as stacked per-participant circles, not the single avatar, so
+        // the single-avatar initials only need to be meaningful for 1:1 chats.
+        return addresses.Count == 1 ? GetAvatarInitials(addresses[0]) : string.Empty;
+    }
+
     public byte[]? GetAvatar(string address)
     {
         var normalized = NormalizeAddress(address);

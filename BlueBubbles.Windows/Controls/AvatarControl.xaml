@@ -18,6 +18,13 @@
                            VerticalAlignment="Center"
                            Foreground="White"
                            FontWeight="SemiBold" />
+                <!-- Generic person glyph shown when no contact name/photo is available -->
+                <FontIcon x:Name="PersonGlyph"
+                          Glyph="&#xE77B;"
+                          Foreground="White"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Visibility="Collapsed" />
             </Grid>
         </Grid>
 
@@ -32,6 +39,12 @@
                            VerticalAlignment="Center"
                            Foreground="White"
                            FontWeight="SemiBold" />
+                <FontIcon x:Name="GroupBackGlyph"
+                          Glyph="&#xE77B;"
+                          Foreground="White"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Visibility="Collapsed" />
                 <Ellipse x:Name="GroupBackImage" Visibility="Collapsed" />
             </Grid>
             <Grid x:Name="GroupFront"
@@ -43,6 +56,12 @@
                            VerticalAlignment="Center"
                            Foreground="White"
                            FontWeight="SemiBold" />
+                <FontIcon x:Name="GroupFrontGlyph"
+                          Glyph="&#xE77B;"
+                          Foreground="White"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Visibility="Collapsed" />
                 <Ellipse x:Name="GroupFrontImage" Visibility="Collapsed" />
             </Grid>
         </Grid>
