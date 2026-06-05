@@ -1,0 +1,116 @@
+name: Release (x64 installer)
+
+# Manual-only release pipeline. You say "ready"; this builds the exact same artifact
+# publish.ps1 produces locally, on a clean windows-latest runner.
+#
+#   Dry run (build + verify + artifact, NO GitHub Release):
+#     gh workflow run release.yml -f publish_release=false
+#   Real release (also creates a DRAFT GitHub Release with the installer attached):
+#     gh workflow run release.yml -f publish_release=true
+#
+# ARM64 is intentionally NOT built here: the vendored x64
+# Microsoft.WindowsAppRuntime.Insights.Resource.dll would ship next to an arm64 exe and
+# break toast activation, with no arm64 hardware to catch it. See PUNCHLIST item 34.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create a DRAFT GitHub Release with the installer attached"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed to create the draft release / tag
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Single source of truth for the version: the csproj <Version>, read with the same
+      # XPath publish.ps1 uses. Exposed as steps.ver.outputs.version for naming/tagging.
+      - name: Read version from csproj
+        id: ver
+        shell: pwsh
+        run: |
+          $proj = "BlueBubbles.Windows/BlueBubbles.Windows.csproj"
+          $version = (Select-Xml -Path $proj -XPath '/Project/PropertyGroup/Version' |
+                      Select-Object -First 1).Node.InnerText
+          if (-not $version) { Write-Error "Could not read <Version> from $proj"; exit 1 }
+          Write-Host "Version: $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # The release gate publish.ps1 itself does not have: run the unit tests first.
+      # The test project targets plain net8.0 (architecture-independent).
+      - name: Run tests
+        shell: pwsh
+        run: dotnet test BlueBubbles.Windows.Tests/BlueBubbles.Windows.Tests.csproj -c Release
+
+      # publish.ps1 probes ${ProgramFiles(x86)}\Inno Setup 6\ISCC.exe; choco lands it there.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      # Reuse the existing, proven script unchanged so local and CI builds are identical.
+      - name: Publish + build installer (x64)
+        shell: pwsh
+        run: .\publish.ps1 -Platform x64 -Configuration Release
+
+      # Belt-and-suspenders: fail loudly if the publish folder is missing a file that has
+      # bitten us before, or if Inno silently fell back to a zip instead of a Setup.exe.
+      - name: Verify installer + key bundled files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tfm = 'net8.0-windows10.0.26100.0'
+          $pub = "BlueBubbles.Windows/bin/Release/$tfm/win-x64/publish"
+
+          $required = @(
+            "$pub/BlueBubbles.Windows.exe",
+            "$pub/Microsoft.WindowsAppRuntime.dll",
+            "$pub/Microsoft.WindowsAppRuntime.Insights.Resource.dll",
+            "$pub/Assets/AppIcon.ico"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { Write-Error "Missing expected publish file(s):`n$($missing -join "`n")"; exit 1 }
+
+          if (-not (Get-ChildItem "$pub/Assets/Sounds" -Filter *.wav -ErrorAction SilentlyContinue)) {
+            Write-Error "No notification sound WAVs found in $pub/Assets/Sounds"; exit 1
+          }
+
+          $version = "${{ steps.ver.outputs.version }}"
+          $setup = "dist/BlueBubbles-Setup-$version-x64.exe"
+          if (-not (Test-Path $setup)) {
+            Write-Error "Installer not found at $setup (did Inno Setup fail and fall back to a zip?)"; exit 1
+          }
+          $sizeMB = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          if ($sizeMB -lt 10) { Write-Error "Installer suspiciously small ($sizeMB MB) - likely incomplete."; exit 1 }
+          Write-Host "OK: $setup ($sizeMB MB)"
+
+      # Always attach the installer to the workflow run so even a dry-run is testable.
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlueBubbles-Setup-${{ steps.ver.outputs.version }}-x64
+          path: dist/BlueBubbles-Setup-*.exe
+          if-no-files-found: error
+
+      # Only when explicitly requested: create a DRAFT release for the user to review.
+      - name: Create draft GitHub Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: BlueBubbles ${{ steps.ver.outputs.version }}
+          files: dist/BlueBubbles-Setup-*.exe
+          fail_on_unmatched_files: true
