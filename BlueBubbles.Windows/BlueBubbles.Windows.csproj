@@ -31,7 +31,7 @@
         - Minor (2nd octave): a small new feature -> +1.
         - Major (1st octave): DO NOT touch without explicit permission.
     -->
-    <Version>0.19.2</Version>
+    <Version>0.19.4</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -65,6 +65,21 @@
          NotificationSoundService can resolve them by file path via AppContext.BaseDirectory. -->
     <Content Include="Assets\Sounds\*.wav;Assets\Sounds\*.mp3">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Windows App SDK's self-contained publish does NOT lay down the Insights (telemetry)
+         resource DLL, but AppNotificationManager.Register() tries to load it and throws
+         "The specified module could not be found" on every launch of an installed build —
+         leaving toasts visible but their click/reply/react activations unable to route back.
+         A dev build hides this because it binds the machine-wide WindowsAppRuntime framework
+         (which has the DLL); the installed self-contained build has no such framework. We
+         vendor the matching 2.0.1 resource DLL and copy it next to the .exe so Register()
+         succeeds. See Runtime\README.md for provenance / how to refresh on an SDK bump. -->
+    <Content Include="Runtime\Microsoft.WindowsAppRuntime.Insights.Resource.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <!-- Flatten to the output root: the runtime resolves this resource DLL as a native
+           sibling of Microsoft.WindowsAppRuntime.dll, so it must sit next to the .exe, not
+           in a Runtime\ subfolder. -->
+      <Link>Microsoft.WindowsAppRuntime.Insights.Resource.dll</Link>
     </Content>
   </ItemGroup>
 

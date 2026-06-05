@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using BlueBubbles.Core.Utils.Json;
 
 namespace BlueBubbles.Core.Models;
 
@@ -37,7 +38,9 @@ public record Message(
     [property: JsonPropertyName("chats")] List<Chat>? Chats,
     [property: JsonPropertyName("attributedBody")] List<AttributedBody>? AttributedBody,
     [property: JsonPropertyName("messageSummaryInfo")] List<MessageSummaryInfo>? MessageSummaryInfo,
-    [property: JsonPropertyName("payloadData")] PayloadData? PayloadData,
+    [property: JsonPropertyName("payloadData"),
+               JsonConverter(typeof(PayloadDataConverter))]
+    PayloadData? PayloadData,
     [property: JsonPropertyName("hasApplePayloadData")] bool HasApplePayloadData,
     [property: JsonPropertyName("dateEdited")] long? DateEdited,
     [property: JsonPropertyName("wasDeliveredQuietly")] bool WasDeliveredQuietly,
