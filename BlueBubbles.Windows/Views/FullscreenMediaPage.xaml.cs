@@ -4,6 +4,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
 using global::Windows.ApplicationModel.DataTransfer;
+using global::Windows.Media.Core;
+using global::Windows.Media.Playback;
 using global::Windows.Storage;
 using global::Windows.Storage.Pickers;
 using global::Windows.Storage.Streams;
@@ -14,6 +16,8 @@ public sealed partial class FullscreenMediaPage : Page
 {
     private AttachmentViewModel? _attachment;
     private string? _localPath;
+    private MediaPlayer? _player;
+    private bool _fellBackToExternal;
 
     public FullscreenMediaPage()
     {
@@ -33,13 +37,66 @@ public sealed partial class FullscreenMediaPage : Page
             await vm.DownloadAsync();
 
         _localPath = vm.LocalPath;
-        if (_localPath is not null)
-        {
+        if (_localPath is null) return;
+
+        if (vm.Category == AttachmentCategory.Video)
+            await ShowVideoAsync(_localPath);
+        else
             // Cap the decode width so a multi-megapixel phone photo doesn't sit
             // in memory at full resolution. 2560px still leaves headroom for the
             // 5x context-menu zoom without being presumptuous about hardware.
             FullImage.Source = await Helpers.ImageLoader.FromFileAsync(_localPath, 2560);
-        }
+    }
+
+    // Best-effort inline playback through Windows' built-in codecs. We don't probe the
+    // codec up front (there's no cheap way to); instead we hand the file to MediaPlayer
+    // and let it tell us via MediaFailed if it can't decode, then hand off to the external
+    // player. No ffmpeg / bundled decoders — see PUNCHLIST AT2.
+    private async Task ShowVideoAsync(string path)
+    {
+        ImageScroller.Visibility = Visibility.Collapsed;
+        VideoPlayer.Visibility = Visibility.Visible;
+
+        StorageFile file;
+        try { file = await StorageFile.GetFileFromPathAsync(path); }
+        catch { return; }
+
+        _player = new MediaPlayer { AutoPlay = true };
+        _player.MediaFailed += OnVideoMediaFailed;
+        _player.Source = MediaSource.CreateFromStorageFile(file);
+        VideoPlayer.SetMediaPlayer(_player);
+    }
+
+    private void OnVideoMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
+    {
+        // Unsupported codec (or a decode error): fall back to the external player once.
+        if (_fellBackToExternal || _localPath is null) return;
+        _fellBackToExternal = true;
+
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                var file = await StorageFile.GetFileFromPathAsync(_localPath);
+                await global::Windows.System.Launcher.LaunchFileAsync(file);
+            }
+            catch { }
+
+            if (Frame.CanGoBack) Frame.GoBack();
+        });
+    }
+
+    // Tear the player down on the way out so the file handle is released and audio
+    // stops the moment the page is left (back button, navigation, or window close).
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        if (_player is null) return;
+
+        _player.MediaFailed -= OnVideoMediaFailed;
+        VideoPlayer.SetMediaPlayer(null);
+        _player.Dispose();
+        _player = null;
     }
 
     // Cap the image to the visible viewport so Stretch="Uniform" fits it on

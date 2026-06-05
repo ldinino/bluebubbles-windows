@@ -11,6 +11,7 @@ public sealed partial class AttachmentHolder : UserControl
     private AttachmentViewModel? _vm;
     private long _bindGeneration;
     private string? _loadedImagePath;
+    private string? _loadedVideoPath;
 
     public event EventHandler<AttachmentViewModel>? ImageClicked;
 
@@ -46,7 +47,9 @@ public sealed partial class AttachmentHolder : UserControl
             _vm = null;
         }
         ImageContent.Source = null;
+        VideoThumbnail.Source = null;
         _loadedImagePath = null;
+        _loadedVideoPath = null;
     }
 
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -161,7 +164,33 @@ public sealed partial class AttachmentHolder : UserControl
     private void ShowCachedVideo(AttachmentViewModel vm)
     {
         VideoContent.Visibility = Visibility.Visible;
-        ShowFile(vm);
+
+        // Tapping a video opens the in-app fullscreen player (same flow as images).
+        RootGrid.Tapped -= OnTappedOpenFile;
+        RootGrid.Tapped += OnTappedOpenFile;
+
+        if (vm.LocalPath is null) return;
+
+        // Reserve the final footprint up front (same reasoning as images) so the poster
+        // doesn't reflow the bubble when it arrives.
+        var (dispW, dispH) = FitDisplaySize(vm.Width, vm.Height);
+        VideoThumbnail.Width = dispW;
+        VideoThumbnail.Height = dispH;
+
+        // Already showing this video's poster — don't re-extract it.
+        if (vm.LocalPath == _loadedVideoPath && VideoThumbnail.Source is not null) return;
+
+        var generation = Interlocked.Increment(ref _bindGeneration);
+        _loadedVideoPath = vm.LocalPath;
+        _ = LoadVideoThumbnailAsync(vm.LocalPath, generation);
+    }
+
+    private async Task LoadVideoThumbnailAsync(string path, long generation)
+    {
+        // The shell extracts a representative frame from the video — no decoders bundled.
+        var poster = await Helpers.ImageLoader.ThumbnailAsync(path, (uint)MaxImageWidth);
+        if (Interlocked.Read(ref _bindGeneration) != generation) return;
+        VideoThumbnail.Source = poster;
     }
 
     private void ShowAudio(AttachmentViewModel vm)
@@ -242,9 +271,12 @@ public sealed partial class AttachmentHolder : UserControl
     {
         if (_vm is null) return;
 
-        if (_vm.Category == AttachmentCategory.Image)
+        // Images and videos open in the in-app fullscreen viewer/player. The video
+        // player itself falls back to the external player if Windows can't decode it.
+        if (_vm.Category is AttachmentCategory.Image or AttachmentCategory.Video)
         {
-            ImageClicked?.Invoke(this, _vm);
+            if (_vm.Category == AttachmentCategory.Image)
+                ImageClicked?.Invoke(this, _vm);
 
             var frame = FindParentFrame();
             if (frame is not null)

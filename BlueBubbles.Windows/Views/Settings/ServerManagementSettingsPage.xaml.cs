@@ -12,12 +12,10 @@ namespace BlueBubbles.Windows.Views.Settings;
 public sealed partial class ServerManagementSettingsPage : Page
 {
     private readonly IBlueBubblesApiService _api;
-    private readonly SettingsViewModel _vm;
 
     public ServerManagementSettingsPage()
     {
         _api = App.Services.GetRequiredService<IBlueBubblesApiService>();
-        _vm = App.Services.GetRequiredService<SettingsViewModel>();
         InitializeComponent();
 
         Loaded += async (_, _) => await LoadServerInfoAsync();
@@ -218,21 +216,4 @@ public sealed partial class ServerManagementSettingsPage : Page
         }
     }
 
-    private async void OnResetAppClick(object sender, RoutedEventArgs e)
-    {
-        var dialog = new ContentDialog
-        {
-            Title = "Reset App?",
-            Content = "This will delete all local data — chats, messages, contacts, and settings — and return to setup. This cannot be undone.",
-            PrimaryButtonText = "Reset",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot,
-        };
-
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-
-        await _vm.ResetAppCommand.ExecuteAsync(null);
-        App.MainWindow.RootNavigationFrame.Navigate(typeof(Setup.SetupPage));
-    }
 }

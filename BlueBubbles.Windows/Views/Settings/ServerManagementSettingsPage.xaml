@@ -105,20 +105,6 @@
                 </tk:SettingsExpander.Items>
             </tk:SettingsExpander>
 
-            <!-- Danger zone -->
-            <TextBlock Text="DANGER ZONE"
-                       Style="{StaticResource CaptionTextBlockStyle}"
-                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                       Margin="4,20,0,4" />
-            <tk:SettingsCard Header="Reset app"
-                             Description="Delete all local data (chats, messages, contacts, settings) and return to setup">
-                <Button x:Name="ResetAppButton"
-                        Content="Reset App"
-                        Click="OnResetAppClick"
-                        Background="{ThemeResource SystemFillColorCriticalBrush}"
-                        Foreground="White" />
-            </tk:SettingsCard>
-
         </StackPanel>
         </Grid>
     </ScrollViewer>
