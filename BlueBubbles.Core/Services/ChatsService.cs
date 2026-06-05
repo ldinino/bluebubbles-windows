@@ -74,6 +74,10 @@ public class ChatsService : IChatsService
             .ThenInclude(cp => cp.Handle)
             .Where(c => c.IsArchived == archived && c.DateDeleted == null)
             .OrderByDescending(c => c.IsPinned)
+            // Pinned chats keep the user's manual drag order (PinIndex asc); unpinned chats (PinIndex
+            // null → sorts last and ties) fall through to most-recent-message order. Previously pins were
+            // ordered by message date too, so a manual reorder was silently lost on the next reload.
+            .ThenBy(c => c.PinIndex ?? int.MaxValue)
             .ThenByDescending(c => c.LatestMessageDate)
             .ToListAsync();
 
@@ -339,36 +343,91 @@ public class ChatsService : IChatsService
 
     public async Task TogglePinAsync(string chatGuid)
     {
-        await using var db = await _dbFactory.CreateDbContextAsync();
-        var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
-        if (chat is null) return;
-
-        chat.IsPinned = !chat.IsPinned;
-        if (chat.IsPinned)
+        bool isPinned;
+        int? pinIndex;
+        await using (var db = await _dbFactory.CreateDbContextAsync())
         {
-            var maxPin = await db.Chats.Where(c => c.IsPinned).MaxAsync(c => (int?)c.PinIndex) ?? -1;
-            chat.PinIndex = maxPin + 1;
-        }
-        else
-        {
-            chat.PinIndex = null;
-        }
-        await db.SaveChangesAsync();
+            var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
+            if (chat is null) return;
 
-        await LoadChatsAsync();
+            chat.IsPinned = !chat.IsPinned;
+            if (chat.IsPinned)
+            {
+                var maxPin = await db.Chats.Where(c => c.IsPinned).MaxAsync(c => (int?)c.PinIndex) ?? -1;
+                chat.PinIndex = maxPin + 1;
+            }
+            else
+            {
+                chat.PinIndex = null;
+            }
+            await db.SaveChangesAsync();
+            isPinned = chat.IsPinned;
+            pinIndex = chat.PinIndex;
+        }
+
+        // Pinning is a single-row metadata flip: mutate the in-memory cache and re-sort rather than
+        // re-querying every chat (with its participant/message joins). The list view then animates a
+        // single tile moving between sections instead of churning. Fall back to a full reload only if
+        // the chat isn't in the active cache (e.g. pinned from the archive view).
+        if (!TryApplyPinState(chatGuid, isPinned, pinIndex))
+            await LoadChatsAsync();
     }
 
     public async Task ReorderPinsAsync(List<string> chatGuids)
     {
-        await using var db = await _dbFactory.CreateDbContextAsync();
-        for (var i = 0; i < chatGuids.Count; i++)
+        await using (var db = await _dbFactory.CreateDbContextAsync())
         {
-            var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuids[i]);
-            if (chat is not null)
-                chat.PinIndex = i;
+            for (var i = 0; i < chatGuids.Count; i++)
+            {
+                var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuids[i]);
+                if (chat is not null)
+                    chat.PinIndex = i;
+            }
+            await db.SaveChangesAsync();
         }
-        await db.SaveChangesAsync();
-        await LoadChatsAsync();
+
+        // Mirror the new pin order in the cache; the grid already reflects it visually, so the
+        // resulting ChatsChanged reconciles to a no-op rather than a re-query.
+        lock (_lock)
+        {
+            for (var i = 0; i < chatGuids.Count; i++)
+            {
+                var item = _chats.FirstOrDefault(c => c.Chat.Guid == chatGuids[i]);
+                if (item is not null)
+                    item.Chat.PinIndex = i;
+            }
+            SortChats(_chats);
+        }
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private bool TryApplyPinState(string chatGuid, bool isPinned, int? pinIndex)
+    {
+        lock (_lock)
+        {
+            var item = _chats.FirstOrDefault(c => c.Chat.Guid == chatGuid);
+            if (item is null) return false;
+            item.Chat.IsPinned = isPinned;
+            item.Chat.PinIndex = pinIndex;
+            SortChats(_chats);
+        }
+        ChatsChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
+    // Same ordering the DB query produces (see LoadChatsInternalAsync): pinned first, pins by manual
+    // PinIndex, everything else by most-recent message. Keeps the in-memory cache canonical so an
+    // optimistic pin/reorder update matches what a reload would yield.
+    private static void SortChats(List<ChatWithParticipants> chats)
+    {
+        chats.Sort((a, b) =>
+        {
+            var pinned = b.Chat.IsPinned.CompareTo(a.Chat.IsPinned);
+            if (pinned != 0) return pinned;
+            if (a.Chat.IsPinned)
+                return (a.Chat.PinIndex ?? int.MaxValue).CompareTo(b.Chat.PinIndex ?? int.MaxValue);
+            return (b.Chat.LatestMessageDate ?? 0).CompareTo(a.Chat.LatestMessageDate ?? 0);
+        });
     }
 
     public async Task ArchiveChatAsync(string chatGuid)
