@@ -31,10 +31,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up .NET 8 SDK
+      # Install the exact SDK pinned in global.json so CI matches the local build
+      # toolchain (the SDK major affects the publish output layout publish.ps1 relies on).
+      - name: Set up .NET SDK (from global.json)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          global-json-file: global.json
 
       # Single source of truth for the version: the csproj <Version>, read with the same
       # XPath publish.ps1 uses. Exposed as steps.ver.outputs.version for naming/tagging.

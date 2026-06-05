@@ -1,0 +1,7 @@
+{
+  "//": "Pins the .NET SDK so local builds and the GitHub Actions release runner use the exact same toolchain. The SDK major affects the publish output layout (SDK 8 inserts a bin\\x64\\... platform segment that publish.ps1 does not look in; SDK 10 does not), so a mismatch silently breaks the installer build. rollForward latestMinor lets patch/feature bumps within 10.x flow through; bump 'version' when you move to a new SDK.",
+  "sdk": {
+    "version": "10.0.201",
+    "rollForward": "latestMinor"
+  }
+}
