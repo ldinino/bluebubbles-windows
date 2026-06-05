@@ -67,6 +67,14 @@ WinUI / Windows App SDK workload, or the matching `dotnet` workloads).
 
 ```powershell
 # from the repo root
+
+# build, test, and run the app locally. Defaults to a FULL CLEAN build so what you
+# run is guaranteed to be your current source (the WinUI 3 XAML compiler's incremental
+# build can otherwise silently keep stale compiled XAML).
+./build-and-run.ps1
+./build-and-run.ps1 -Fast      # quick incremental build for C#-only edits (may use stale XAML)
+
+# or run the pieces by hand
 dotnet build BlueBubbles.Windows.slnx
 dotnet test  BlueBubbles.Windows.Tests/BlueBubbles.Windows.Tests.csproj
 
@@ -74,6 +82,9 @@ dotnet test  BlueBubbles.Windows.Tests/BlueBubbles.Windows.Tests.csproj
 ./publish.ps1                  # x64
 ./publish.ps1 -Platform arm64  # ARM
 ```
+
+`build-and-run.ps1` and `publish.ps1` share their clean/build logic via `build-common.ps1`,
+so a local debug build and the shipped installer come from the same fresh tree.
 
 The app version is the single `<Version>` in
 [`BlueBubbles.Windows.csproj`](BlueBubbles.Windows/BlueBubbles.Windows.csproj). See
