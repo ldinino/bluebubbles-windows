@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Media.Editing;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 
@@ -91,16 +92,56 @@ public static class ImageLoader
     }
 
     /// <summary>Produces a small thumbnail for a local file. Works for images and
-    /// videos (the shell extracts a representative frame), ideal for gallery tiles.</summary>
-    public static async Task<BitmapImage?> ThumbnailAsync(string path, uint size = 200)
+    /// videos (the shell extracts a representative frame), ideal for gallery tiles.
+    /// The shell happily returns a generic file-type <em>icon</em> when it can't render a
+    /// real preview; pass <paramref name="imageOnly"/> to reject those (returns null) so the
+    /// caller can fall back to a real decode instead of showing a placeholder glyph.</summary>
+    public static async Task<BitmapImage?> ThumbnailAsync(string path, uint size = 200, bool imageOnly = false)
     {
         try
         {
             var file = await StorageFile.GetFileFromPathAsync(path);
             using var thumb = await file.GetThumbnailAsync(ThumbnailMode.SingleItem, size);
             if (thumb is null) return null;
+            // ThumbnailType.Icon means the shell gave us a generic glyph, not a frame.
+            if (imageOnly && thumb.Type == ThumbnailType.Icon) return null;
             var bitmap = new BitmapImage();
             await bitmap.SetSourceAsync(thumb);
+            return bitmap;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Extracts a real poster frame from a local video by decoding it through the same
+    /// media pipeline <see cref="Microsoft.UI.Xaml.Controls.MediaPlayerElement"/> uses — so a
+    /// codec Windows can play (built-in H.264, plus HEVC when the extension is installed) yields
+    /// an actual frame, not the shell's generic media-file icon. Grabs a frame ~1s in to skip the
+    /// black lead-in many clips open on. Returns null if the codec can't be decoded; callers should
+    /// fall back to <see cref="ThumbnailAsync"/>.</summary>
+    public static async Task<BitmapImage?> VideoFrameAsync(string path, uint width = 360)
+    {
+        try
+        {
+            var file = await StorageFile.GetFileFromPathAsync(path);
+            var clip = await MediaClip.CreateFromFileAsync(file);
+
+            var seek = clip.OriginalDuration > TimeSpan.FromSeconds(1)
+                ? TimeSpan.FromSeconds(1)
+                : TimeSpan.Zero;
+
+            var composition = new MediaComposition();
+            composition.Clips.Add(clip);
+
+            // Height 0 preserves the source aspect ratio.
+            using var frame = await composition.GetThumbnailAsync(
+                seek, (int)width, 0, VideoFramePrecision.NearestFrame);
+            if (frame is null) return null;
+
+            var bitmap = new BitmapImage();
+            await bitmap.SetSourceAsync(frame);
             return bitmap;
         }
         catch
