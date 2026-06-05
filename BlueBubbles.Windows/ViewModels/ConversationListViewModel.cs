@@ -275,24 +275,48 @@ public partial class ConversationListViewModel : ObservableObject
         }
     }
 
+    // Reconcile the observable collection toward the source by identity, emitting the minimum set of
+    // Remove/Insert/Move operations rather than positional Replaces. RebuildList reuses the same
+    // ConversationTileViewModel instance per chat (keyed by GUID), so reference equality is the right
+    // identity here. The payoff: pinning a chat becomes one Remove + one Insert instead of replacing
+    // every tile below it — untouched rows keep their realized containers (and already-decoded avatars),
+    // and the list transitions animate only the tiles that genuinely moved.
     private static void SyncCollection(ObservableCollection<ConversationTileViewModel> target,
         List<ConversationTileViewModel> source)
     {
-        for (var i = 0; i < source.Count; i++)
+        // 1. Drop anything no longer present.
+        var desired = new HashSet<ConversationTileViewModel>(source);
+        for (var i = target.Count - 1; i >= 0; i--)
         {
-            if (i < target.Count)
-            {
-                if (target[i].ChatGuid != source[i].ChatGuid)
-                    target[i] = source[i];
-            }
-            else
-            {
-                target.Add(source[i]);
-            }
+            if (!desired.Contains(target[i]))
+                target.RemoveAt(i);
         }
 
-        while (target.Count > source.Count)
-            target.RemoveAt(target.Count - 1);
+        // 2. Place each source item at its target index, reusing the existing container via Move when the
+        //    item is already in the collection (just out of position) and Insert only for genuinely new ones.
+        for (var i = 0; i < source.Count; i++)
+        {
+            var item = source[i];
+            if (i < target.Count && ReferenceEquals(target[i], item))
+                continue;
+
+            var existing = IndexOfFrom(target, item, i);
+            if (existing >= 0)
+                target.Move(existing, i);
+            else
+                target.Insert(i, item);
+        }
+    }
+
+    private static int IndexOfFrom(ObservableCollection<ConversationTileViewModel> target,
+        ConversationTileViewModel item, int start)
+    {
+        for (var i = start; i < target.Count; i++)
+        {
+            if (ReferenceEquals(target[i], item))
+                return i;
+        }
+        return -1;
     }
 
     private void OnAppearanceSettingChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

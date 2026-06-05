@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.CompilerServices;
 using BlueBubbles.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -15,6 +16,16 @@ public sealed partial class AvatarControl : UserControl
     // Fallback fill when "Colorful avatars" is off — a medium grey that keeps the white
     // initials legible in both light and dark themes.
     private static readonly Color NeutralAvatarColor = Color.FromArgb(255, 0x75, 0x75, 0x75);
+
+    // Decoded-bitmap cache keyed on the source byte[] reference. ContactResolver hands out the same
+    // cached array for a given contact, so the same photo decodes once and every avatar (list tile,
+    // pinned grid, header, details) reuses the BitmapImage. A BitmapImage can back multiple targets,
+    // so sharing is safe. ConditionalWeakTable lets entries evict when the underlying bytes are dropped
+    // (e.g. on a contacts reload). Accessed only from the UI thread.
+    private static readonly ConditionalWeakTable<byte[], BitmapImage> BitmapCache = new();
+
+    private static BitmapImage? TryGetCachedBitmap(byte[] imageData) =>
+        BitmapCache.TryGetValue(imageData, out var bitmap) ? bitmap : null;
 
     public static readonly DependencyProperty SizeProperty =
         DependencyProperty.Register(nameof(Size), typeof(double), typeof(AvatarControl),
@@ -59,6 +70,7 @@ public sealed partial class AvatarControl : UserControl
 
     private int _loadGeneration;
     private AppSettings? _settings;
+    private bool _relayoutQueued;
 
     public AvatarControl()
     {
@@ -96,7 +108,25 @@ public sealed partial class AvatarControl : UserControl
 
     private static void OnPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (d is AvatarControl ctrl) ctrl.RefreshLayout();
+        if (d is AvatarControl ctrl) ctrl.QueueRelayout();
+    }
+
+    // A single Refresh on the bound tile flips several dependency properties (initials, image, group
+    // faces, …); without coalescing each one would run a full RefreshLayout. Collapse them into one
+    // relayout per frame.
+    private void QueueRelayout()
+    {
+        if (_relayoutQueued) return;
+        _relayoutQueued = true;
+        if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                _relayoutQueued = false;
+                RefreshLayout();
+            }))
+        {
+            _relayoutQueued = false;
+            RefreshLayout();
+        }
     }
 
     private void RefreshLayout()
@@ -136,9 +166,18 @@ public sealed partial class AvatarControl : UserControl
         {
             PersonPic.Visibility = Visibility.Visible;
             PersonPic.Width = PersonPic.Height = size;
-            PersonPic.ProfilePicture = null;
             InitialsCircle.Visibility = Visibility.Collapsed;
-            _ = SetPersonPicImageAsync(AvatarImage, generation);
+
+            // Reuse the decoded bitmap when we've seen these bytes before — no async round-trip, no
+            // flash through the empty placeholder on container recycle.
+            var cached = TryGetCachedBitmap(AvatarImage);
+            if (cached is not null)
+                PersonPic.ProfilePicture = cached;
+            else
+            {
+                PersonPic.ProfilePicture = null;
+                _ = SetPersonPicImageAsync(AvatarImage, generation);
+            }
         }
         else
         {
@@ -173,10 +212,7 @@ public sealed partial class AvatarControl : UserControl
     {
         try
         {
-            var bitmap = new BitmapImage();
-            using var stream = new MemoryStream(imageData);
-            var ras = stream.AsRandomAccessStream();
-            await bitmap.SetSourceAsync(ras);
+            var bitmap = await DecodeAndCacheAsync(imageData);
             if (_loadGeneration == generation)
                 PersonPic.ProfilePicture = bitmap;
         }
@@ -194,7 +230,12 @@ public sealed partial class AvatarControl : UserControl
             glyph.Visibility = Visibility.Collapsed;
             imageEllipse.Visibility = Visibility.Visible;
             imageEllipse.Width = imageEllipse.Height = size;
-            _ = SetEllipseImageAsync(imageEllipse, imageBytes, generation);
+
+            var cached = TryGetCachedBitmap(imageBytes);
+            if (cached is not null)
+                imageEllipse.Fill = new ImageBrush { ImageSource = cached, Stretch = Stretch.UniformToFill };
+            else
+                _ = SetEllipseImageAsync(imageEllipse, imageBytes, generation);
             return;
         }
 
@@ -223,10 +264,7 @@ public sealed partial class AvatarControl : UserControl
     {
         try
         {
-            var bitmap = new BitmapImage();
-            using var stream = new MemoryStream(imageData);
-            var ras = stream.AsRandomAccessStream();
-            await bitmap.SetSourceAsync(ras);
+            var bitmap = await DecodeAndCacheAsync(imageData);
             if (_loadGeneration == generation)
             {
                 ellipse.Fill = new ImageBrush
@@ -237,5 +275,21 @@ public sealed partial class AvatarControl : UserControl
             }
         }
         catch { }
+    }
+
+    // Decodes the bytes into a BitmapImage and caches it on the array reference so subsequent realizations
+    // (and other avatars sharing the same contact photo) reuse it. If another caller decoded the same bytes
+    // while we awaited, prefer the cached instance so all targets share one bitmap.
+    private static async Task<BitmapImage> DecodeAndCacheAsync(byte[] imageData)
+    {
+        var bitmap = new BitmapImage();
+        using var stream = new MemoryStream(imageData);
+        var ras = stream.AsRandomAccessStream();
+        await bitmap.SetSourceAsync(ras);
+
+        if (BitmapCache.TryGetValue(imageData, out var existing))
+            return existing;
+        BitmapCache.Add(imageData, bitmap);
+        return bitmap;
     }
 }

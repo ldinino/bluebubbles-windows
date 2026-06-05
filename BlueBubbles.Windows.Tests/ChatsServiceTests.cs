@@ -179,6 +179,41 @@ public class ChatsServiceTests
     }
 
     [Fact]
+    public async Task LoadChatsAsync_PinnedOrderedByPinIndex_NotMessageDate()
+    {
+        // The pin with the OLDER message (pinB) has the lower PinIndex, so it must come first.
+        // Regression: pins used to be ordered by message date, silently dropping the manual order.
+        var (svc, factory) = CreateService();
+        await SeedChat(factory, "pinA", latestDate: 5000, isPinned: true, pinIndex: 1);
+        await SeedChat(factory, "pinB", latestDate: 1000, isPinned: true, pinIndex: 0);
+
+        await svc.LoadChatsAsync();
+
+        Assert.Equal("pinB", svc.Chats[0].Chat.Guid);
+        Assert.Equal("pinA", svc.Chats[1].Chat.Guid);
+    }
+
+    [Fact]
+    public async Task ReorderPinsAsync_UpdatesInMemoryOrder_AndPersists()
+    {
+        var (svc, factory) = CreateService();
+        await SeedChat(factory, "pinA", latestDate: 5000, isPinned: true, pinIndex: 0);
+        await SeedChat(factory, "pinB", latestDate: 1000, isPinned: true, pinIndex: 1);
+        await svc.LoadChatsAsync();
+
+        await svc.ReorderPinsAsync(["pinB", "pinA"]);
+
+        // In-memory cache reflects the new order without a reload...
+        Assert.Equal("pinB", svc.Chats[0].Chat.Guid);
+        Assert.Equal("pinA", svc.Chats[1].Chat.Guid);
+
+        // ...and the order survives a fresh load from the DB.
+        await svc.LoadChatsAsync();
+        Assert.Equal("pinB", svc.Chats[0].Chat.Guid);
+        Assert.Equal("pinA", svc.Chats[1].Chat.Guid);
+    }
+
+    [Fact]
     public async Task ArchiveChatAsync_RemovesFromList()
     {
         var (svc, factory) = CreateService();
