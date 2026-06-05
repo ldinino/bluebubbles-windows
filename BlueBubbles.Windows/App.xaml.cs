@@ -10,6 +10,7 @@ using BlueBubbles.Windows.Views;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
 
 namespace BlueBubbles.Windows;
@@ -56,8 +57,15 @@ public partial class App : Application
         {
             AppNotificationManager.Default.NotificationInvoked += OnNotificationInvoked;
             AppNotificationManager.Default.Register();
+            AppLog.Info(LogCategory.Ui, "AppNotificationManager registered.");
         }
-        catch { /* notifications unavailable — non-fatal */ }
+        catch (Exception ex)
+        {
+            // Surface the failure rather than swallowing it: a failed Register means toasts may still
+            // display but their click/reply/react activations can never route back, which is invisible
+            // otherwise. Every Show call in NotificationService is guarded, so this stays non-fatal.
+            AppLog.Error(LogCategory.Ui, $"AppNotificationManager registration failed: {ex.Message}");
+        }
 
         // Start the incoming message processor (serializes socket event DB writes)
         Services.GetRequiredService<IIncomingMessageProcessor>().Start();
@@ -80,6 +88,12 @@ public partial class App : Application
         // Reconcile the launch-at-startup registry entry with the persisted preference and, if
         // launched via that entry with the minimized flag, start hidden in the tray.
         ReconcileStartupState(mainWindow);
+
+        // Cold start FROM a toast: the click launched this process, so the action rides in on the
+        // activation args rather than the in-process NotificationInvoked event (which only covers an
+        // already-running instance). Route it through the same handler so a body-click deep-links and
+        // an inline reply/tapback still fires when the app was fully closed.
+        TryHandleColdStartActivation();
 
         // Self-healing sync: recover the connection + run a catch-up delta whenever the machine wakes
         // from sleep or the network changes (Wi-Fi switch, VPN toggle). A socket can sit half-open
@@ -151,7 +165,10 @@ public partial class App : Application
     }
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs e)
-        => HandleNotificationActivation(e);
+    {
+        AppLog.Info(LogCategory.Ui, "NotificationInvoked (in-process) received.");
+        HandleNotificationActivation(e);
+    }
 
     /// <summary>Routes a toast interaction (body click or inline button) to the right action. Reached two
     /// ways: the in-process <see cref="AppNotificationManager.NotificationInvoked"/> event when the app is
@@ -230,25 +247,43 @@ public partial class App : Application
         _ = Services.GetRequiredService<IChatsService>().MarkChatReadAsync(chatGuid, true);
     }
 
+    /// <summary>Surfaces the requested chat in the shell. Setting the view-model selection alone does
+    /// NOT navigate the chat frame (only the list's ConversationSelected path does), so this routes
+    /// through the shell's OpenChat, which reuses that path and waits for the list on a cold start.</summary>
     private static void NavigateToChat(string chatGuid)
     {
-        var convListVm = Services.GetRequiredService<ConversationListViewModel>();
+        if (!Services.GetRequiredService<AppSettings>().FinishedSetup) return;
 
-        var tile = FindTile(convListVm, chatGuid);
-        if (tile is null && !string.IsNullOrEmpty(convListVm.SearchQuery))
-        {
-            // A live search filter can hide the target chat — clear it and look again. ApplyFilter
-            // runs synchronously on this (UI) thread, so the rebuilt lists are immediately current.
-            convListVm.SearchQuery = string.Empty;
-            tile = FindTile(convListVm, chatGuid);
-        }
+        // A notification deep-link should land on the chat even from Settings, or mid-launch before the
+        // shell is the active page. ShellPage is cached (NavigationCacheMode=Required), so navigating to
+        // it restores the existing instance with its loaded list rather than building a fresh one.
+        var root = MainWindow.RootNavigationFrame;
+        if (root.Content is not Views.ShellPage)
+            root.Navigate(typeof(Views.ShellPage));
 
-        if (tile is not null)
-            convListVm.SelectedConversation = tile;
+        if (root.Content is Views.ShellPage shell)
+            shell.OpenChat(chatGuid);
     }
 
-    private static ConversationTileViewModel? FindTile(ConversationListViewModel vm, string chatGuid)
-        => vm.Conversations.Concat(vm.PinnedConversations).FirstOrDefault(t => t.ChatGuid == chatGuid);
+    /// <summary>If this process was launched by a toast interaction, the action arrives on the
+    /// activation args (the in-process event never fires for a cold start). Pull it and route it.</summary>
+    private void TryHandleColdStartActivation()
+    {
+        try
+        {
+            var activated = AppInstance.GetCurrent().GetActivatedEventArgs();
+            if (activated.Kind == ExtendedActivationKind.AppNotification &&
+                activated.Data is AppNotificationActivatedEventArgs notif)
+            {
+                AppLog.Info(LogCategory.Ui, "Cold-start activation is a notification; routing it.");
+                HandleNotificationActivation(notif);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Ui, $"Cold-start notification routing failed: {ex.Message}");
+        }
+    }
 
     private static IServiceProvider ConfigureServices()
     {

@@ -49,7 +49,22 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <controls:AvatarControl x:Name="HeaderAvatar" Size="36" />
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <!-- Narrow-layout "back to conversations" affordance. Hidden in wide layout
+                     (the list is always visible there); the shell toggles it via SetNarrow. -->
+                <Button x:Name="NarrowBackButton"
+                        Visibility="Collapsed"
+                        Click="OnBackToListClick"
+                        ToolTipService.ToolTip="Back to conversations"
+                        AutomationProperties.Name="Back to conversations"
+                        Padding="8"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE72B;" FontSize="16" />
+                </Button>
+                <controls:AvatarControl x:Name="HeaderAvatar" Size="36" />
+            </StackPanel>
 
             <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
                 <TextBlock x:Name="HeaderName"
@@ -95,11 +110,9 @@
                         <Setter Property="MinHeight" Value="0" />
                     </Style>
                 </ListView.ItemContainerStyle>
-                <ListView.ItemContainerTransitions>
-                    <TransitionCollection>
-                        <AddDeleteThemeTransition />
-                    </TransitionCollection>
-                </ListView.ItemContainerTransitions>
+                <!-- No ItemContainerTransitions: messages must appear instantly when a thread
+                     loads. AddDeleteThemeTransition animated every row in on open (and on each
+                     new message), which read as a distracting load animation (L). -->
             </ListView>
 
             <!-- Loading indicator for older messages -->

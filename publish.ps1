@@ -59,7 +59,20 @@ Write-Ok "Version: $version  Platform: $Platform"
 # --- 1. Publish (unpackaged, self-contained) ---
 if (-not $SkipPublish) {
     Write-Step "Publishing unpackaged self-contained app ($Configuration / $Platform)..."
-    if (Test-Path $pubDir) { Remove-Item $pubDir -Recurse -Force }
+
+    # Wipe the intermediate (obj) and build (bin) trees before publishing. The WinUI3 XAML
+    # compiler's incremental build is unreliable: an edited .xaml often is NOT recompiled to its
+    # embedded .xbf, so `dotnet publish` relinks the assembly with STALE compiled XAML while C#
+    # changes flow through fine. The result is a release where UI/layout/animation fixes silently
+    # don't ship even though other changes do. A from-scratch build is the only reliable guard.
+    # (Both the platform-qualified `obj\x64\...` and the platform-neutral `obj\...` trees are
+    # removed, since different invocations land in different schemes.)
+    $projDir = Split-Path $proj -Parent
+    foreach ($d in @('obj', 'bin')) {
+        $path = Join-Path $projDir $d
+        if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+    }
+
     & dotnet publish $proj -c $Configuration "-p:Platform=$Platform"
     if ($LASTEXITCODE -ne 0) { Write-Fail 'Publish failed.'; exit $LASTEXITCODE }
 }

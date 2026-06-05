@@ -9,9 +9,14 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <!-- Stretch + MaxWidth = fill the pane up to the cap, then center: the content tracks the
-             window width instead of hugging the left edge at a fixed size (L1). -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollMode="Disabled"
+                  HorizontalScrollBarVisibility="Disabled">
+        <!-- Center a max-width column. The outer Grid stretches to the pane width; the inner
+             StackPanel fills up to MaxWidth and the Grid centers it. Stretch+MaxWidth on a StackPanel
+             placed *directly* in a ScrollViewer does not center (the content presenter left-aligns
+             it) — the Grid wrapper is what makes the centering reliable (L1). -->
+        <Grid>
         <StackPanel Padding="24" Spacing="20" MaxWidth="640"
                     HorizontalAlignment="Stretch">
 
@@ -300,5 +305,6 @@
                           Width="28" Height="28"
                           HorizontalAlignment="Center" />
         </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>

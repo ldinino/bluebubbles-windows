@@ -18,6 +18,14 @@ public sealed partial class ShellPage : Page
     // re-loading a chat that's already open.
     private string? _currentChatGuid;
 
+    // Adaptive master/detail. Below this width there's only room for one pane, so we swap between
+    // the conversation list and the open chat instead of showing both.
+    private const double NarrowThreshold = 768;
+    private bool _isNarrow;
+    // In narrow layout, true = the list pane is showing, false = the open chat/detail is showing.
+    // Ignored in wide layout (both panes are always visible there).
+    private bool _narrowShowList = true;
+
     public ShellPage()
     {
         ViewModel = App.Services.GetRequiredService<ShellViewModel>();
@@ -30,15 +38,85 @@ public sealed partial class ShellPage : Page
         ChatFrame.Navigated += OnChatFrameNavigated;
     }
 
+    // --- Adaptive master/detail layout ---
+
+    private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        bool narrow = e.NewSize.Width < NarrowThreshold;
+        if (narrow == _isNarrow) return;
+        _isNarrow = narrow;
+
+        // When collapsing to narrow, default to whichever pane the user was effectively using:
+        // the open chat if there is one, otherwise the list.
+        if (_isNarrow)
+            _narrowShowList = !(ChatFrame.Visibility == Visibility.Visible && ChatFrame.Content is not null);
+
+        ApplyPaneLayout();
+    }
+
+    /// <summary>Positions/shows the panes for the current width and master/detail state. Wide layout
+    /// shows the list, divider, and detail side by side; narrow layout shows a single full-width pane.</summary>
+    private void ApplyPaneLayout()
+    {
+        if (!_isNarrow)
+        {
+            Grid.SetColumn(LeftPane, 0); Grid.SetColumnSpan(LeftPane, 1);
+            Grid.SetColumn(RightPane, 2); Grid.SetColumnSpan(RightPane, 1);
+            LeftPane.Visibility = Visibility.Visible;
+            PaneDivider.Visibility = Visibility.Visible;
+            RightPane.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PaneDivider.Visibility = Visibility.Collapsed;
+            bool hasChat = ChatFrame.Visibility == Visibility.Visible && ChatFrame.Content is not null;
+            if (hasChat && !_narrowShowList)
+            {
+                Grid.SetColumn(RightPane, 0); Grid.SetColumnSpan(RightPane, 3);
+                RightPane.Visibility = Visibility.Visible;
+                LeftPane.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                Grid.SetColumn(LeftPane, 0); Grid.SetColumnSpan(LeftPane, 3);
+                LeftPane.Visibility = Visibility.Visible;
+                RightPane.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        if (ChatFrame.Content is ChatPage cp)
+            cp.SetNarrow(_isNarrow);
+    }
+
+    /// <summary>Narrow layout: bring the open chat/detail pane to the front.</summary>
+    private void ShowDetailPane()
+    {
+        _narrowShowList = false;
+        ApplyPaneLayout();
+    }
+
+    /// <summary>Narrow layout: bring the conversation list back to the front (chat stays loaded).</summary>
+    private void ShowListPane()
+    {
+        _narrowShowList = true;
+        ApplyPaneLayout();
+    }
+
     private void OnConversationSelected(object? sender, ConversationTileViewModel tile)
     {
         // Clicking the conversation that's already open is a no-op — don't reload/flash the thread.
-        if (_currentChatGuid == tile.ChatGuid && ChatFrame.Content is ChatPage) return;
+        // In narrow layout, still surface it (the user may have backed out to the list).
+        if (_currentChatGuid == tile.ChatGuid && ChatFrame.Content is ChatPage)
+        {
+            if (_isNarrow) ShowDetailPane();
+            return;
+        }
 
         _currentChatGuid = tile.ChatGuid;
         EmptyState.Visibility = Visibility.Collapsed;
         ChatFrame.Visibility = Visibility.Visible;
         ChatFrame.Navigate(typeof(ChatPage), tile);
+        ShowDetailPane();
 
         // Remember the open conversation so it can be restored on next launch (Phase 18).
         var settings = App.Services.GetRequiredService<AppSettings>();
@@ -51,6 +129,9 @@ public sealed partial class ShellPage : Page
 
     private void OnConversationUnloadRequested(object? sender, EventArgs e) => CloseOpenConversation();
 
+    // Narrow-layout back button on the chat header: return to the list, keeping the chat loaded.
+    private void OnBackToListRequested(object? sender, EventArgs e) => ShowListPane();
+
     /// <summary>Tears down the open conversation and returns to the empty state. Shared by the
     /// Escape accelerator and Ctrl+click on a conversation tile.</summary>
     private void CloseOpenConversation()
@@ -60,6 +141,7 @@ public sealed partial class ShellPage : Page
         ChatFrame.Visibility = Visibility.Collapsed;
         EmptyState.Visibility = Visibility.Visible;
         ConversationListPane.ClearSelection();
+        if (_isNarrow) ShowListPane();
     }
 
     private void OnSettingsRequested(object? sender, EventArgs e)
@@ -73,7 +155,12 @@ public sealed partial class ShellPage : Page
     private void OnChatFrameNavigated(object sender, NavigationEventArgs e)
     {
         if (e.Content is ChatPage chatPage)
+        {
             chatPage.DetailsRequested += OnDetailsRequested;
+            chatPage.BackToListRequested -= OnBackToListRequested;
+            chatPage.BackToListRequested += OnBackToListRequested;
+            chatPage.SetNarrow(_isNarrow);
+        }
 
         if (e.Content is ChatDetailsPage detailsPage)
         {
@@ -120,6 +207,7 @@ public sealed partial class ShellPage : Page
         ChatFrame.Content = null;
         ChatFrame.Visibility = Visibility.Collapsed;
         EmptyState.Visibility = Visibility.Visible;
+        if (_isNarrow) ShowListPane();
 
         _ = Task.Run(async () =>
         {
@@ -134,6 +222,7 @@ public sealed partial class ShellPage : Page
         EmptyState.Visibility = Visibility.Collapsed;
         ChatFrame.Visibility = Visibility.Visible;
         ChatFrame.Navigate(typeof(NewChatPage));
+        ShowDetailPane();
     }
 
     private void OnNewChatGoBack(object? sender, EventArgs e)
@@ -147,6 +236,7 @@ public sealed partial class ShellPage : Page
         if (_hadContentBeforeSettings && ChatFrame.CanGoBack)
         {
             ChatFrame.GoBack();
+            if (_isNarrow) ShowDetailPane();
         }
         else
         {
@@ -154,6 +244,7 @@ public sealed partial class ShellPage : Page
             ChatFrame.Content = null;
             ChatFrame.Visibility = Visibility.Collapsed;
             EmptyState.Visibility = Visibility.Visible;
+            if (_isNarrow) ShowListPane();
         }
     }
 
@@ -178,6 +269,7 @@ public sealed partial class ShellPage : Page
             convListVm.SelectedConversation = tile;
             _currentChatGuid = tile.ChatGuid;
             ChatFrame.Navigate(typeof(ChatPage), tile);
+            ShowDetailPane();
         }
         else
         {
@@ -185,6 +277,7 @@ public sealed partial class ShellPage : Page
             ChatFrame.Content = null;
             ChatFrame.Visibility = Visibility.Collapsed;
             EmptyState.Visibility = Visibility.Visible;
+            if (_isNarrow) ShowListPane();
         }
     }
 
@@ -192,6 +285,11 @@ public sealed partial class ShellPage : Page
     {
         OnSettingsRequested(this, EventArgs.Empty);
     }
+
+    /// <summary>Opens a conversation by GUID from a notification deep-link. Delegates to the list pane,
+    /// which reuses the normal click path (so the chat frame navigates) and waits for the conversation
+    /// to load if the app was cold-started by the toast.</summary>
+    public void OpenChat(string chatGuid) => ConversationListPane.SelectChatByGuid(chatGuid);
 
     // --- Keyboard accelerators (Phase 18) ---
 
