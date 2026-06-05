@@ -70,6 +70,12 @@ public sealed partial class ChatPage : Page
             ScrollToInitialPosition();
             MessagesList.Opacity = 1;
             _suppressScrollLoadMore = false;
+
+            // The page is cached (NavigationCacheMode=Required), so Loaded only fires once. Refresh
+            // the header and focus the composer here so every switch — not just the first open —
+            // shows the right contact and is ready to type.
+            UpdateHeader();
+            Composer.FocusInput();
         }
     }
 
