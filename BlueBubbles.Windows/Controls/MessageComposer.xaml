@@ -182,6 +182,7 @@
                      VerticalAlignment="Bottom"
                      AutomationProperties.Name="Message"
                      TextChanged="OnTextChanged"
+                     Paste="OnInputPaste"
                      PreviewKeyDown="OnPreviewKeyDown" />
 
             <!-- Send button -->
