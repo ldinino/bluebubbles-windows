@@ -7,7 +7,7 @@ on a clean machine with nothing pre-installed.
 ## For testers / end users
 
 1. Download **`BlueBubbles-Setup-<version>-x64.exe`** (from the GitHub Release, or wherever it was
-   shared). Use the **arm64** build instead if you're on an ARM PC.
+   shared). Only an x64 build is published for now; on an ARM PC it runs under Windows' x64 emulation.
 2. Double-click it.
 3. **First-launch SmartScreen prompt:** because the build is not code-signed, Windows shows
    *"Microsoft Defender SmartScreen prevented an unrecognized app from starting."* Click
