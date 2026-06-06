@@ -2,6 +2,9 @@ using BlueBubbles.Windows.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Graphics.Imaging;
+using Windows.Storage;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -147,5 +150,73 @@ public sealed partial class MessageComposer : UserControl
     {
         if (sender is Button { Tag: StagedAttachment attachment })
             AttachmentRemoved?.Invoke(this, attachment);
+    }
+
+    // Paste-to-send: a pasted bitmap (e.g. a screenshot) or pasted file(s) are staged as
+    // attachments instead of going into the text box. Plain text falls through to the default
+    // TextBox paste handling. Covers the "screenshot, paste, send" flow.
+    private async void OnInputPaste(object sender, TextControlPasteEventArgs e)
+    {
+        DataPackageView view;
+        try { view = Clipboard.GetContent(); }
+        catch { return; }  // clipboard busy/locked — let the default handler try
+
+        // Files copied from Explorer keep their original name/format — stage them directly.
+        if (view.Contains(StandardDataFormats.StorageItems))
+        {
+            e.Handled = true;
+            try
+            {
+                var items = await view.GetStorageItemsAsync();
+                foreach (var file in items.OfType<StorageFile>())
+                    AttachmentPicked?.Invoke(this, file.Path);
+            }
+            catch { /* paste failed — nothing staged */ }
+            return;
+        }
+
+        // A raw bitmap (screenshot, "copy image") has no file on disk — write one ourselves.
+        if (view.Contains(StandardDataFormats.Bitmap))
+        {
+            e.Handled = true;
+            try
+            {
+                var reference = await view.GetBitmapAsync();
+                using var stream = await reference.OpenReadAsync();
+                var path = await SavePastedBitmapAsync(stream);
+                if (path is not null)
+                    AttachmentPicked?.Invoke(this, path);
+            }
+            catch { /* decode/encode failed — nothing staged */ }
+        }
+
+        // Otherwise (plain text, etc.) leave e.Handled false so the TextBox pastes normally.
+    }
+
+    private static async Task<string?> SavePastedBitmapAsync(global::Windows.Storage.Streams.IRandomAccessStream stream)
+    {
+        // Re-encode to PNG so the file is a valid image the server recognises, regardless of the
+        // clipboard's source format.
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        var bitmap = await decoder.GetSoftwareBitmapAsync(
+            BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "BlueBubbles", "outgoing");
+        Directory.CreateDirectory(dir);
+
+        var fileName = $"Pasted image {DateTime.Now:yyyy-MM-dd HHmmss}.png";
+        var folder = await StorageFolder.GetFolderFromPathAsync(dir);
+        var file = await folder.CreateFileAsync(fileName, CreationCollisionOption.GenerateUniqueName);
+
+        using (var outStream = await file.OpenAsync(FileAccessMode.ReadWrite))
+        {
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream);
+            encoder.SetSoftwareBitmap(bitmap);
+            await encoder.FlushAsync();
+        }
+
+        return file.Path;
     }
 }
