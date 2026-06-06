@@ -104,12 +104,30 @@ jobs:
           if ($sizeMB -lt 10) { Write-Error "Installer suspiciously small ($sizeMB MB) - likely incomplete."; exit 1 }
           Write-Host "OK: $setup ($sizeMB MB)"
 
+      # Provenance: a SHA256 of every shipped file. Lets anyone confirm a downloaded
+      # installer's payload matches what CI built (and that a local build matches CI).
+      - name: Write payload SHA256 manifest
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "BlueBubbles.Windows/bin" -Recurse -Filter "BlueBubbles.Windows.exe" -File |
+                 Where-Object { $_.DirectoryName -like "*\win-x64\publish" } | Select-Object -First 1
+          $pub = $exe.DirectoryName
+          $rows = Get-ChildItem -Path $pub -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($pub.Length + 1).Replace('\','/')
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $rel
+          } | Sort-Object
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $rows | Set-Content -Path "dist/payload-manifest-x64.txt" -Encoding ascii
+          Write-Host "Manifest: $($rows.Count) files"
+
       # Always attach the installer to the workflow run so even a dry-run is testable.
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: BlueBubbles-Setup-${{ steps.ver.outputs.version }}-x64
-          path: dist/BlueBubbles-Setup-*.exe
+          path: |
+            dist/BlueBubbles-Setup-*.exe
+            dist/payload-manifest-x64.txt
           if-no-files-found: error
 
       # Only when explicitly requested: create a DRAFT release for the user to review.
