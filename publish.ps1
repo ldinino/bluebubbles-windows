@@ -75,13 +75,23 @@ if (-not $SkipPublish) {
         (Join-Path $root 'BlueBubbles.Core')
     )
 
-    # Pass the publish profile explicitly. A clean machine (e.g. a CI runner) does NOT
-    # auto-import Properties\PublishProfiles\win-<plat>.pubxml the way a dev box does, and
-    # that profile is what turns on WindowsAppSDKSelfContained / WindowsPackageType=None.
-    # Without it the publish silently omits Microsoft.WindowsAppRuntime.dll and the bundled
-    # runtime - an installer that breaks on any machine lacking the WindowsAppRuntime
-    # framework. Naming the profile forces it to load everywhere (no-op on a dev box).
-    & dotnet publish $proj -c $Configuration "-p:Platform=$Platform" "-p:PublishProfile=win-$Platform"
+    # Pass the publish settings explicitly instead of relying on the win-<plat>.pubxml
+    # profile being auto-imported: a clean machine (e.g. a CI runner) does NOT import it the
+    # way a dev box does. Those settings are load-bearing - WindowsAppSDKSelfContained +
+    # SelfContained bundle Microsoft.WindowsAppRuntime.dll and the .NET runtime (without them
+    # the installer breaks on any machine lacking the frameworks), WindowsPackageType=None
+    # makes it run unpackaged, and trimming/R2R are forced OFF (trimming is unsafe for
+    # XAML/reflection-heavy WinUI). These mirror Properties\PublishProfiles\win-<plat>.pubxml
+    # exactly, so local and CI produce identical bits. Keep them in sync if the profile changes.
+    & dotnet publish $proj -c $Configuration `
+        "-p:Platform=$Platform" `
+        "-r:$rid" `
+        "-p:SelfContained=true" `
+        "-p:WindowsAppSDKSelfContained=true" `
+        "-p:WindowsPackageType=None" `
+        "-p:PublishSingleFile=false" `
+        "-p:PublishTrimmed=false" `
+        "-p:PublishReadyToRun=false"
     if ($LASTEXITCODE -ne 0) { Write-Fail 'Publish failed.'; exit $LASTEXITCODE }
 }
 # Resolve the real publish dir: if the expected path has no .exe, find the publish
