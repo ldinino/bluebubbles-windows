@@ -46,7 +46,12 @@ $iss      = Join-Path $root 'installer\BlueBubbles.iss'
 $distDir  = Join-Path $root 'dist'
 $tfm      = 'net8.0-windows10.0.26100.0'
 $rid      = "win-$Platform"
-$pubDir   = Join-Path $root "BlueBubbles.Windows\bin\$Configuration\$tfm\$rid\publish"
+$binDir   = Join-Path $root "BlueBubbles.Windows\bin"
+# Expected publish dir. NOTE: whether MSBuild inserts a "$Platform" segment
+# (bin\Release\... vs bin\x64\Release\...) depends on whether the win-<plat>.pubxml
+# profile gets imported, which differs between a dev box and a clean CI runner. We
+# resolve the *actual* publish dir after publishing (below) rather than trust this path.
+$pubDir   = Join-Path $binDir "$Configuration\$tfm\$rid\publish"
 
 # --- Version (single source of truth: csproj <Version>) ---
 $version = (Select-Xml -Path $proj -XPath '/Project/PropertyGroup/Version' |
@@ -73,8 +78,20 @@ if (-not $SkipPublish) {
     & dotnet publish $proj -c $Configuration "-p:Platform=$Platform"
     if ($LASTEXITCODE -ne 0) { Write-Fail 'Publish failed.'; exit $LASTEXITCODE }
 }
+# Resolve the real publish dir: if the expected path has no .exe, find the publish
+# folder for this RID anywhere under bin (covers the bin\$Platform\... layout a clean
+# runner produces when the publish profile isn't imported).
 if (-not (Test-Path (Join-Path $pubDir 'BlueBubbles.Windows.exe'))) {
-    Write-Fail "Publish output not found at $pubDir"; exit 1
+    $found = Get-ChildItem -Path $binDir -Recurse -Filter 'BlueBubbles.Windows.exe' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -like "*\$rid\publish" } |
+        Select-Object -First 1
+    if ($found) {
+        $pubDir = $found.DirectoryName
+        Write-Warn "Publish output resolved to non-default path: $pubDir"
+    }
+}
+if (-not (Test-Path (Join-Path $pubDir 'BlueBubbles.Windows.exe'))) {
+    Write-Fail "Publish output not found under $binDir (looked for *\$rid\publish\BlueBubbles.Windows.exe)"; exit 1
 }
 Write-Ok 'Publish complete.'
 

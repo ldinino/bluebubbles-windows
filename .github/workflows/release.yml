@@ -73,19 +73,25 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $tfm = 'net8.0-windows10.0.26100.0'
-          $pub = "BlueBubbles.Windows/bin/Release/$tfm/win-x64/publish"
+
+          # Locate the publish folder wherever MSBuild put it (bin\Release\... or
+          # bin\x64\Release\...) - same resolution publish.ps1 uses for the installer source.
+          $exe = Get-ChildItem -Path "BlueBubbles.Windows/bin" -Recurse -Filter "BlueBubbles.Windows.exe" -File |
+                 Where-Object { $_.DirectoryName -like "*\win-x64\publish" } |
+                 Select-Object -First 1
+          if (-not $exe) { Write-Error "Could not find the win-x64 publish folder under BlueBubbles.Windows/bin"; exit 1 }
+          $pub = $exe.DirectoryName
+          Write-Host "Publish folder: $pub"
 
           $required = @(
-            "$pub/BlueBubbles.Windows.exe",
-            "$pub/Microsoft.WindowsAppRuntime.dll",
-            "$pub/Microsoft.WindowsAppRuntime.Insights.Resource.dll",
-            "$pub/Assets/AppIcon.ico"
+            "Microsoft.WindowsAppRuntime.dll",
+            "Microsoft.WindowsAppRuntime.Insights.Resource.dll",
+            "Assets/AppIcon.ico"
           )
-          $missing = $required | Where-Object { -not (Test-Path $_) }
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $pub $_)) }
           if ($missing) { Write-Error "Missing expected publish file(s):`n$($missing -join "`n")"; exit 1 }
 
-          if (-not (Get-ChildItem "$pub/Assets/Sounds" -Filter *.wav -ErrorAction SilentlyContinue)) {
+          if (-not (Get-ChildItem (Join-Path $pub "Assets/Sounds") -Filter *.wav -ErrorAction SilentlyContinue)) {
             Write-Error "No notification sound WAVs found in $pub/Assets/Sounds"; exit 1
           }
 
