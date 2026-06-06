@@ -50,9 +50,10 @@ stickers / Digital Touch.
 ## Install
 
 Download the latest **`BlueBubbles-Setup-<version>-x64.exe`** from the
-[Releases page](https://github.com/ldinino/bluebubbles-windows/releases) (once a release is
-published) and run it — use the **arm64** build on ARM PCs.
+[Releases page](https://github.com/ldinino/bluebubbles-windows/releases) and run it.
 
+- **x64 only for now** — a native ARM64 build isn't published yet. ARM PCs can run the x64 build
+  under Windows' built-in x64 emulation in the meantime.
 - Per-user install, **no admin prompt**, to `%LocalAppData%\Programs\BlueBubbles`.
 - The build isn't code-signed, so Windows SmartScreen shows a one-time *"unrecognized app"* prompt —
   click **More info → Run anyway**. This is expected for unsigned open-source apps; see
