@@ -233,9 +233,17 @@ public sealed partial class AvatarControl : UserControl
 
             var cached = TryGetCachedBitmap(imageBytes);
             if (cached is not null)
-                imageEllipse.Fill = new ImageBrush { ImageSource = cached, Stretch = Stretch.UniformToFill };
+            {
+                SetEllipseBitmap(imageEllipse, cached);
+            }
             else
+            {
+                // Drop any fill left over from a recycled container so the previous chat's face
+                // isn't shown while the new one decodes (mirrors the single path clearing
+                // PersonPic.ProfilePicture before its async load).
+                imageEllipse.Fill = null;
                 _ = SetEllipseImageAsync(imageEllipse, imageBytes, generation);
+            }
             return;
         }
 
@@ -260,19 +268,30 @@ public sealed partial class AvatarControl : UserControl
         }
     }
 
+    // Idempotent image fill for a group face: reuse the ImageBrush already on the ellipse and only
+    // swap its source when the bitmap actually differs, so a redundant RefreshLayout on a warm cache
+    // (e.g. navigating to Settings and back, which re-fires Loaded) doesn't rebuild the brush and
+    // flash the face. Mirrors the single-avatar path's PersonPic.ProfilePicture reuse.
+    private static void SetEllipseBitmap(Ellipse ellipse, BitmapImage bitmap)
+    {
+        if (ellipse.Fill is ImageBrush brush)
+        {
+            if (!ReferenceEquals(brush.ImageSource, bitmap))
+                brush.ImageSource = bitmap;
+        }
+        else
+        {
+            ellipse.Fill = new ImageBrush { ImageSource = bitmap, Stretch = Stretch.UniformToFill };
+        }
+    }
+
     private async Task SetEllipseImageAsync(Ellipse ellipse, byte[] imageData, int generation)
     {
         try
         {
             var bitmap = await DecodeAndCacheAsync(imageData);
             if (_loadGeneration == generation)
-            {
-                ellipse.Fill = new ImageBrush
-                {
-                    ImageSource = bitmap,
-                    Stretch = Stretch.UniformToFill
-                };
-            }
+                SetEllipseBitmap(ellipse, bitmap);
         }
         catch { }
     }
