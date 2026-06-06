@@ -138,5 +138,7 @@ jobs:
           draft: true
           tag_name: v${{ steps.ver.outputs.version }}
           name: BlueBubbles ${{ steps.ver.outputs.version }}
-          files: dist/BlueBubbles-Setup-*.exe
+          files: |
+            dist/BlueBubbles-Setup-*.exe
+            dist/payload-manifest-x64.txt
           fail_on_unmatched_files: true
