@@ -76,10 +76,18 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
 
         if (e.Message.AssociatedMessageGuid is not null) return;
 
+        // A chat someone else just started arrives here with no local row yet. Create it first —
+        // otherwise SaveIncomingMessageAsync and HandleNewMessageAsync both bail on the missing chat
+        // and the conversation never surfaces until a manual incremental sync.
+        var chatData = e.Message.Chats?.FirstOrDefault();
+        if (chatData is not null)
+            await _chatsService.EnsureChatExistsAsync(chatData);
+
         await _messagesService.SaveIncomingMessageAsync(chatGuid, e.Message);
         await _chatsService.HandleNewMessageAsync(
             chatGuid, e.Message.Text, e.Message.DateCreated ?? 0,
             e.Message.IsFromMe, e.Message.Handle?.Address);
+        _chatsService.NotifyMessagesPersisted(chatGuid);
 
         MessageProcessed?.Invoke(this,
             new IncomingMessageProcessedEventArgs(chatGuid, e.Message.IsFromMe));

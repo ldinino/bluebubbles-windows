@@ -65,6 +65,13 @@ public class IncomingMessageProcessorTests
         Assert.Single(chatsSvc.HandledNewMessages);
         Assert.Equal("iMessage;-;+11234567890", chatsSvc.HandledNewMessages[0].ChatGuid);
         Assert.Equal("Hello from test", chatsSvc.HandledNewMessages[0].Text);
+
+        // The chat is created (if missing) before the message is saved, and the persist is announced —
+        // this is what lets a brand-new chat someone else starts surface without a manual sync.
+        Assert.Single(chatsSvc.EnsuredChats);
+        Assert.Equal("iMessage;-;+11234567890", chatsSvc.EnsuredChats[0]);
+        Assert.Single(chatsSvc.PersistedNotifications);
+        Assert.Equal("iMessage;-;+11234567890", chatsSvc.PersistedNotifications[0]);
     }
 
     [Fact]
@@ -432,6 +439,8 @@ internal class RecordingNotificationService : INotificationService
 internal class RecordingChatsService : IChatsService
 {
     public List<(string ChatGuid, string? Text, long DateCreated, bool IsFromMe)> HandledNewMessages { get; } = [];
+    public List<string> EnsuredChats { get; } = [];
+    public List<string> PersistedNotifications { get; } = [];
 
     public IReadOnlyList<ChatWithParticipants> Chats => [];
     public IReadOnlyList<ChatWithParticipants> ArchivedChats => [];
@@ -439,6 +448,7 @@ internal class RecordingChatsService : IChatsService
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
+    public event EventHandler<string>? MessagesPersisted;
 
     public Task LoadChatsAsync() => Task.CompletedTask;
     public Task LoadArchivedChatsAsync() => Task.CompletedTask;
@@ -464,4 +474,16 @@ internal class RecordingChatsService : IChatsService
     public Task<bool> DeleteChatIconAsync(string chatGuid) => Task.FromResult(true);
     public string? FindExistingChatGuid(IEnumerable<string> addresses) => null;
     public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
+
+    public Task EnsureChatExistsAsync(Chat chatData)
+    {
+        EnsuredChats.Add(chatData.Guid);
+        return Task.CompletedTask;
+    }
+
+    public void NotifyMessagesPersisted(string chatGuid)
+    {
+        PersistedNotifications.Add(chatGuid);
+        MessagesPersisted?.Invoke(this, chatGuid);
+    }
 }

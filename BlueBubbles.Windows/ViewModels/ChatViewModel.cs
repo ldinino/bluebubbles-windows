@@ -29,6 +29,9 @@ public partial class ChatViewModel : ObservableObject
     private IReadOnlyList<string> _participantAddresses = [];
     private string? _chatDisplayNameRaw;
     private long? _oldestMessageDate;
+    // Set when a sync finishes while the thread is still opening; LoadChatAsync runs the deferred
+    // reconcile once it's done so the sync signal isn't dropped to the IsLoading guard.
+    private bool _reconcilePending;
     private readonly HashSet<string> _pendingTempGuids = [];
     private Timer? _typingDebounce;   // send-side: throttles our "started/stopped-typing" emits
     private Timer? _typingExpiry;     // receive-side: auto-clears a stuck "… is typing" bubble
@@ -116,7 +119,15 @@ public partial class ChatViewModel : ObservableObject
         // was reloaded. Catch the open chat up from the DB whenever a sync finishes.
         _syncService.SyncStateChanged += (s, syncing) =>
         {
-            if (!syncing) RunOnUI(() => _ = ReconcileAfterSyncAsync());
+            if (!syncing) RunOnUI(() => _ = RunReconcileAsync());
+        };
+
+        // Direct consequence of the database gaining rows for a chat (socket save or per-batch delta
+        // write): if it's the open thread, append the new rows from the DB. This keeps the view in
+        // step with the DB on every persist, not just on the single end-of-sync pulse above.
+        _chatsService.MessagesPersisted += (s, guid) =>
+        {
+            if (guid == _chatGuid) RunOnUI(() => _ = AppendPersistedMessagesAsync(guid));
         };
     }
 
@@ -176,6 +187,7 @@ public partial class ChatViewModel : ObservableObject
 
         Items.Clear();
         _oldestMessageDate = null;
+        _reconcilePending = false;
         _pendingTempGuids.Clear();
         HasMoreMessages = true;
         MessageText = string.Empty;
@@ -207,6 +219,14 @@ public partial class ChatViewModel : ObservableObject
         }
 
         MessagesLoaded?.Invoke(this, EventArgs.Empty);
+
+        // A sync that completed mid-load deferred its reconcile rather than dropping it; run it now
+        // that the freshly-loaded page is in place.
+        if (_reconcilePending)
+        {
+            _reconcilePending = false;
+            await RunReconcileAsync();
+        }
     }
 
     /// <summary>Finds the first unread message in a freshly-loaded page (oldest→newest). Prefers the
@@ -695,6 +715,45 @@ public partial class ChatViewModel : ObservableObject
     /// the newest page from the server and upsert it, recovering in-place edits / unsends / read receipts
     /// the delta structurally can't; (2) append any messages newer than the last visible bubble; and
     /// (3) reconcile already-visible bubbles' status, edits, unsends, and reactions from the DB.</summary>
+    /// <summary>Runs the post-sync reconcile, surfacing failures to the log instead of letting the
+    /// fire-and-forget task swallow them. If the thread is still opening, defers the reconcile to
+    /// <see cref="LoadChatAsync"/>'s completion rather than dropping the only sync signal.</summary>
+    private async Task RunReconcileAsync()
+    {
+        if (IsLoading)
+        {
+            _reconcilePending = true;
+            return;
+        }
+
+        try
+        {
+            await ReconcileAfterSyncAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Post-sync reconcile failed for {_chatGuid}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Appends rows just persisted for the open chat (socket save or delta batch). Mirrors
+    /// the catch-up step of the post-sync reconcile but skips the server round-trip — the rows are
+    /// already in the DB. Deduped by GUID, so it's a no-op when the live socket path already showed
+    /// the message.</summary>
+    private async Task AppendPersistedMessagesAsync(string chatGuid)
+    {
+        if (chatGuid != _chatGuid || IsLoading) return;
+
+        try
+        {
+            await AppendNewerMessagesFromDbAsync(_chatId, chatGuid);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Append after persist failed for {chatGuid}: {ex.Message}");
+        }
+    }
+
     private async Task ReconcileAfterSyncAsync()
     {
         if (string.IsNullOrEmpty(_chatGuid) || IsLoading) return;

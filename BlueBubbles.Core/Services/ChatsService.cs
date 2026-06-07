@@ -28,6 +28,10 @@ public class ChatsService : IChatsService
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
+    public event EventHandler<string>? MessagesPersisted;
+
+    public void NotifyMessagesPersisted(string chatGuid) =>
+        MessagesPersisted?.Invoke(this, chatGuid);
 
     public ChatsService(
         IDbContextFactory<BlueBubblesDbContext> dbFactory,
@@ -231,6 +235,68 @@ public class ChatsService : IChatsService
                 }
             }
             await db.SaveChangesAsync();
+        }
+    }
+
+    public async Task EnsureChatExistsAsync(Chat chatData)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var entity = await db.Chats
+            .Include(c => c.ChatParticipants)
+            .FirstOrDefaultAsync(c => c.Guid == chatData.Guid);
+
+        if (entity is not null)
+        {
+            // Existing chat: only backfill participants when none are stored (a chat first created
+            // from a sparse payload can land empty → renders blank). Never touch its other metadata.
+            if (entity.ChatParticipants.Count == 0 && chatData.Participants is { Count: > 0 })
+            {
+                await LinkParticipantsAsync(db, entity, chatData.Participants);
+                await db.SaveChangesAsync();
+            }
+            return;
+        }
+
+        entity = new ChatEntity
+        {
+            Guid = chatData.Guid,
+            ChatIdentifier = chatData.ChatIdentifier,
+            DisplayName = chatData.DisplayName,
+            Service = chatData.Service,
+            Style = chatData.Style,
+            HasUnreadMessage = true
+        };
+        db.Chats.Add(entity);
+        await db.SaveChangesAsync();
+
+        if (chatData.Participants is { Count: > 0 })
+        {
+            await LinkParticipantsAsync(db, entity, chatData.Participants);
+            await db.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>Upserts each handle and links it to the chat, skipping links that already exist.
+    /// Caller owns the surrounding <see cref="DbContext.SaveChangesAsync()"/>.</summary>
+    private static async Task LinkParticipantsAsync(
+        BlueBubblesDbContext db, ChatEntity chat, List<Handle> participants)
+    {
+        foreach (var h in participants)
+        {
+            var handle = await db.Handles.FirstOrDefaultAsync(
+                x => x.Address == h.Address && x.Service == h.Service);
+            if (handle is null)
+            {
+                handle = new HandleEntity { Address = h.Address, Service = h.Service };
+                db.Handles.Add(handle);
+                await db.SaveChangesAsync();
+            }
+
+            var linked = await db.ChatParticipants.AnyAsync(
+                cp => cp.ChatId == chat.Id && cp.HandleId == handle.Id);
+            if (!linked)
+                db.ChatParticipants.Add(new ChatParticipant { ChatId = chat.Id, HandleId = handle.Id });
         }
     }
 
