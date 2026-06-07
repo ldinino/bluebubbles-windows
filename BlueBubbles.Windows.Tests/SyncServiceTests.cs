@@ -520,11 +520,13 @@ internal class MockSettingsService : ISettingsService
 
 internal class MockChatsService : IChatsService
 {
+    public List<string> PersistedNotifications { get; } = [];
     public IReadOnlyList<ChatWithParticipants> Chats => [];
     public IReadOnlyList<ChatWithParticipants> ArchivedChats => [];
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
+    public event EventHandler<string>? MessagesPersisted;
     public Task LoadChatsAsync() => Task.CompletedTask;
     public Task LoadArchivedChatsAsync() => Task.CompletedTask;
     public Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null) => Task.CompletedTask;
@@ -543,4 +545,10 @@ internal class MockChatsService : IChatsService
     public Task<bool> DeleteChatIconAsync(string chatGuid) => Task.FromResult(true);
     public string? FindExistingChatGuid(IEnumerable<string> addresses) => null;
     public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
+    public Task EnsureChatExistsAsync(Chat chatData) => Task.CompletedTask;
+    public void NotifyMessagesPersisted(string chatGuid)
+    {
+        PersistedNotifications.Add(chatGuid);
+        MessagesPersisted?.Invoke(this, chatGuid);
+    }
 }
