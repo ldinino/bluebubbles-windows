@@ -86,7 +86,12 @@ jobs:
           $required = @(
             "Microsoft.WindowsAppRuntime.dll",
             "Microsoft.WindowsAppRuntime.Insights.Resource.dll",
-            "Assets/AppIcon.ico"
+            "Assets/AppIcon.ico",
+            # The app's own resource index. If this is missing the installed exe crashes the instant
+            # it loads XAML (stowed exception in Microsoft.UI.Xaml.dll). Its staging into the unpackaged
+            # publish output depends on <EnableMsixTooling>true</EnableMsixTooling> in the csproj — do
+            # not remove that property. This check exists because we shipped a build without it once.
+            "BlueBubbles.Windows.pri"
           )
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $pub $_)) }
           if ($missing) { Write-Error "Missing expected publish file(s):`n$($missing -join "`n")"; exit 1 }
