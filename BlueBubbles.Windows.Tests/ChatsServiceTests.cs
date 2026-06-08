@@ -1,5 +1,6 @@
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
 
 namespace BlueBubbles.Windows.Tests;
@@ -13,6 +14,20 @@ public class ChatsServiceTests
         var settings = new AppSettings();
         return (new ChatsService(factory, api, settings), factory);
     }
+
+    private static (ChatsService svc, TestDbContextFactory factory, MockApiService api) CreateServiceWithApi()
+    {
+        var factory = TestDbContextFactory.Create();
+        var api = new MockApiService();
+        return (new ChatsService(factory, api, new AppSettings()), factory, api);
+    }
+
+    private static Handle MockHandle(string address, string service = "SMS") =>
+        new(0, address, service, null, null, null, null, null, null);
+
+    private static Chat MockChat(string guid, List<Handle>? participants) =>
+        new(guid, guid, null, participants, null, false, false, false, "SMS",
+            null, null, null, null, null, 43, false, false, null);
 
     private static async Task SeedChat(TestDbContextFactory factory, string guid, long? latestDate = null,
         bool isPinned = false, int? pinIndex = null, bool hasUnread = false, string? lastMessageText = null)
@@ -278,5 +293,75 @@ public class ChatsServiceTests
         Assert.Single(svc.Chats);
         Assert.Single(svc.Chats[0].Participants);
         Assert.Equal("test@example.com", svc.Chats[0].Participants[0].Address);
+    }
+
+    [Fact]
+    public async Task EnsureChatExistsAsync_SparsePayload_FetchesParticipantsFromServer()
+    {
+        // The live socket new-message payload carries the chat but no participants, so a chat
+        // created from it would render as "Unknown". The service must fetch the full participant
+        // list from the server to resolve who's in the chat.
+        var (svc, factory, api) = CreateServiceWithApi();
+        api.GetChatFunc = guid => Task.FromResult(new ApiResponse<Chat>(200, "OK",
+            MockChat(guid, [MockHandle("+15551234567"), MockHandle("+15559876543")]), null));
+
+        await svc.EnsureChatExistsAsync(MockChat("SMS;+;chat-group", participants: null));
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "SMS;+;chat-group");
+        var linked = db.ChatParticipants.Count(cp => cp.ChatId == chat.Id);
+        Assert.Equal(2, linked);
+    }
+
+    [Fact]
+    public async Task EnsureChatExistsAsync_ServerFetchFails_CreatesChatWithoutCrashing()
+    {
+        // Offline / server error: the chat must still be created (so it surfaces) and simply land
+        // empty — the next incremental sync backfills its participants.
+        var (svc, factory, api) = CreateServiceWithApi();
+        api.GetChatFunc = _ => throw new HttpRequestException("offline");
+
+        await svc.EnsureChatExistsAsync(MockChat("SMS;+;chat-offline", participants: null));
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "SMS;+;chat-offline");
+        Assert.Empty(db.ChatParticipants.Where(cp => cp.ChatId == chat.Id));
+    }
+
+    [Fact]
+    public async Task EnsureChatExistsAsync_ExistingEmptyChat_BackfillsFromServer()
+    {
+        // A chat previously created empty (sparse payload, server was unreachable) gets its
+        // participants backfilled when a later message arrives and the server is reachable.
+        var (svc, factory, api) = CreateServiceWithApi();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "SMS;+;chat-empty" });
+            await db.SaveChangesAsync();
+        }
+
+        api.GetChatFunc = guid => Task.FromResult(new ApiResponse<Chat>(200, "OK",
+            MockChat(guid, [MockHandle("+15551112222")]), null));
+
+        await svc.EnsureChatExistsAsync(MockChat("SMS;+;chat-empty", participants: null));
+
+        using var db2 = factory.CreateDbContext();
+        var chat = db2.Chats.Single(c => c.Guid == "SMS;+;chat-empty");
+        Assert.Single(db2.ChatParticipants.Where(cp => cp.ChatId == chat.Id));
+    }
+
+    [Fact]
+    public async Task EnsureChatExistsAsync_PayloadHasParticipants_SkipsServerFetch()
+    {
+        // When the payload already carries participants (e.g. from an incremental-sync message),
+        // no server round-trip is needed. GetChatFunc left null would throw if hit.
+        var (svc, factory, api) = CreateServiceWithApi();
+
+        await svc.EnsureChatExistsAsync(
+            MockChat("SMS;+;chat-has-parts", [MockHandle("+15553334444")]));
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "SMS;+;chat-has-parts");
+        Assert.Single(db.ChatParticipants.Where(cp => cp.ChatId == chat.Id));
     }
 }

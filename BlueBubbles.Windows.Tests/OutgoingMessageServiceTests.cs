@@ -230,6 +230,7 @@ internal class MockApiService : IBlueBubblesApiService
     public Func<string, string, string, Task<ApiResponse<Message>>>? SendTextFunc { get; set; }
     public Exception? ThrowOnSendText { get; set; }
     public string? LastMethod { get; private set; }
+    public Func<string, Task<ApiResponse<Chat>>>? GetChatFunc { get; set; }
 
     internal static Message MockMessage(string guid, string? text = null) =>
         new(null, guid, null, null, text, null, null, 0,
@@ -279,7 +280,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Task<byte[]> GetAttachmentBlurhashAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetAttachmentCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<List<Chat>>> QueryChatsAsync(List<string>? withQuery = null, int offset = 0, int limit = 100, string? sort = null, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<Chat>> GetChatAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<Chat>> GetChatAsync(string guid, string? withQuery = null, CancellationToken ct = default) =>
+        GetChatFunc is not null ? GetChatFunc(guid) : throw new NotImplementedException();
     public Task<ApiResponse<List<Message>>> GetChatMessagesAsync(string guid, string? withQuery = null, string sort = "DESC", long? before = null, long? after = null, int offset = 0, int limit = 100, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Chat>> CreateChatAsync(List<string> addresses, string? message, string service, string method = "private-api", CancellationToken ct = default) => throw new NotImplementedException();
