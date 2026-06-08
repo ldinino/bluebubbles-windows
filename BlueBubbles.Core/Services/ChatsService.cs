@@ -250,10 +250,14 @@ public class ChatsService : IChatsService
         {
             // Existing chat: only backfill participants when none are stored (a chat first created
             // from a sparse payload can land empty → renders blank). Never touch its other metadata.
-            if (entity.ChatParticipants.Count == 0 && chatData.Participants is { Count: > 0 })
+            if (entity.ChatParticipants.Count == 0)
             {
-                await LinkParticipantsAsync(db, entity, chatData.Participants);
-                await db.SaveChangesAsync();
+                var participants = await ResolveParticipantsAsync(chatData);
+                if (participants is { Count: > 0 })
+                {
+                    await LinkParticipantsAsync(db, entity, participants);
+                    await db.SaveChangesAsync();
+                }
             }
             return;
         }
@@ -270,10 +274,31 @@ public class ChatsService : IChatsService
         db.Chats.Add(entity);
         await db.SaveChangesAsync();
 
-        if (chatData.Participants is { Count: > 0 })
+        var newParticipants = await ResolveParticipantsAsync(chatData);
+        if (newParticipants is { Count: > 0 })
         {
-            await LinkParticipantsAsync(db, entity, chatData.Participants);
+            await LinkParticipantsAsync(db, entity, newParticipants);
             await db.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>Returns the chat's participants, preferring those already on the payload. The live
+    /// socket <c>new-message</c> event carries the chat but not its participants, so a chat created
+    /// from it would render as "Unknown" — fetch the full participant list from the server in that
+    /// case. Returns an empty list on failure (offline etc.); the next incremental sync backfills.</summary>
+    private async Task<List<Handle>> ResolveParticipantsAsync(Chat chatData)
+    {
+        if (chatData.Participants is { Count: > 0 })
+            return chatData.Participants;
+
+        try
+        {
+            var response = await _api.GetChatAsync(chatData.Guid, withQuery: "participants");
+            return response.Data?.Participants ?? [];
+        }
+        catch
+        {
+            return [];
         }
     }
 
