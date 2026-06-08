@@ -32,6 +32,9 @@ project.lock.json
 # Publish output
 publish/
 *.pubxml
+# ...but the win-<plat>.pubxml profiles ARE shared project config (referenced by the csproj
+# <PublishProfile> and required for `dotnet publish` / VS publish to ship unpackaged), so track them.
+!Properties/PublishProfiles/*.pubxml
 PublishScripts/
 
 # Code analysis and tooling
