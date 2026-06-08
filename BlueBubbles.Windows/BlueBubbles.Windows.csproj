@@ -12,6 +12,12 @@
     <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
+    <!-- DO NOT REMOVE — despite the name, this is NOT optional MSIX packaging. EnableMsixTooling
+         activates the WinUI3 targets that generate AND stage the app's resources.pri into the build
+         /publish output. Without it, resources.pri is missing from the unpackaged publish folder and
+         the installed app crashes on launch with a stowed exception in Microsoft.UI.Xaml.dll
+         (0xc000027b) the instant it loads XAML. We still ship fully unpackaged (no MSIX package). -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>

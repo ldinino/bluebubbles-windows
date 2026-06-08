@@ -19,10 +19,27 @@ debug and production are both unpackaged and nothing on disk re-seeds the confus
 
 ## What was removed
 
+### ⚠️ Postmortem — `EnableMsixTooling` is NOT rot; do not remove it
+
+The first cut of this cleanup removed `<EnableMsixTooling>true</EnableMsixTooling>`. That broke the
+**installed app: it crashed instantly on launch** with a stowed exception in `Microsoft.UI.Xaml.dll`
+(exit `0xc000027b`, WER bucket showing `combase.dll` / `E_FAIL 0x80004005`). Root cause: despite the
+MSIX-sounding name, `EnableMsixTooling` activates the WinUI3 targets that **generate and stage the
+app's `resources.pri` into the (unpackaged) publish output**. Without it, `BlueBubbles.Windows.pri`
+is missing from the publish folder, so WinUI can't resolve compiled XAML/`.xbf` and dies the moment
+it loads the first window. It was **restored** (with a `DO NOT REMOVE` comment) and the crash went
+away. A CI guard (`BlueBubbles.Windows.pri` in the `release.yml` verify step) now catches a recurrence.
+
+The trap that hid it: the original verification used `./build-and-run.ps1 -BuildOnly` and `publish.ps1`,
+neither of which **launches** the app — and CI only checks that files exist, not that the app runs. So
+a runtime-only launch crash sailed through a green build + green release dry-run.
+
 ### Build config — `BlueBubbles.Windows/BlueBubbles.Windows.csproj`
-- `<EnableMsixTooling>true</EnableMsixTooling>`
+- `<EnableMsixTooling>true</EnableMsixTooling>` — **REVERTED / kept** (see postmortem above; load-bearing
+  for `resources.pri` staging).
 - The `Msix` `ProjectCapability` ItemGroup and the `HasPackageAndPublishMenu` PropertyGroup
-  (both VS "Package and Publish" UI enablers).
+  (both VS "Package and Publish" UI enablers) — removed; these are genuinely VS-UI-only and the build
+  produces the PRI without them.
 - The `SyncManifestVersion` MSBuild target (only rewrote `Package.appxmanifest`).
 - **`Microsoft.Windows.SDK.BuildTools.WinApp` PackageReference** — the package that hooked
   `dotnet run` to register a packaged loose-layout/AUMID identity via the `winapp` CLI.
@@ -72,6 +89,9 @@ debug and production are both unpackaged and nothing on disk re-seeds the confus
 - `./build-and-run.ps1 -BuildOnly` → clean build, **0 warnings / 0 errors, 310/310 tests pass**.
 - `./publish.ps1` → self-contained publish + Inno Setup compile succeeded, produced
   `dist/BlueBubbles-Setup-<version>-x64.exe`.
+- **Launch verified** (added after the crash above): both the published Release exe and the Debug
+  build now start and stay running, with `BlueBubbles.Windows.pri` present in the output. Always
+  actually launch the exe when changing build/packaging config — a green build does not prove launch.
 
 ### NOT verified automatically (check manually if anything misbehaves)
 - **Live toast click / inline-reply → opens the correct thread.** Needs a running BlueBubbles
