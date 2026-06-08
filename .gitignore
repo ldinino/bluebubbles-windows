@@ -9,12 +9,6 @@
 # Claude Code local settings (per-machine; not shared)
 .claude/settings.local.json
 
-# Internal planning / agent docs — local-only, never published (see PUNCHLIST H1)
-BlueBubbles-WinUI3-Design-Spec.md
-PLAN.md
-PUNCHLIST.md
-BlueBubbles.Windows/AGENTS.md
-
 # Miscellaneous
 *.class
 *.log
