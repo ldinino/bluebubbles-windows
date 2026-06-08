@@ -14,7 +14,11 @@
          for both): a single pane fills the window and we swap between the list and the open chat,
          driven from code-behind (ApplyPaneLayout) because the choice depends on both width AND
          whether a chat is open — a condition pure AdaptiveTriggers can't express. -->
-    <Grid SizeChanged="OnRootSizeChanged">
+    <!-- KeyboardAcceleratorPlacementMode="Hidden": these are app-global shortcuts on the full-window
+         Grid, not bound to any hovered button. Hidden suppresses WinUI's auto-generated key-combo
+         tooltip, which otherwise leaks over the conversation list on first show (B1). -->
+    <Grid SizeChanged="OnRootSizeChanged"
+          KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="N" Invoked="OnNewChatAccelerator" />
             <KeyboardAccelerator Modifiers="Control" Key="F" Invoked="OnFindAccelerator" />

@@ -42,6 +42,16 @@
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        Margin="4,16,0,4" />
 
+            <!-- Hidden for now: verbose (Debug) logging is dormant. To re-light it for debugging,
+                 set Visibility back to Visible (the toggle wiring + AppSettings.VerboseLogging
+                 persistence are still in place). See App.OnLaunched for the startup note. -->
+            <tk:SettingsCard Header="Verbose logging"
+                             Visibility="Collapsed"
+                             Description="Capture extra Debug-level detail (e.g. avatar load/recycle) in the log below. Leave off for normal use; turn on to reproduce and report intermittent issues.">
+                <ToggleSwitch x:Name="VerboseLoggingToggle"
+                              Toggled="OnVerboseLoggingToggled" />
+            </tk:SettingsCard>
+
             <tk:SettingsExpander Header="Diagnostic log"
                                  Description="Recent activity from across the app — connection, sync, contacts, and more. Filter by category or export it to attach to a bug report.">
                 <tk:SettingsExpander.ItemsHeader>

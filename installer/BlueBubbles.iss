@@ -42,7 +42,10 @@ SetupIconFile=..\BlueBubbles.Windows\Assets\AppIcon.ico
 WizardStyle=modern
 Compression=lzma2/max
 SolidCompression=yes
-; Close a running instance on upgrade so files aren't locked.
+; Close a running instance on upgrade so files aren't locked. CloseApplications uses the Restart
+; Manager, which can't reliably close this WinUI window/tray process (it would stall on the
+; "applications in use" page); the PrepareToInstall code event below force-closes it first, so this
+; is just a backstop. RestartApplications=no keeps an unattended/silent update from relaunching.
 CloseApplications=yes
 RestartApplications=no
 #if MyArch == "x64"
@@ -82,3 +85,18 @@ Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Windows
 ; folder ourselves on uninstall — db + SQLite sidecars, attachments\, logs\, settings.json,
 ; contacts.vcf, credential.bin, and any future data file. Silent wipe, matching old MSIX behavior.
 Type: filesandordirs; Name: "{localappdata}\{#MyAppName}"
+
+[Code]
+// Force-close a running instance before files are copied (B4). Runs in the "Preparing to Install"
+// phase, before the Restart Manager scan, so an upgrade over a running app never stalls on the
+// "applications in use" page and unattended/silent (/VERYSILENT) updates apply cleanly — a
+// prerequisite for the in-app updater (U1). Mirrors the [UninstallRun] taskkill. A failure to find
+// the process (it wasn't running) is fine; we always proceed.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#MyExeName}', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := '';  // empty = proceed with installation
+end;

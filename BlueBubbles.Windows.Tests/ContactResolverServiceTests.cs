@@ -254,6 +254,69 @@ public class ContactResolverServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAvatar_KeepsSameReference_WhenReloadedPhotoUnchanged()
+    {
+        // Regression for the avatar flicker (B3): a reload that produces byte-identical photo content
+        // must hand back the SAME array reference, so the tile binding and decoded-bitmap cache (both
+        // keyed on reference equality) treat it as a no-op instead of rebinding + re-decoding.
+        var photoBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x11, 0x22 };
+        var base64 = Convert.ToBase64String(photoBytes);
+        var vcf = $"""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Test User
+            TEL:5551234567
+            PHOTO;ENCODING=b;TYPE=JPEG:{base64}
+            END:VCARD
+            """;
+        var path = WriteVcf(vcf);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+        var first = svc.GetAvatar("5551234567");
+
+        // Reload the identical file (fresh parse → fresh arrays internally).
+        await svc.LoadFromVCardAsync(path);
+        var second = svc.GetAvatar("5551234567");
+
+        Assert.NotNull(first);
+        Assert.Same(first, second); // reference preserved, not just equal content
+    }
+
+    [Fact]
+    public async Task GetAvatar_ReturnsNewReference_WhenPhotoChanged()
+    {
+        var path = Path.Combine(_tempDir, "test.vcf");
+
+        File.WriteAllText(path, $"""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Test User
+            TEL:5551234567
+            PHOTO;ENCODING=b;TYPE=JPEG:{Convert.ToBase64String(new byte[] { 1, 2, 3, 4 })}
+            END:VCARD
+            """);
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+        var first = svc.GetAvatar("5551234567");
+
+        File.WriteAllText(path, $"""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Test User
+            TEL:5551234567
+            PHOTO;ENCODING=b;TYPE=JPEG:{Convert.ToBase64String(new byte[] { 9, 8, 7, 6, 5 })}
+            END:VCARD
+            """);
+        await svc.LoadFromVCardAsync(path);
+        var second = svc.GetAvatar("5551234567");
+
+        Assert.NotNull(second);
+        Assert.NotSame(first, second);
+        Assert.Equal(new byte[] { 9, 8, 7, 6, 5 }, second);
+    }
+
+    [Fact]
     public async Task LoadContactsAsync_LoadsFromSavedPath()
     {
         var path = WriteVcf("""

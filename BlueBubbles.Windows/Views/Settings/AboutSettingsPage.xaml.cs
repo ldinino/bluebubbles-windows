@@ -1,3 +1,4 @@
+using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Services;
 using BlueBubbles.Windows.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,12 +18,24 @@ public sealed partial class AboutSettingsPage : Page
 
     private readonly IBlueBubblesApiService _api;
     private readonly SettingsViewModel _vm;
+    private readonly AppSettings _settings;
+    private readonly ISettingsService _settingsService;
+
+    // Suppresses the Toggled handler while we set the switch's initial state in the constructor,
+    // so loading the page doesn't trigger a redundant save.
+    private bool _initializing;
 
     public AboutSettingsPage()
     {
         _api = App.Services.GetRequiredService<IBlueBubblesApiService>();
         _vm = App.Services.GetRequiredService<SettingsViewModel>();
+        _settings = App.Services.GetRequiredService<AppSettings>();
+        _settingsService = App.Services.GetRequiredService<ISettingsService>();
         InitializeComponent();
+
+        _initializing = true;
+        VerboseLoggingToggle.IsOn = _settings.VerboseLogging;
+        _initializing = false;
 
         // 3-part semantic version (Major.Minor.Patch), read unpackaged-safe from the assembly.
         var versionText = AppInfo.Version;
@@ -79,6 +92,17 @@ public sealed partial class AboutSettingsPage : Page
     {
         if (LogCategoryCombo.SelectedItem is string category)
             _vm.LogCategoryFilter = category;
+    }
+
+    private void OnVerboseLoggingToggled(object sender, RoutedEventArgs e)
+    {
+        if (_initializing) return;
+
+        _settings.VerboseLogging = VerboseLoggingToggle.IsOn;
+        AppLog.MinLevel = _settings.VerboseLogging ? LogLevel.Debug : LogLevel.Info;
+        _settingsService.Save();
+        AppLog.Info(LogCategory.App,
+            $"Verbose logging {(_settings.VerboseLogging ? "enabled" : "disabled")}.");
     }
 
     private void OnCopyLogClick(object sender, RoutedEventArgs e)

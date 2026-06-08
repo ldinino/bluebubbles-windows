@@ -74,6 +74,12 @@ public partial class AppSettings : ObservableObject
     // Session restore — the conversation that was open when the app last closed.
     [ObservableProperty] public partial string LastSelectedChatGuid { get; set; }
 
+    // Diagnostics
+    // When on, AppLog captures verbose Debug-level tracing (e.g. avatar load/recycle) in addition to
+    // the default Info+ output. Off by default to keep the log readable; applied to AppLog.MinLevel
+    // at startup and live when toggled in About > Diagnostics.
+    [ObservableProperty] public partial bool VerboseLogging { get; set; }
+
     public AppSettings()
     {
         SettingsVersion = CurrentSettingsVersion;

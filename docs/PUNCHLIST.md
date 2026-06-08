@@ -15,27 +15,48 @@
 ## B — Bugfix release (0.20.2)
 
 #### B1. Stray `Ctrl + N` tooltip on conversation hover
-- [ ] Hovering a conversation in the list pops a `Ctrl + N` tooltip — but only right after the
+- [x] Hovering a conversation in the list pops a `Ctrl + N` tooltip — but only right after the
       window is first brought up. Goes away after the initial interaction.
-- [ ] Likely a keyboard-accelerator tooltip (`KeyboardAccelerator` / `AccessKey`) leaking onto
-      the list item or its container on first show. Track down the source and suppress it.
+- [x] **Fixed:** the app-global `Ctrl+N`/`Ctrl+F`/`Esc` `KeyboardAccelerator`s on ShellPage's root
+      Grid auto-generated a key-combo tooltip (default placement `Auto`) that leaked over the list on
+      first show. Set `KeyboardAcceleratorPlacementMode="Hidden"` on the Grid (`ShellPage.xaml`).
 
 #### B2. Group-chat info back button needs multiple clicks
-- [ ] Opening chat info for a **group** chat requires clicking Back at least twice to return.
-- [ ] Suggests a duplicate/extra frame navigation (double `Navigate`) when opening group info, or
-      a back-stack entry that isn't being collapsed. Audit the group-info open path vs. 1:1.
+- [x] Opening chat info for a **group** chat requires clicking Back at least twice to return.
+- [x] **Fixed:** ChatPage is `NavigationCacheMode="Required"` (one reused instance), and
+      `OnChatFrameNavigated` subscribed `DetailsRequested` with a bare `+=` — so every conversation
+      switch stacked another handler, and an Info click then `Navigate`d to the details page once per
+      handler, pushing extra back-stack entries. Added the `-=`/`+=` guard (matching
+      `BackToListRequested`) and removed the now-redundant self-unsubscribe (`ShellPage.xaml.cs`).
 
 #### B3. Avatar bubble flickering
-- [ ] Avatar bubbles still flicker intermittently. Tough to reproduce — no clear pattern found yet.
-- [ ] Add logging around avatar load/assignment (e.g. async-image generation counters, container
-      recycle) to capture when/why the flicker happens before attempting a fix.
+- [x] Avatar bubbles flickered intermittently — the whole list would flash blank→photo.
+- [x] **Root cause (found via the diagnostics below):** every contacts reload
+      (`ContactResolverService.LoadFromVCardAsync`) cleared `_avatarCache` and re-added **freshly
+      parsed** `byte[]` photos. Callers key on **reference** equality — the tile `AvatarBytes`
+      binding (`[ObservableProperty]` on `byte[]`) and `AvatarControl`'s decoded-bitmap cache — so
+      identical photos came back as new arrays: the binding rebound and the cache missed, forcing
+      `PersonPic.ProfilePicture = null` + an async re-decode for every visible avatar at once. The
+      `[Ui]` logs showed a `cache HIT` pass immediately followed by an all-`cache MISS -> clear+decode`
+      pass on each reload.
+- [x] **Fixed:** `LoadFromVCardAsync` now snapshots the prior photo arrays and reuses the **same
+      reference** when the reloaded bytes are byte-identical (`StablePhoto`). Unchanged photos become
+      a no-op (no rebind, no re-decode); only genuinely changed/added photos decode. Regression tests
+      `GetAvatar_KeepsSameReference_WhenReloadedPhotoUnchanged` /
+      `..._ReturnsNewReference_WhenPhotoChanged` cover it.
+- [x] **Diagnostics retained:** `Debug`-level `[Ui]` avatar tracing + the **Verbose logging** toggle
+      in *Settings > About > Diagnostics* (persisted; raises `AppLog.MinLevel` to `Debug`) stay in
+      for future investigation. Off by default.
 
 #### B4. Installer doesn't close the running app during update
-- [ ] Installing a new version over a running instance doesn't terminate the old app — the installer
+- [x] Installing a new version over a running instance doesn't terminate the old app — the installer
       hangs until the app is manually closed.
-- [ ] Inno Setup should detect + close the running instance (e.g. `CloseApplications`, app mutex, or
-      a kill step in `publish.ps1`'s installer script) so updates apply cleanly.
-- [ ] **Blocks U1 (auto-updater):** an unattended update can't hang waiting on a manual close.
+- [x] **Fixed:** `CloseApplications=yes` relied on the Restart Manager, which can't close this
+      WinUI window/tray process (it stalled on the "applications in use" page). Added a `[Code]`
+      `PrepareToInstall` event that `taskkill /F /IM`s the running instance before file copy
+      (mirrors the existing `[UninstallRun]` kill), so upgrades and `/VERYSILENT` runs apply cleanly
+      (`installer/BlueBubbles.iss`).
+- [x] **Unblocks U1 (auto-updater):** an unattended update no longer hangs on a manual close.
 
 ---
 
