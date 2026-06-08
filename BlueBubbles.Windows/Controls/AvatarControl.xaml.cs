@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.CompilerServices;
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -72,6 +73,12 @@ public sealed partial class AvatarControl : UserControl
     private AppSettings? _settings;
     private bool _relayoutQueued;
 
+    // Stable per-control id so the (Debug-only) flicker diagnostics can correlate log lines across a
+    // recycled container's lifetime: which generation cleared the source, which async decode landed,
+    // and which got dropped as stale. Silent unless log verbosity is raised to Debug (B3).
+    private static int _nextInstanceId;
+    private readonly int _instanceId = System.Threading.Interlocked.Increment(ref _nextInstanceId);
+
     public AvatarControl()
     {
         InitializeComponent();
@@ -133,6 +140,14 @@ public sealed partial class AvatarControl : UserControl
     {
         var generation = ++_loadGeneration;
 
+        // Flicker tracing (B3). Dormant by default — the "Verbose logging" toggle is hidden and the
+        // log sits at Info, so IsEnabled(Debug) is false and these messages are never built on this
+        // hot path. Re-light it (un-hide the toggle) when debugging avatar issues again.
+        if (AppLog.IsEnabled(LogLevel.Debug))
+            AppLog.Debug(LogCategory.Ui,
+                $"Avatar[{_instanceId}] RefreshLayout gen={generation} group={IsGroup} " +
+                $"img={(AvatarImage?.Length ?? 0)}B initials='{Initials}'");
+
         // "Avatar size" scales the requested Size; "Colorful avatars" toggles the tinted fallback.
         var settings = _settings ??= App.Services.GetService<AppSettings>();
         var size = Size * (settings?.AvatarScale ?? 1.0);
@@ -172,9 +187,13 @@ public sealed partial class AvatarControl : UserControl
             // flash through the empty placeholder on container recycle.
             var cached = TryGetCachedBitmap(AvatarImage);
             if (cached is not null)
+            {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} single cache HIT (sync set)");
                 PersonPic.ProfilePicture = cached;
+            }
             else
             {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} single cache MISS -> clear+decode");
                 PersonPic.ProfilePicture = null;
                 _ = SetPersonPicImageAsync(AvatarImage, generation);
             }
@@ -213,8 +232,16 @@ public sealed partial class AvatarControl : UserControl
         try
         {
             var bitmap = await DecodeAndCacheAsync(imageData);
-            if (_loadGeneration == generation)
+            var current = _loadGeneration;
+            if (current == generation)
+            {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} single decode landed -> assign");
                 PersonPic.ProfilePicture = bitmap;
+            }
+            else
+            {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} single decode STALE (now {current}) -> drop");
+            }
         }
         catch { }
     }
@@ -234,10 +261,12 @@ public sealed partial class AvatarControl : UserControl
             var cached = TryGetCachedBitmap(imageBytes);
             if (cached is not null)
             {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} group face '{initials}' cache HIT (sync set)");
                 SetEllipseBitmap(imageEllipse, cached);
             }
             else
             {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} group face '{initials}' cache MISS -> clear+decode");
                 // Drop any fill left over from a recycled container so the previous chat's face
                 // isn't shown while the new one decodes (mirrors the single path clearing
                 // PersonPic.ProfilePicture before its async load).
@@ -290,8 +319,16 @@ public sealed partial class AvatarControl : UserControl
         try
         {
             var bitmap = await DecodeAndCacheAsync(imageData);
-            if (_loadGeneration == generation)
+            var current = _loadGeneration;
+            if (current == generation)
+            {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} group decode landed -> assign");
                 SetEllipseBitmap(ellipse, bitmap);
+            }
+            else
+            {
+                if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} group decode STALE (now {current}) -> drop");
+            }
         }
         catch { }
     }

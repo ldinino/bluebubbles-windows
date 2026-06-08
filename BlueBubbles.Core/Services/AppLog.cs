@@ -32,6 +32,11 @@ public static class AppLog
     /// </summary>
     public static LogLevel MinLevel { get; set; } = LogLevel.Info;
 
+    /// <summary>Cheap pre-check for hot paths: returns false when a message at <paramref name="level"/>
+    /// would be dropped, so callers can skip building (interpolating) it. Mirrors the filter in
+    /// <see cref="Add"/>.</summary>
+    public static bool IsEnabled(LogLevel level) => level >= MinLevel;
+
     public static event Action<string>? EntryAdded;
     public static IReadOnlyList<string> Entries
     {

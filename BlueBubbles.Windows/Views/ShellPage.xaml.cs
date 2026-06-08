@@ -156,6 +156,12 @@ public sealed partial class ShellPage : Page
     {
         if (e.Content is ChatPage chatPage)
         {
+            // ChatPage is NavigationCacheMode="Required", so the Frame reuses one instance across
+            // conversations and this handler fires on every (re)navigation. Guard both subscriptions
+            // with -=/+= so switching conversations doesn't stack duplicate handlers — otherwise a
+            // later Info click would Navigate to the details page once per accumulated handler,
+            // pushing extra back-stack entries that each need their own Back press (B2).
+            chatPage.DetailsRequested -= OnDetailsRequested;
             chatPage.DetailsRequested += OnDetailsRequested;
             chatPage.BackToListRequested -= OnBackToListRequested;
             chatPage.BackToListRequested += OnBackToListRequested;
@@ -177,9 +183,8 @@ public sealed partial class ShellPage : Page
 
     private void OnDetailsRequested(object? sender, ConversationTileViewModel tile)
     {
-        if (sender is ChatPage cp)
-            cp.DetailsRequested -= OnDetailsRequested;
-
+        // No self-unsubscribe needed: OnChatFrameNavigated re-establishes exactly one subscription
+        // each time the cached ChatPage is navigated to (see the -=/+= guard there).
         ChatFrame.Navigate(typeof(ChatDetailsPage), tile);
     }
 

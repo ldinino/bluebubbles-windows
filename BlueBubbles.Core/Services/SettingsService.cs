@@ -86,7 +86,9 @@ public class SettingsService : ISettingsService
             MinimizeToTray = _appSettings.MinimizeToTray,
             CloseToTray = _appSettings.CloseToTray,
             LaunchAtStartup = _appSettings.LaunchAtStartup,
-            LaunchAtStartupMinimized = _appSettings.LaunchAtStartupMinimized
+            LaunchAtStartupMinimized = _appSettings.LaunchAtStartupMinimized,
+            // Diagnostics
+            VerboseLogging = _appSettings.VerboseLogging
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
@@ -160,6 +162,8 @@ public class SettingsService : ISettingsService
             _appSettings.CloseToTray = data.CloseToTray;
             _appSettings.LaunchAtStartup = data.LaunchAtStartup;
             _appSettings.LaunchAtStartupMinimized = data.LaunchAtStartupMinimized;
+            // Diagnostics
+            _appSettings.VerboseLogging = data.VerboseLogging;
 
             // --- Migrations ---
             // v0 → v1: "Colorful avatars" and "Show delivery timestamps" used to be unused toggles
@@ -234,5 +238,7 @@ public class SettingsService : ISettingsService
         public bool CloseToTray { get; init; } = true;
         public bool LaunchAtStartup { get; init; }
         public bool LaunchAtStartupMinimized { get; init; }
+        // Diagnostics
+        public bool VerboseLogging { get; init; }
     }
 }

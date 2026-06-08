@@ -33,6 +33,13 @@ public class ContactResolverService : IContactResolverService
     {
         var contacts = await VCardParser.ParseFileAsync(vcfFilePath);
 
+        // Snapshot the prior photo arrays so a reload can hand back the SAME byte[] reference when the
+        // bytes are unchanged. GetAvatar's callers (tile AvatarBytes bindings, the decoded-bitmap
+        // cache in AvatarControl) key on reference equality; if every reload swapped in freshly
+        // parsed arrays, identical photos would rebind and re-decode, flashing the whole conversation
+        // list through blank avatars (B3). Reusing the reference makes an unchanged photo a no-op.
+        var previousAvatars = new Dictionary<string, byte[]?>(_avatarCache, StringComparer.OrdinalIgnoreCase);
+
         _nameCache.Clear();
         _avatarCache.Clear();
         var searchable = new List<ContactSearchResult>(contacts.Count);
@@ -45,12 +52,18 @@ public class ContactResolverService : IContactResolverService
             if (string.IsNullOrWhiteSpace(displayName))
                 continue;
 
+            // Resolved once per contact and reused across all its addresses below, so one contact's
+            // photo stays a single shared array (one decode) even spanning multiple phones/emails.
+            byte[]? photo = contact.Photo;
+            var photoResolved = false;
+
             foreach (var phone in contact.Phones)
             {
                 var normalized = NormalizeAddress(phone);
                 if (string.IsNullOrEmpty(normalized)) continue;
                 _nameCache.TryAdd(normalized, displayName);
-                _avatarCache.TryAdd(normalized, contact.Photo);
+                if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
+                _avatarCache.TryAdd(normalized, photo);
             }
 
             foreach (var email in contact.Emails)
@@ -58,11 +71,12 @@ public class ContactResolverService : IContactResolverService
                 var normalized = NormalizeAddress(email);
                 if (string.IsNullOrEmpty(normalized)) continue;
                 _nameCache.TryAdd(normalized, displayName);
-                _avatarCache.TryAdd(normalized, contact.Photo);
+                if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
+                _avatarCache.TryAdd(normalized, photo);
             }
 
             if (contact.Phones.Count > 0 || contact.Emails.Count > 0)
-                searchable.Add(new ContactSearchResult(displayName, contact.Phones, contact.Emails, contact.Photo));
+                searchable.Add(new ContactSearchResult(displayName, contact.Phones, contact.Emails, photo));
         }
 
         _allContacts = searchable;
@@ -110,6 +124,13 @@ public class ContactResolverService : IContactResolverService
         // the single-avatar initials only need to be meaningful for 1:1 chats.
         return addresses.Count == 1 ? GetAvatarInitials(addresses[0]) : string.Empty;
     }
+
+    // Returns the prior array when its bytes match the freshly parsed photo, so an unchanged contact
+    // photo keeps a stable reference across reloads (see LoadFromVCardAsync); otherwise the new array.
+    private static byte[]? StablePhoto(byte[]? incoming, byte[]? prior)
+        => incoming is not null && prior is not null && prior.AsSpan().SequenceEqual(incoming)
+            ? prior
+            : incoming;
 
     public byte[]? GetAvatar(string address)
     {
