@@ -1,7 +1,7 @@
 # MSIX removal (de-packaging cleanup)
 
 **Date:** 2026-06-08
-**Branch/commit:** `cleanup/remove-msix-rot`
+**Branch/commit:** `cleanup/remove-msix-rot` @ `003ed2c`
 
 ## Why
 
