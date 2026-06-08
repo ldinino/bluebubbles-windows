@@ -52,13 +52,7 @@ pubspeck.lock
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 
-#signing
 **/android/key.properties
-
-# WinUI3 MSIX packaging — keep the private signing key and built packages out of source control.
-# The public .cer is safe to share with testers; the .pfx (with private key) is not.
-/signing/*.pfx
-/AppPackages/
 
 # Built installers / portable zips (publish.ps1 output).
 /dist/

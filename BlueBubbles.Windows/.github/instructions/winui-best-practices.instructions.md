@@ -342,8 +342,8 @@ Alternatives:
 | Using `Windows.UI.Xaml` namespace | Use `Microsoft.UI.Xaml` for WinUI 3 |
 | Calling `Window.Current` | Not available in WinUI 3 -- pass window reference explicitly |
 | Using `CoreDispatcher` | Use `DispatcherQueue` instead |
-| `REGDB_E_CLASSNOTREG` error | Ensure Developer Mode is enabled, then re-register: run `winapp unregister` followed by `dotnet run` (or `winapp run <build-output>`) to refresh the loose-layout registration |
-| Stale package state after manifest changes | Run `winapp unregister`, then `dotnet run` -- using `winapp run --clean` additionally wipes `LocalState`/settings to test first-run behavior |
+| Toast click/reply not routing back to the app | The app is unpackaged — activation relies on `AppNotificationManager.Register()` (registers the COM activator in the registry at runtime) plus the static `AppInstance` key. Confirm `Register()` isn't throwing (the vendored `Microsoft.WindowsAppRuntime.Insights.Resource.dll` must sit next to the `.exe`) and that the `AppInstance` key field stays in static scope. |
+| Stale build / XAML not updating | Run a full clean build via `./build-and-run.ps1` (omit `-Fast`) — the WinUI XAML compiler's incremental build can silently keep a stale `.xbf`. |
 | XAML Designer crashes | Clean & rebuild; ensure platform matches (x64 vs AnyCPU) |
 | `{Binding}` not updating | Switch to `x:Bind` with `Mode=OneWay` or `Mode=TwoWay` |
 
@@ -351,7 +351,7 @@ Alternatives:
 
 ## 10. Validation
 
-Build & register the MSIX package -- see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+Validate by building and running unpackaged (`./build-and-run.ps1`) -- see **Build, Run & Deploy** in `AGENTS.md`.
 
 ### Verify
 

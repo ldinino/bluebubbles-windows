@@ -54,12 +54,8 @@ as malware) and disappears as downloads accumulate. To remove it up front you'd 
 signing**:
 
 - **Azure Trusted Signing** (~$10/month) — cheapest path to a verified publisher and a clean,
-  warning-free launch. Works with either this `.exe` or an MSIX.
+  warning-free launch.
 - **An OV/EV code-signing certificate** (~$200+/yr) — the traditional route.
 
 When you're ready for that, signing slots into `publish.ps1` after the Inno Setup step
 (`signtool sign /fd SHA256 /tr <timestamp-url> /td SHA256 …` against the produced `Setup.exe`).
-
-> A separate **MSIX** path also exists (`package.ps1` + the `Package.appxmanifest`) for Store-style
-> packaged distribution. It requires signing too (self-signed for testing, or a real cert for
-> public use). The unpackaged installer above is the recommended free option for GitHub.
