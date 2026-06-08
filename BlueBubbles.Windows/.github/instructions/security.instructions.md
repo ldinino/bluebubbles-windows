@@ -1,6 +1,6 @@
 ---
 description: 'Security requirements for secrets management, input validation, permissions, and secure coding'
-applyTo: '**/*.cs, **/*.appxmanifest'
+applyTo: '**/*.cs'
 ---
 
 # Security
@@ -13,15 +13,10 @@ These rules apply to **every feature and change**. They are not optional add-ons
 
 - **Never hard-code secrets** (API keys, passwords, connection strings) — use environment variables, Windows Credential Manager, or Azure Key Vault.
 - Validate and sanitize **all external input** (user input, file content, network responses).
-- Use `SecureString` or `PasswordVault` for sensitive data in memory when practical.
-- Follow the **principle of least privilege** — request only the permissions the app actually needs in `Package.appxmanifest`.
+- This app runs **unpackaged** (no package identity). Protect secrets at rest with **DPAPI** (`System.Security.Cryptography.ProtectedData`, scoped to `CurrentUser`) — see `CredentialService`. Do **not** use `PasswordVault`/`Windows.Security.Credentials`, which require package identity and throw when unpackaged.
+- Follow the **principle of least privilege** — the unpackaged app already runs full-trust, so guard sensitive operations in code rather than relying on a manifest capability model.
 - Keep NuGet packages up to date — run `dotnet list package --outdated` regularly.
-- Enable **code signing** for published MSIX packages. Use the `winapp` CLI rather than hand-rolling `signtool`:
-  - Generate a development certificate matching the manifest publisher: `winapp cert generate --manifest .\Package.appxmanifest --install`.
-  - Inspect a cert before signing: `winapp cert info .\devcert.pfx`.
-  - Sign an existing file: `winapp sign .\MyApp.msix --cert .\devcert.pfx`.
-  - Build + sign in one step: `winapp pack .\bin\<Platform>\Release\<TFM>\win-<rid> --cert .\devcert.pfx`.
-  - Production releases must be signed by a trusted certificate authority -- never ship the development cert.
+- The app is distributed **unsigned** via the Inno Setup installer (`publish.ps1`). There is no MSIX, no certificate, and no code-signing step — do not reintroduce one. (MSIX signing is what previously broke toast-notification activation.)
 - When using `HttpClient`, always validate TLS certificates and use HTTPS.
 - Never log sensitive data (PII, tokens, passwords).
 
@@ -34,7 +29,7 @@ These rules apply to **every feature and change**. They are not optional add-ons
 
 ## Validation
 
-- Build & register the MSIX package — see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+- Validate by building and running unpackaged (`./build-and-run.ps1`) — see **Build, Run & Deploy** in `AGENTS.md`.
 - Check for hard-coded secrets: search for `password`, `apikey`, `secret`, `connectionstring` in `.cs` files.
 
 ### Verification Checklist
@@ -49,7 +44,6 @@ These rules apply to **every feature and change**. They are not optional add-ons
 |---|---|---|
 | 1 | [.NET Security Best Practices](https://learn.microsoft.com/en-us/dotnet/standard/security/) | Any code handling credentials, tokens, or sensitive data |
 | 2 | [Secure coding guidelines for .NET](https://learn.microsoft.com/en-us/dotnet/standard/security/secure-coding-guidelines) | Input validation, exception handling, type safety |
-| 3 | [MSIX Security](https://learn.microsoft.com/en-us/windows/msix/msix-container) | Packaging, signing, or distribution changes |
-| 4 | [Package.appxmanifest capabilities](https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations) | Adding or modifying app capabilities/permissions |
+| 3 | [Data Protection API (DPAPI)](https://learn.microsoft.com/en-us/dotnet/standard/security/how-to-use-data-protection) | Encrypting secrets at rest for an unpackaged app |
 
 

@@ -35,7 +35,7 @@ These rules apply to **every feature and change** involving user-facing text. Th
 
 ## Validation
 
-- Build & register the MSIX package — see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+- Validate by building and running unpackaged (`./build-and-run.ps1`) — see **Build, Run & Deploy** in `AGENTS.md`.
 - Check for hard-coded strings: search `Content="` and `Text="` in `.xaml` files — replace with `x:Uid`.
 
 ### Verification Checklist

@@ -26,12 +26,6 @@
 
 .PARAMETER BuildOnly
     Build (and optionally test) without launching the app.
-
-.PARAMETER Packaged
-    Launch via the MSIX-packaged debug identity (requires Developer Mode). By
-    default the app launches *unpackaged*, matching how publish.ps1 ships it, so
-    identity-dependent code paths (toast activation, Package.Current, etc.) behave
-    the same in debug as in the installed build.
 #>
 [CmdletBinding()]
 param(
@@ -40,8 +34,7 @@ param(
 
     [switch]$Fast,
     [switch]$SkipTests,
-    [switch]$BuildOnly,
-    [switch]$Packaged
+    [switch]$BuildOnly
 )
 
 Set-StrictMode -Version Latest
@@ -59,18 +52,6 @@ $projectDirs = @(
     (Join-Path $root 'BlueBubbles.Core'),
     (Join-Path $root 'BlueBubbles.Windows.Tests')
 )
-
-# --- Pre-flight: Developer Mode (only the packaged launch needs it) ---
-if ($Packaged -and -not $BuildOnly) {
-    $devMode = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' `
-        -Name AllowDevelopmentWithoutDevLicense -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense
-    if ($devMode -ne 1) {
-        Write-Fail 'Windows Developer Mode is not enabled (required for -Packaged launch).'
-        Write-Fail 'Enable it in Settings > Privacy & Security > For developers.'
-        exit 1
-    }
-    Write-Ok 'Developer Mode is enabled.'
-}
 
 # --- Clean (default) or warn (-Fast) ---
 if ($Fast) {
@@ -107,18 +88,12 @@ if (-not $SkipTests) {
 }
 
 # --- Run ---
-# Default to the *unpackaged* profile so debug matches how publish.ps1 ships the
-# app (no package identity). Identity-dependent paths - toast activation,
-# Package.Current, etc. - then behave the same in debug as in the installed build.
-# Use -Packaged to launch under the MSIX debug identity instead.
+# The app always launches *unpackaged*, matching how publish.ps1 ships it (no
+# package identity). Identity-dependent paths - toast activation, single-instance
+# redirection, etc. - then behave the same in debug as in the installed build.
 if (-not $BuildOnly) {
-    if ($Packaged) {
-        $launchProfile = 'BlueBubbles.Windows (Package)'
-        Write-Step 'Launching BlueBubbles (MSIX packaged)...'
-    } else {
-        $launchProfile = 'BlueBubbles.Windows (Unpackaged)'
-        Write-Step 'Launching BlueBubbles (unpackaged - matches publish.ps1)...'
-    }
+    $launchProfile = 'BlueBubbles.Windows (Unpackaged)'
+    Write-Step 'Launching BlueBubbles (unpackaged - matches publish.ps1)...'
     & dotnet run --project $appProj -c $Configuration --launch-profile $launchProfile --no-build
     if ($LASTEXITCODE -ne 0) { Write-Fail 'Launch failed.'; exit $LASTEXITCODE }
 } else {
