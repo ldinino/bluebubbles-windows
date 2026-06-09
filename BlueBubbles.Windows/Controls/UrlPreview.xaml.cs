@@ -121,9 +121,21 @@ public sealed partial class UrlPreview : UserControl
     private void LoadRemoteHero(string uriString)
     {
         if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri)) return;
+        // ImageOpened/ImageFailed can land after this control was recycled to another preview
+        // (DetachImage bumps _generation), and a stale callback must not toggle the hero shown for
+        // the CURRENT content. Same guard as LoadLocalHeroAsync below.
+        var generation = Interlocked.Read(ref _generation);
         var bitmap = new BitmapImage();
-        bitmap.ImageOpened += (_, _) => HeroContainer.Visibility = Visibility.Visible;
-        bitmap.ImageFailed += (_, _) => HeroContainer.Visibility = Visibility.Collapsed;
+        bitmap.ImageOpened += (_, _) =>
+        {
+            if (Interlocked.Read(ref _generation) == generation)
+                HeroContainer.Visibility = Visibility.Visible;
+        };
+        bitmap.ImageFailed += (_, _) =>
+        {
+            if (Interlocked.Read(ref _generation) == generation)
+                HeroContainer.Visibility = Visibility.Collapsed;
+        };
         bitmap.UriSource = uri;
         HeroImage.Source = bitmap;
     }

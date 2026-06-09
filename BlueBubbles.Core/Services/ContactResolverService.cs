@@ -7,8 +7,11 @@ namespace BlueBubbles.Core.Services;
 public class ContactResolverService : IContactResolverService
 {
     private readonly AppSettings _settings;
-    private readonly ConcurrentDictionary<string, string> _nameCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte[]?> _avatarCache = new(StringComparer.OrdinalIgnoreCase);
+    // Replaced wholesale by LoadFromVCardAsync (build-then-swap), never mutated in place — so
+    // readers always see either the complete old cache or the complete new one, with no
+    // half-populated window mid-reload.
+    private volatile ConcurrentDictionary<string, string> _nameCache = new(StringComparer.OrdinalIgnoreCase);
+    private volatile ConcurrentDictionary<string, byte[]?> _avatarCache = new(StringComparer.OrdinalIgnoreCase);
     private volatile List<ContactSearchResult> _allContacts = [];
 
     public int ContactCount { get; private set; }
@@ -33,15 +36,16 @@ public class ContactResolverService : IContactResolverService
     {
         var contacts = await VCardParser.ParseFileAsync(vcfFilePath);
 
-        // Snapshot the prior photo arrays so a reload can hand back the SAME byte[] reference when the
-        // bytes are unchanged. GetAvatar's callers (tile AvatarBytes bindings, the decoded-bitmap
-        // cache in AvatarControl) key on reference equality; if every reload swapped in freshly
-        // parsed arrays, identical photos would rebind and re-decode, flashing the whole conversation
-        // list through blank avatars (B3). Reusing the reference makes an unchanged photo a no-op.
-        var previousAvatars = new Dictionary<string, byte[]?>(_avatarCache, StringComparer.OrdinalIgnoreCase);
-
-        _nameCache.Clear();
-        _avatarCache.Clear();
+        // Build replacement caches off to the side and swap them in at the end. Mutating the live
+        // dictionaries (clear + repopulate) would give concurrent readers a window of missing
+        // entries — blank avatars / raw phone numbers on any tile refresh that lands mid-reload,
+        // the same flicker class B3 fixed. The old cache stays fully readable until the swap, and
+        // doubles as the prior-photo lookup for StablePhoto: handing back the SAME byte[] reference
+        // when bytes are unchanged keeps the tile AvatarBytes bindings and the decoded-bitmap cache
+        // (both keyed on reference equality) treating an unchanged photo as a no-op (B3).
+        var previousAvatars = _avatarCache;
+        var newNames = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var newAvatars = new ConcurrentDictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
         var searchable = new List<ContactSearchResult>(contacts.Count);
 
         foreach (var contact in contacts)
@@ -61,24 +65,26 @@ public class ContactResolverService : IContactResolverService
             {
                 var normalized = NormalizeAddress(phone);
                 if (string.IsNullOrEmpty(normalized)) continue;
-                _nameCache.TryAdd(normalized, displayName);
+                newNames.TryAdd(normalized, displayName);
                 if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
-                _avatarCache.TryAdd(normalized, photo);
+                newAvatars.TryAdd(normalized, photo);
             }
 
             foreach (var email in contact.Emails)
             {
                 var normalized = NormalizeAddress(email);
                 if (string.IsNullOrEmpty(normalized)) continue;
-                _nameCache.TryAdd(normalized, displayName);
+                newNames.TryAdd(normalized, displayName);
                 if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
-                _avatarCache.TryAdd(normalized, photo);
+                newAvatars.TryAdd(normalized, photo);
             }
 
             if (contact.Phones.Count > 0 || contact.Emails.Count > 0)
                 searchable.Add(new ContactSearchResult(displayName, contact.Phones, contact.Emails, photo));
         }
 
+        _nameCache = newNames;
+        _avatarCache = newAvatars;
         _allContacts = searchable;
         ContactCount = contacts.Count;
         LoadedFilePath = vcfFilePath;

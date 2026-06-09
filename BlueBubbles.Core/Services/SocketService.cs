@@ -284,7 +284,11 @@ public partial class SocketService : ObservableObject, ISocketService
                 var resp = await _api.PingAsync();
                 if (resp.Status == 200) return;
             }
-            catch { /* fall through to restart */ }
+            catch (Exception ex)
+            {
+                // Fall through to restart, but keep the cause visible in diagnostics.
+                AppLog.Debug(LogCategory.Socket, $"Health ping failed ({ex.Message}); restarting");
+            }
         }
 
         AppLog.Info(LogCategory.Socket, "EnsureHealthy: connection unhealthy, restarting");

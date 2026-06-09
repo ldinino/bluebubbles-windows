@@ -44,9 +44,11 @@
       a no-op (no rebind, no re-decode); only genuinely changed/added photos decode. Regression tests
       `GetAvatar_KeepsSameReference_WhenReloadedPhotoUnchanged` /
       `..._ReturnsNewReference_WhenPhotoChanged` cover it.
-- [x] **Diagnostics retained:** `Debug`-level `[Ui]` avatar tracing + the **Verbose logging** toggle
-      in *Settings > About > Diagnostics* (persisted; raises `AppLog.MinLevel` to `Debug`) stay in
-      for future investigation. Off by default.
+- [x] **Diagnostics retained (dormant):** `Debug`-level `[Ui]` avatar tracing stays in the code but
+      is zero-cost (guarded by `AppLog.IsEnabled`). The **Verbose logging** toggle is wired but
+      **hidden** (`Visibility="Collapsed"` in `AboutSettingsPage.xaml`), and startup deliberately
+      does not apply the persisted flag. To re-light: un-hide the toggle (flipping it sets
+      `AppLog.MinLevel` live); see the note in `App.OnLaunched` for persisting across launches.
 
 #### B4. Installer doesn't close the running app during update
 - [x] Installing a new version over a running instance doesn't terminate the old app — the installer
@@ -57,6 +59,51 @@
       (mirrors the existing `[UninstallRun]` kill), so upgrades and `/VERYSILENT` runs apply cleanly
       (`installer/BlueBubbles.iss`).
 - [x] **Unblocks U1 (auto-updater):** an unattended update no longer hangs on a manual close.
+
+---
+
+## DP — Debug-pass fixes (0.20.3)
+
+Full-project debug audit (2026-06-09): three parallel deep audits (Core services, WinUI layer,
+build/release/tests/docs), with key claims re-verified against the code and the upstream Flutter
+source. B1–B4 and all previously cleared clusters checked out as genuinely implemented. Fixed:
+
+#### DP1. Contact reload could blank avatars/names mid-reload
+- [x] `LoadFromVCardAsync` cleared the live name/avatar caches and repopulated them in place, so a
+      tile refresh landing mid-reload read missing entries (blank avatar / raw phone number) — the
+      same flicker class B3 fixed, through a different window. Now builds replacement dictionaries
+      and swaps them in atomically (`ContactResolverService.cs`); the `StablePhoto` reference reuse
+      is unchanged.
+
+#### DP2. Link-preview hero images missed the stale-callback guard
+- [x] `UrlPreview.LoadRemoteHero`'s `ImageOpened`/`ImageFailed` handlers toggled hero visibility
+      with no generation check, so a stale callback on a recycled card could show/hide the wrong
+      hero. Now generation-guarded, matching `LoadLocalHeroAsync`.
+
+#### DP3. arm64 publish footgun
+- [x] `publish.ps1 -Platform arm64` built silently despite S1 (ships the x64 Insights DLL ->
+      broken toast activation, uncatchable without ARM hardware). Now blocked behind a new
+      `-AcknowledgeBroken` switch; `INSTALL.md` no longer advertises the arm64 build.
+
+#### DP4. Silent failures were undiagnosable
+- [x] Logged the three silent `catch { }`s: failed server mark-read/unread (`ChatsService`, Warn),
+      server-info capability refresh (`SyncService`, Debug), health-ping failure before restart
+      (`SocketService`, Debug).
+
+#### DP5. Small leaks / doc rot
+- [x] Dispose the pasted `SoftwareBitmap` deterministically (`MessageComposer`).
+- [x] CLAUDE.md: removed the stale hardcoded version; the Flutter protocol reference now points at
+      the upstream repo (the Dart source is no longer vendored here); private-API rule sharpened
+      (multipart/react/edit/unsend legitimately send **no** `method` field — matches the Flutter
+      wire format, verified upstream).
+- [x] `App.xaml.cs` comment claimed passwords come from PasswordVault (a forbidden
+      package-identity API) — now correctly says DPAPI `CredentialService`.
+
+**Audit false-positives (recorded so nobody "fixes" them later):**
+`SendMultipartAsync`/`SendTapbackAsync` sending no `method` field matches the Flutter wire format
+exactly (those endpoints are private-API-only server-side). The ConversationListPage deep-link
+watch is properly guarded (permanent page; `StopDeepLinkWatch` re-entry + 10 s timeout).
+`SettingsViewModel`'s `AppLog.EntryAdded` subscription is safe (DI singleton by design).
 
 ---
 
@@ -87,6 +134,11 @@ Only once the core featureset is confidently nailed down — not a near-term pri
       cross-compile would ship it beside the arm64 exe and re-trigger the toast-activation
       failure fixed in ca6d3e6 — uncatchable without arm64 hardware. To enable: re-vendor the
       arm64 copy of that DLL (per-RID) and validate the installed build on a real ARM machine.
+
+### T1. (Backlog) Unit-test coverage gaps
+14 services have no dedicated test file (SocketService, NotificationService, FirebaseService,
+AttachmentCacheService, LinkPreviewService, ScheduledMessageService, …). Mostly hard-to-test
+network/UI-thread code; add targeted seams opportunistically when one of them next regresses.
 
 > **Not doing:** code-signing (Azure Trusted Signing / SmartScreen prompt). Explicitly out of scope.
 
