@@ -8,6 +8,9 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RollForward>LatestMajor</RollForward>
+
+    <!-- CS0067: test stubs must declare interface events they never raise. -->
+    <NoWarn>$(NoWarn);CS0067</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
