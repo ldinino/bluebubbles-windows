@@ -16,13 +16,20 @@
     how to get the installer (winget install JRSoftware.InnoSetup).
 
 .PARAMETER Platform
-    x64 (default) or arm64. Match the target machine.
+    x64 (default) or arm64. NOTE: arm64 is currently BROKEN (see -AcknowledgeBroken) and is
+    blocked unless you opt in.
 
 .PARAMETER Configuration
     Build configuration. Default: Release.
 
 .PARAMETER SkipPublish
     Reuse an existing publish folder (just rebuild the installer).
+
+.PARAMETER AcknowledgeBroken
+    Required to publish arm64. The vendored Runtime\Microsoft.WindowsAppRuntime.Insights.Resource.dll
+    is an x64 binary copied next to the exe unconditionally, so an arm64 build ships with broken
+    toast activation (the failure ca6d3e6 fixed) and there is no ARM hardware here to catch it.
+    See PUNCHLIST item S1 for what re-enabling arm64 actually requires.
 #>
 [CmdletBinding()]
 param(
@@ -32,7 +39,9 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
 
-    [switch]$SkipPublish
+    [switch]$SkipPublish,
+
+    [switch]$AcknowledgeBroken
 )
 
 Set-StrictMode -Version Latest
@@ -58,6 +67,19 @@ $version = (Select-Xml -Path $proj -XPath '/Project/PropertyGroup/Version' |
             Select-Object -First 1).Node.InnerText
 if (-not $version) { Write-Fail 'Could not read <Version> from the csproj.'; exit 1 }
 Write-Ok "Version: $version  Platform: $Platform"
+
+# --- arm64 guard (PUNCHLIST S1) ---
+# The vendored Runtime\Microsoft.WindowsAppRuntime.Insights.Resource.dll is x64-only and is
+# copied next to the exe unconditionally, so an arm64 publish LOOKS fine but ships with broken
+# toast activation (the silent failure ca6d3e6 fixed) - uncatchable without ARM hardware.
+# Block it unless explicitly acknowledged; re-enabling for real means re-vendoring the arm64
+# copy of that DLL per-RID and validating on an actual ARM machine.
+if ($Platform -eq 'arm64' -and -not $AcknowledgeBroken) {
+    Write-Fail 'arm64 publishing is blocked: it would ship the vendored x64 Insights DLL,'
+    Write-Fail 'silently breaking toast activation on ARM devices (see PUNCHLIST item S1).'
+    Write-Fail 'If you are experimenting anyway, re-run with -AcknowledgeBroken.'
+    exit 1
+}
 
 # --- 1. Publish (unpackaged, self-contained) ---
 if (-not $SkipPublish) {

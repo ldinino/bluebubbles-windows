@@ -198,7 +198,9 @@ public sealed partial class MessageComposer : UserControl
         // Re-encode to PNG so the file is a valid image the server recognises, regardless of the
         // clipboard's source format.
         var decoder = await BitmapDecoder.CreateAsync(stream);
-        var bitmap = await decoder.GetSoftwareBitmapAsync(
+        // SoftwareBitmap holds unmanaged pixel memory; dispose deterministically rather than
+        // leaving a full-resolution frame to the finalizer on every paste.
+        using var bitmap = await decoder.GetSoftwareBitmapAsync(
             BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
 
         var dir = Path.Combine(

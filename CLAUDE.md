@@ -12,8 +12,8 @@ BlueBubbles Flutter app. It talks to a **BlueBubbles macOS server** over **REST 
 
 Authoritative tech facts live in `BlueBubbles.Windows/BlueBubbles.Windows.csproj` — read them
 there, don't hardcode values that drift: TFM `net8.0-windows10.0.26100.0`, min Windows
-10.0.19041, `<Platforms>x86;x64;ARM64</Platforms>`, and the single `<Version>` (currently
-`0.20.1`).
+10.0.19041, `<Platforms>x86;x64;ARM64</Platforms>`, and the single `<Version>` (read it from the
+csproj; don't trust any version number written in a doc, including this one).
 
 ## Architecture
 
@@ -44,16 +44,22 @@ events are marshaled onto the UI thread.
   `BlueBubbles.Windows.pri`, and the installed app crashes instantly on launch
   (`0xc000027b`). A green build does **not** prove launch — actually run the exe when touching
   build/packaging config.
-- **Private API is the only API.** Every outgoing message sends `method: "private-api"`
-  unconditionally. Never fall back to `"apple-script"`, never reintroduce the six Private-API
-  enable booleans that were collapsed in Phase 6.5. The server's `private_api` flag is stored
-  as `ServerPrivateAPI` for capability warnings only, not for method selection. Preferences like
-  `PrivateSendTypingIndicators` / `PrivateMarkChatAsRead` control *behavior*, not *method*.
-- **Flutter source is a protocol reference only.** The Flutter app (in this repo) tells you
-  *what* the server expects — endpoint paths, JSON field names, socket events, auth. Copy that
-  faithfully. Do **not** copy its client architecture, tangled settings, conditional logic, or
-  UX; build the WinUI 3 side from scratch with proper .NET patterns. When Flutter has complexity,
-  ask whether it's protocol-required or just client baggage (usually baggage).
+- **Private API is the only API.** On endpoints that accept a `method` field (`message/text`,
+  `message/attachment`, `chat/new`, scheduled messages) we send `method: "private-api"`
+  unconditionally — never fall back to `"apple-script"`, never reintroduce the six Private-API
+  enable booleans that were collapsed in Phase 6.5. Endpoints that are private-API-only
+  server-side (`message/multipart`, `message/react`, edit, unsend) take **no** method field at
+  all — matching the Flutter wire format; do **not** "fix" them by adding one. The server's
+  `private_api` flag is stored as `ServerPrivateAPI` for capability warnings only, not for
+  method selection. Preferences like `PrivateSendTypingIndicators` / `PrivateMarkChatAsRead`
+  control *behavior*, not *method*.
+- **Flutter source is a protocol reference only.** The upstream Flutter app
+  (`github.com/BlueBubblesApp/bluebubbles-app`, esp. `lib/services/network/http_service.dart` —
+  it is **not** vendored in this repo) tells you *what* the server expects — endpoint paths,
+  JSON field names, socket events, auth. Copy that faithfully. Do **not** copy its client
+  architecture, tangled settings, conditional logic, or UX; build the WinUI 3 side from scratch
+  with proper .NET patterns. When Flutter has complexity, ask whether it's protocol-required or
+  just client baggage (usually baggage).
 - **Async image loads in recycled WinUI containers need a generation counter.** Any
   `BitmapImage.SetSourceAsync` inside a control a `ListView` can recycle must clear the source
   (`= null`) and bump a generation counter before the await, then check it after — otherwise a

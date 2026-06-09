@@ -428,7 +428,14 @@ public class ChatsService : IChatsService
                 else
                     await _api.MarkChatUnreadAsync(chatGuid);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Local read state is already flipped; only the server-side receipt was lost, so
+                // don't fail the operation — but leave a trace, or "read here / unread for the
+                // sender" mismatches are undiagnosable.
+                AppLog.Warn(LogCategory.Api,
+                    $"Mark chat {(read ? "read" : "unread")} failed for {chatGuid}: {ex.Message}");
+            }
         }
     }
 

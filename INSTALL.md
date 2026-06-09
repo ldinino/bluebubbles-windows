@@ -27,9 +27,11 @@ on a clean machine with nothing pre-installed.
 
 ```powershell
 # from the repo root
-.\publish.ps1                  # x64 (default)
-.\publish.ps1 -Platform arm64  # for ARM machines
+.\publish.ps1                  # x64 (the only supported target)
 ```
+
+> arm64 publishing is intentionally blocked: the vendored `Insights.Resource.dll` is x64-only,
+> so an arm64 build would ship with silently broken toast activation (see PUNCHLIST item S1).
 
 This publishes the app unpackaged + self-contained and wraps it with **Inno Setup** into
 `dist\BlueBubbles-Setup-<version>-<arch>.exe`. Inno Setup is required:

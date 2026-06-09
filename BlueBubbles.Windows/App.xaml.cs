@@ -50,7 +50,8 @@ public partial class App : Application
         // AppSettings.VerboseLogging into AppLog.MinLevel here.
         var appSettings = Services.GetRequiredService<AppSettings>();
 
-        // Restore password from PasswordVault into ServerConfiguration
+        // Restore the saved server password (DPAPI-encrypted file via CredentialService — NOT
+        // PasswordVault, which needs package identity) into ServerConfiguration.
         var credentials = Services.GetRequiredService<ICredentialService>();
         var serverConfig = Services.GetRequiredService<ServerConfiguration>();
         var savedPassword = credentials.GetPassword();

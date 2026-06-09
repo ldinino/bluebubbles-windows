@@ -228,7 +228,12 @@ public class SyncService : ISyncService
             if (info.Status == 200 && info.Data is not null)
                 _appSettings.ServerPrivateAPI = info.Data.PrivateApi;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Best-effort capability refresh; sync proceeds either way. Trace it so a stale
+            // ServerPrivateAPI flag can be tied back to this fetch failing.
+            AppLog.Debug(LogCategory.Sync, $"Server info refresh skipped: {ex.Message}");
+        }
         try
         {
             long lastSyncedRowId = startRowId;
