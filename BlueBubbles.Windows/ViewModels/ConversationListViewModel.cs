@@ -223,11 +223,10 @@ public partial class ConversationListViewModel : ObservableObject
         await _chatsService.UnarchiveChatAsync(chatGuid);
     }
 
-    [RelayCommand]
-    private async Task DeleteAsync(string chatGuid)
-    {
-        await _chatsService.DeleteChatAsync(chatGuid);
-    }
+    /// <summary>Deletes the chat on the server, then locally. Returns false — with local state left
+    /// untouched — when the server call fails, so the page can surface the error. A plain method
+    /// rather than a [RelayCommand] because the caller needs the result.</summary>
+    public Task<bool> DeleteChatAsync(string chatGuid) => _chatsService.DeleteChatAsync(chatGuid);
 
     [RelayCommand]
     private async Task ReorderPinsAsync(List<string> chatGuids)

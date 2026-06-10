@@ -535,7 +535,7 @@ internal class MockChatsService : IChatsService
     public Task ReorderPinsAsync(List<string> chatGuids) => Task.CompletedTask;
     public Task ArchiveChatAsync(string chatGuid) => Task.CompletedTask;
     public Task UnarchiveChatAsync(string chatGuid) => Task.CompletedTask;
-    public Task DeleteChatAsync(string chatGuid) => Task.CompletedTask;
+    public Task<bool> DeleteChatAsync(string chatGuid) => Task.FromResult(true);
     public Task<bool> RenameChatAsync(string chatGuid, string newName) => Task.FromResult(true);
     public Task ToggleMuteAsync(string chatGuid) => Task.CompletedTask;
     public Task<bool> AddParticipantAsync(string chatGuid, string address) => Task.FromResult(true);

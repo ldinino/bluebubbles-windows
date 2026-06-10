@@ -566,11 +566,29 @@ public class ChatsService : IChatsService
         await LoadChatsAsync();
     }
 
-    public async Task DeleteChatAsync(string chatGuid)
+    public async Task<bool> DeleteChatAsync(string chatGuid)
     {
+        // Server first: a local-only delete is undone by the next sync (the chat still exists
+        // server-side and gets re-pulled), so only touch the cache once the server has deleted.
+        try
+        {
+            var response = await _api.DeleteChatAsync(chatGuid);
+            if (response.Status is < 200 or >= 300)
+            {
+                AppLog.Warn(LogCategory.Api,
+                    $"Delete chat failed for {chatGuid}: server returned {response.Status}");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Api, $"Delete chat failed for {chatGuid}: {ex.Message}");
+            return false;
+        }
+
         await using var db = await _dbFactory.CreateDbContextAsync();
         var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
-        if (chat is null) return;
+        if (chat is null) return true;
 
         db.Chats.Remove(chat);
         await db.SaveChangesAsync();
@@ -581,6 +599,7 @@ public class ChatsService : IChatsService
         }
 
         ChatsChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     public async Task<bool> RenameChatAsync(string chatGuid, string newName)

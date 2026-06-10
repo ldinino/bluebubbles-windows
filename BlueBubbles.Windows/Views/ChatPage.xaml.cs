@@ -46,6 +46,7 @@ public sealed partial class ChatPage : Page
         _vm.NewMessageAppended += OnNewMessageAppended;
         _vm.PropertyChanged += OnViewModelPropertyChanged;
         _vm.ScrollToMessageRequested += OnScrollToMessageRequested;
+        _vm.DeleteMessageFailed += OnDeleteMessageFailed;
 
         Composer.SendRequested += OnSendRequested;
         Composer.AttachmentPicked += OnAttachmentPicked;
@@ -85,6 +86,7 @@ public sealed partial class ChatPage : Page
         _vm.NewMessageAppended -= OnNewMessageAppended;
         _vm.PropertyChanged -= OnViewModelPropertyChanged;
         _vm.ScrollToMessageRequested -= OnScrollToMessageRequested;
+        _vm.DeleteMessageFailed -= OnDeleteMessageFailed;
 
         Composer.SendRequested -= OnSendRequested;
         Composer.AttachmentPicked -= OnAttachmentPicked;
@@ -120,6 +122,7 @@ public sealed partial class ChatPage : Page
         HeaderAvatar.GroupInitials2 = _vm.GroupInitials2;
         HeaderAvatar.GroupAvatarImage1 = _vm.GroupAvatarBytes1;
         HeaderAvatar.GroupAvatarImage2 = _vm.GroupAvatarBytes2;
+        Composer.PlaceholderText = _vm.ComposerPlaceholder;
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -147,6 +150,9 @@ public sealed partial class ChatPage : Page
                     break;
                 case nameof(ChatViewModel.CanSend):
                     Composer.IsSendEnabled = _vm.CanSend;
+                    break;
+                case nameof(ChatViewModel.ComposerPlaceholder):
+                    Composer.PlaceholderText = _vm.ComposerPlaceholder;
                     break;
                 case nameof(ChatViewModel.MessageText):
                     if (Composer.Text != _vm.MessageText)
@@ -176,6 +182,18 @@ public sealed partial class ChatPage : Page
                     break;
             }
         });
+    }
+
+    private async void OnDeleteMessageFailed(object? sender, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Couldn't Delete Message",
+            Content = message,
+            CloseButtonText = "OK",
+            XamlRoot = XamlRoot
+        };
+        await dialog.ShowAsync();
     }
 
     private void OnReplyCancelled(object? sender, EventArgs e)

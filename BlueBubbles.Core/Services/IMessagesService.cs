@@ -29,9 +29,12 @@ public interface IMessagesService
     Task SaveIncomingMessageAsync(string chatGuid, Message message);
     Task UpdateMessageAsync(Message message);
 
-    /// <summary>Marks a message as locally deleted (sets <c>DateDeleted</c>) so it is hidden from the
-    /// chat view. This is a client-side delete only — it does not unsend the message on Apple's side.</summary>
-    Task SoftDeleteMessageAsync(string messageGuid);
+    /// <summary>Deletes the message on the server (which removes it from Messages on the Mac — note
+    /// this is a delete, not an unsend; the recipient's copy is unaffected), then soft-deletes it
+    /// locally (sets <c>DateDeleted</c>) so it is hidden from the chat view. Returns false — leaving
+    /// local state untouched — when the server call fails, since a local-only delete would be
+    /// overwritten by the next sync.</summary>
+    Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid);
     Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0);
 
     /// <summary>Loads all stored reactions (associated messages with a type) targeting any of the

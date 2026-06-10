@@ -186,6 +186,10 @@ public sealed partial class ConversationListPage : Page
         if (IsCtrlDown())
         {
             ClearSelection();
+            // ListViewBase applies its own click-selection of the clicked item *after* raising
+            // ItemClick, which would silently re-highlight the tile we just cleared (B5). Re-clear
+            // once the click pipeline has finished.
+            DispatcherQueue.TryEnqueue(ClearSelection);
             ConversationUnloadRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -224,8 +228,32 @@ public sealed partial class ConversationListPage : Page
 
     private async void OnDeleteClick(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuFlyoutItem { Tag: string guid })
-            await _vm.DeleteCommand.ExecuteAsync(guid);
+        if (sender is not MenuFlyoutItem { Tag: string guid }) return;
+
+        // Deleting now writes through to the server (it removes the chat from Messages on the
+        // Mac), so it's destructive and deserves a confirmation.
+        var confirm = new ContentDialog
+        {
+            Title = "Delete Conversation",
+            Content = "This conversation will be deleted from your devices. This can't be undone.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        if (!await _vm.DeleteChatAsync(guid))
+        {
+            var error = new ContentDialog
+            {
+                Title = "Couldn't Delete Conversation",
+                Content = "The conversation couldn't be deleted. Check the server connection and try again.",
+                CloseButtonText = "OK",
+                XamlRoot = XamlRoot
+            };
+            await error.ShowAsync();
+        }
     }
 
     private async void OnPinnedDragCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)

@@ -67,6 +67,10 @@ public partial class ChatViewModel : ObservableObject
     [ObservableProperty] public partial string MessageText { get; set; }
     [ObservableProperty] public partial bool CanSend { get; set; }
 
+    /// <summary>Composer placeholder reflecting the chat's transport: "iMessage", or a neutral
+    /// "Text Message" for SMS/RCS-forwarded chats (the server doesn't distinguish SMS from RCS).</summary>
+    [ObservableProperty] public partial string ComposerPlaceholder { get; set; }
+
     /// <summary>The message currently being replied to, or null when not in reply mode.</summary>
     [ObservableProperty] public partial ReplyDraft? ReplyingTo { get; set; }
 
@@ -76,6 +80,10 @@ public partial class ChatViewModel : ObservableObject
     public event EventHandler? MessagesLoaded;
     public event EventHandler? NewMessageAppended;
     public event EventHandler<string>? ScrollToMessageRequested;
+
+    /// <summary>Raised with a user-facing message when a delete couldn't reach the server, so the
+    /// page can surface it (the bubble/local row is intentionally left untouched on failure).</summary>
+    public event EventHandler<string>? DeleteMessageFailed;
 
     public ChatViewModel(
         IMessagesService messagesService,
@@ -106,6 +114,7 @@ public partial class ChatViewModel : ObservableObject
         GroupInitials1 = string.Empty;
         GroupInitials2 = string.Empty;
         MessageText = string.Empty;
+        ComposerPlaceholder = "iMessage";
 
         _actionHandler.NewMessageReceived += (s, e) => RunOnUI(() => OnNewMessageReceived(s, e));
         _actionHandler.MessageUpdated += (s, e) => RunOnUI(() => OnMessageUpdated(s, e));
@@ -179,6 +188,10 @@ public partial class ChatViewModel : ObservableObject
         GroupInitials2 = tile.GroupInitials2;
         GroupAvatarBytes1 = tile.GroupAvatarBytes1;
         GroupAvatarBytes2 = tile.GroupAvatarBytes2;
+        // Unknown/missing service is treated as iMessage (the overwhelmingly common case).
+        ComposerPlaceholder = string.IsNullOrEmpty(tile.Chat.Service) || tile.Chat.Service == "iMessage"
+            ? "iMessage"
+            : "Text Message";
         SetTypingBubble(false);
 
         ParticipantSummary = _isGroup
@@ -926,7 +939,7 @@ public partial class ChatViewModel : ObservableObject
         bubble.ScrollToMessageAction = guid => ScrollToMessageRequested?.Invoke(this, guid);
         bubble.StartEditAction = () => StartEdit(bubble);
         bubble.UnsendAction = () => Unsend(bubble);
-        bubble.DeleteAction = () => DeleteMessage(bubble);
+        bubble.DeleteAction = () => _ = DeleteMessageAsync(bubble);
         if (bubble.UrlPreview is not null && _linkPreview is not null)
             bubble.UrlPreview.Fetcher = _linkPreview.FetchAsync;
     }
@@ -1185,11 +1198,25 @@ public partial class ChatViewModel : ObservableObject
         }
     }
 
-    /// <summary>Locally deletes a message: removes its bubble(s) from the view and soft-deletes it in the DB.
-    /// This is a client-side delete (unlike unsend, it does not retract the message on Apple's side).</summary>
-    private void DeleteMessage(MessageBubbleViewModel bubble)
+    /// <summary>Deletes a message: server first — a local-only delete would be resurrected by the
+    /// next sync — then removes its bubble(s) and soft-deletes the local row. Unlike unsend, this
+    /// does not retract the message on the recipient's side. Never-sent drafts (temp- GUIDs) don't
+    /// exist server-side and are removed locally only. On server failure nothing is removed and
+    /// <see cref="DeleteMessageFailed"/> is raised instead.</summary>
+    private async Task DeleteMessageAsync(MessageBubbleViewModel bubble)
     {
         var guid = bubble.MessageGuid;
+
+        if (!string.IsNullOrEmpty(guid) && !guid.StartsWith("temp-", StringComparison.Ordinal))
+        {
+            if (string.IsNullOrEmpty(_chatGuid)) return;
+            if (!await _messagesService.DeleteMessageAsync(_chatGuid, guid))
+            {
+                DeleteMessageFailed?.Invoke(this,
+                    "The message couldn't be deleted. Check the server connection and try again.");
+                return;
+            }
+        }
 
         // A text+attachment message renders as two bubbles sharing one GUID — remove both.
         foreach (var b in Items.OfType<MessageBubbleViewModel>()
@@ -1198,9 +1225,6 @@ public partial class ChatViewModel : ObservableObject
 
         PruneOrphanDateSeparators();
         UpdateTails();
-
-        if (!string.IsNullOrEmpty(guid) && !guid.StartsWith("temp-", StringComparison.Ordinal))
-            _ = _messagesService.SoftDeleteMessageAsync(guid);
     }
 
     /// <summary>Removes any date separator left without a following message bubble (e.g. after a delete).</summary>

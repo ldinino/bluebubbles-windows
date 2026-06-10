@@ -188,7 +188,7 @@ public class DependencyInjectionTests
         public Task ReorderPinsAsync(List<string> chatGuids) => Task.CompletedTask;
         public Task ArchiveChatAsync(string chatGuid) => Task.CompletedTask;
         public Task UnarchiveChatAsync(string chatGuid) => Task.CompletedTask;
-        public Task DeleteChatAsync(string chatGuid) => Task.CompletedTask;
+        public Task<bool> DeleteChatAsync(string chatGuid) => Task.FromResult(true);
         public Task<bool> RenameChatAsync(string chatGuid, string newName) => Task.FromResult(true);
         public Task ToggleMuteAsync(string chatGuid) => Task.CompletedTask;
         public Task<bool> AddParticipantAsync(string chatGuid, string address) => Task.FromResult(true);
@@ -222,8 +222,8 @@ public class DependencyInjectionTests
             => Task.CompletedTask;
         public Task UpdateMessageAsync(BlueBubbles.Core.Models.Message message)
             => Task.CompletedTask;
-        public Task SoftDeleteMessageAsync(string messageGuid)
-            => Task.CompletedTask;
+        public Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid)
+            => Task.FromResult(true);
         public Task<List<BlueBubbles.Core.Data.Entities.AttachmentEntity>> LoadMediaAttachmentsAsync(
             int chatId, int limit = 50, int offset = 0)
             => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.AttachmentEntity>());
