@@ -253,12 +253,20 @@ public partial class NewChatViewModel : ObservableObject
         {
             var addresses = Recipients.Select(r => r.Address).ToList();
 
+            // A local participant match can be stale: the row lingers locally after the chat was
+            // deleted server-side (FindExistingChatGuid matches by address, not liveness). If the
+            // send is rejected, fall through to chat/new below, which creates/returns the
+            // canonical chat for these addresses — never silently swallow the failure.
             var existingGuid = _chatsService.FindExistingChatGuid(addresses);
             if (existingGuid is not null)
             {
-                await SendToExistingChatAsync(existingGuid, messageText, hasText);
-                ChatReady?.Invoke(this, existingGuid);
-                return;
+                if (await TrySendToExistingChatAsync(existingGuid, messageText, hasText))
+                {
+                    ChatReady?.Invoke(this, existingGuid);
+                    return;
+                }
+                AppLog.Warn(LogCategory.Api,
+                    $"Send to existing chat {existingGuid} rejected; retrying via chat/new");
             }
 
             var service = Recipients.Any(r => r.IsIMessageAvailable == false)
@@ -296,16 +304,48 @@ public partial class NewChatViewModel : ObservableObject
         }
     }
 
-    private async Task SendToExistingChatAsync(string chatGuid, string? messageText, bool hasText)
+    /// <summary>Sends the draft into an existing chat. Returns false — with nothing delivered —
+    /// when the server rejects the first send (typically a chat deleted server-side whose row
+    /// lingered locally), so the caller can retry via chat/new without double-sending. On success,
+    /// bumps the chat's sort date / resurrects it so the conversation surfaces in the list.</summary>
+    private async Task<bool> TrySendToExistingChatAsync(string chatGuid, string? messageText, bool hasText)
     {
+        var sentDate = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var anySent = false;
+
         if (hasText)
         {
             var tempGuid = $"temp-{Guid.NewGuid():N}";
-            await _api.SendTextAsync(chatGuid, tempGuid, messageText!, method: "private-api");
+            var response = await _api.SendTextAsync(chatGuid, tempGuid, messageText!, method: "private-api");
+            if (response.Status is < 200 or >= 300) return false;
+            sentDate = response.Data?.DateCreated ?? sentDate;
+            anySent = true;
         }
 
-        if (StagedAttachments.Count > 0)
-            await SendAttachmentsAsync(chatGuid);
+        foreach (var attachment in StagedAttachments.ToList())
+        {
+            var tempGuid = $"temp-{Guid.NewGuid():N}";
+            await using var stream = File.OpenRead(attachment.FilePath);
+            var response = await _api.SendAttachmentAsync(chatGuid, tempGuid, stream, attachment.FileName,
+                method: "private-api");
+            if (response.Status is < 200 or >= 300)
+            {
+                // Nothing delivered yet → safe to retry the whole draft via chat/new. After a
+                // partial delivery, retrying would duplicate what already went through — log and
+                // let the opened thread show what actually landed.
+                if (!anySent) return false;
+                AppLog.Warn(LogCategory.Api,
+                    $"Attachment '{attachment.FileName}' failed ({response.Status}) after partial send to {chatGuid}");
+                continue;
+            }
+            sentDate = response.Data?.DateCreated ?? sentDate;
+            anySent = true;
+        }
+
+        // The socket echo for self-sent REST messages isn't guaranteed; surface the conversation
+        // ourselves (bump LatestMessageDate, undo any soft delete, reload the list if needed).
+        await _chatsService.HandleNewMessageAsync(chatGuid, messageText, sentDate, isFromMe: true);
+        return true;
     }
 
     private async Task SendAttachmentsAsync(string chatGuid)
@@ -314,8 +354,11 @@ public partial class NewChatViewModel : ObservableObject
         {
             var tempGuid = $"temp-{Guid.NewGuid():N}";
             await using var stream = File.OpenRead(attachment.FilePath);
-            await _api.SendAttachmentAsync(chatGuid, tempGuid, stream, attachment.FileName,
+            var response = await _api.SendAttachmentAsync(chatGuid, tempGuid, stream, attachment.FileName,
                 method: "private-api");
+            if (response.Status is < 200 or >= 300)
+                AppLog.Warn(LogCategory.Api,
+                    $"Attachment '{attachment.FileName}' failed ({response.Status}) for new chat {chatGuid}");
         }
     }
 
