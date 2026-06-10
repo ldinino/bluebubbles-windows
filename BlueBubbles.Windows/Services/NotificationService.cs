@@ -169,7 +169,10 @@ internal sealed class NotificationService : INotificationService
     /// toast tag/group are truncated and can't be used to address the send.</summary>
     private static void AddInlineActions(AppNotificationBuilder builder, NewMessageNotification n)
     {
-        builder.AddTextBox(ReplyInputId, "Reply", string.Empty);
+        // The reply box is rendered by the Windows shell: Enter inserts a newline and Ctrl+Enter
+        // activates the input-bound send button. That mapping is fixed by the OS (no toast-schema
+        // or AppNotificationBuilder control over it), so the placeholder advertises the shortcut.
+        builder.AddTextBox(ReplyInputId, "Reply (Ctrl+Enter to send)", string.Empty);
         builder.AddButton(new AppNotificationButton("Send")
             .AddArgument(ActionKey, ActionReply)
             .AddArgument(ChatGuidKey, n.ChatGuid)
