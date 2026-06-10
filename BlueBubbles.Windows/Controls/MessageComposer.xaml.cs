@@ -30,6 +30,12 @@ public sealed partial class MessageComposer : UserControl
         set => InputBox.Text = value;
     }
 
+    public string PlaceholderText
+    {
+        get => InputBox.PlaceholderText;
+        set => InputBox.PlaceholderText = value;
+    }
+
     public bool IsSendEnabled
     {
         get => SendButton.IsEnabled;

@@ -685,7 +685,7 @@ public sealed partial class ChatBubble : UserControl
         var dialog = new ContentDialog
         {
             Title = "Delete Message",
-            Content = "This message will be deleted from this device. This can't be undone.",
+            Content = "This message will be deleted from your devices. This can't be undone.",
             PrimaryButtonText = "Delete",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,

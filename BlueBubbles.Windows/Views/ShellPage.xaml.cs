@@ -221,8 +221,34 @@ public sealed partial class ShellPage : Page
         });
     }
 
-    private void OnNewChatRequested(object? sender, EventArgs e)
+    private async void OnNewChatRequested(object? sender, EventArgs e)
     {
+        // Already drafting: reuse the page in place instead of stacking another NewChatPage on the
+        // back stack (B8 — each extra Navigate cost the user one Back press). If the draft holds
+        // anything, confirm before wiping it.
+        if (ChatFrame.Content is NewChatPage existing)
+        {
+            EmptyState.Visibility = Visibility.Collapsed;
+            ChatFrame.Visibility = Visibility.Visible;
+            ShowDetailPane();
+
+            if (existing.HasDraftContent)
+            {
+                var dialog = new ContentDialog
+                {
+                    Title = "Discard draft?",
+                    Content = "Starting a new message will discard the recipients and text you've entered.",
+                    PrimaryButtonText = "Discard",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Close,
+                    XamlRoot = XamlRoot
+                };
+                if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+                existing.ResetDraft();
+            }
+            return;
+        }
+
         _hadContentBeforeSettings = ChatFrame.Content is not null;
         EmptyState.Visibility = Visibility.Collapsed;
         ChatFrame.Visibility = Visibility.Visible;

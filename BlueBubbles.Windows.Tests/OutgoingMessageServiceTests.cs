@@ -231,6 +231,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Exception? ThrowOnSendText { get; set; }
     public string? LastMethod { get; private set; }
     public Func<string, Task<ApiResponse<Chat>>>? GetChatFunc { get; set; }
+    public Func<string, Task<ApiResponse<JsonElement>>>? DeleteChatFunc { get; set; }
+    public Func<string, string, Task<ApiResponse<JsonElement>>>? DeleteMessageFunc { get; set; }
 
     internal static Message MockMessage(string guid, string? text = null) =>
         new(null, guid, null, null, text, null, null, 0,
@@ -286,7 +288,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Chat>> CreateChatAsync(List<string> addresses, string? message, string service, string method = "private-api", CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Chat>> UpdateChatAsync(string guid, string displayName, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> DeleteChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteChatAsync(string guid, CancellationToken ct = default) =>
+        DeleteChatFunc is not null ? DeleteChatFunc(guid) : throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> MarkChatReadAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> MarkChatUnreadAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetChatIconAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
@@ -295,7 +298,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Task<ApiResponse<Chat>> AddParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Chat>> RemoveParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> LeaveChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) =>
+        DeleteMessageFunc is not null ? DeleteMessageFunc(chatGuid, messageGuid) : throw new NotImplementedException();
     public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Message>> GetMessageAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetEmbeddedMediaAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();

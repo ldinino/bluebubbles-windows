@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
@@ -243,18 +244,57 @@ public class ChatsServiceTests
     }
 
     [Fact]
-    public async Task DeleteChatAsync_RemovesFromDbAndList()
+    public async Task DeleteChatAsync_CallsServer_ThenRemovesFromDbAndList()
     {
-        var (svc, factory) = CreateService();
+        var (svc, factory, api) = CreateServiceWithApi();
+        string? deletedGuid = null;
+        api.DeleteChatFunc = guid =>
+        {
+            deletedGuid = guid;
+            return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null));
+        };
         await SeedChat(factory, "chat1", latestDate: 1000);
         await svc.LoadChatsAsync();
 
-        await svc.DeleteChatAsync("chat1");
+        Assert.True(await svc.DeleteChatAsync("chat1"));
 
+        Assert.Equal("chat1", deletedGuid);
         Assert.Empty(svc.Chats);
 
         using var db = factory.CreateDbContext();
         Assert.Empty(db.Chats);
+    }
+
+    [Fact]
+    public async Task DeleteChatAsync_ServerError_LeavesLocalStateUntouched()
+    {
+        // A local-only delete would just be re-pulled by the next sync, so a failed server call
+        // must leave the cache alone and report failure.
+        var (svc, factory, api) = CreateServiceWithApi();
+        api.DeleteChatFunc = _ => Task.FromResult(new ApiResponse<JsonElement>(500, "error", default, null));
+        await SeedChat(factory, "chat1", latestDate: 1000);
+        await svc.LoadChatsAsync();
+
+        Assert.False(await svc.DeleteChatAsync("chat1"));
+
+        Assert.Single(svc.Chats);
+        using var db = factory.CreateDbContext();
+        Assert.Single(db.Chats);
+    }
+
+    [Fact]
+    public async Task DeleteChatAsync_ServerUnreachable_LeavesLocalStateUntouched()
+    {
+        var (svc, factory, api) = CreateServiceWithApi();
+        api.DeleteChatFunc = _ => throw new HttpRequestException("offline");
+        await SeedChat(factory, "chat1", latestDate: 1000);
+        await svc.LoadChatsAsync();
+
+        Assert.False(await svc.DeleteChatAsync("chat1"));
+
+        Assert.Single(svc.Chats);
+        using var db = factory.CreateDbContext();
+        Assert.Single(db.Chats);
     }
 
     [Fact]

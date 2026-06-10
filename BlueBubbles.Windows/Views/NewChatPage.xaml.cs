@@ -47,6 +47,22 @@ public sealed partial class NewChatPage : Page
         RecipientSearchBox.Focus(FocusState.Programmatic);
     }
 
+    /// <summary>True when the draft holds anything the user could lose (recipients, staged
+    /// attachments, or composer text). Partial search-box text doesn't count.</summary>
+    public bool HasDraftContent =>
+        _vm.Recipients.Count > 0
+        || _vm.StagedAttachments.Count > 0
+        || !string.IsNullOrWhiteSpace(Composer.Text);
+
+    /// <summary>Clears the draft in place (recipients, attachments, search text, composer text) so a
+    /// repeated "New message" click reuses this page instead of stacking another instance (B8).</summary>
+    public void ResetDraft()
+    {
+        _vm.Reset();
+        Composer.Text = string.Empty;
+        RecipientSearchBox.Focus(FocusState.Programmatic);
+    }
+
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
@@ -92,6 +108,13 @@ public sealed partial class NewChatPage : Page
                 case nameof(NewChatViewModel.ShowManualAddOption):
                 case nameof(NewChatViewModel.ManualAddLabel):
                     UpdateManualAddVisibility();
+                    break;
+
+                // The search box only pushes text *into* the VM (OnRecipientSearchTextChanged);
+                // mirror VM resets (e.g. AddRecipient clearing the query) back into the TextBox.
+                case nameof(NewChatViewModel.SearchQuery):
+                    if (RecipientSearchBox.Text != _vm.SearchQuery)
+                        RecipientSearchBox.Text = _vm.SearchQuery;
                     break;
             }
         });

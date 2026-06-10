@@ -345,14 +345,32 @@ public class MessagesService : IMessagesService
         }
     }
 
-    public async Task SoftDeleteMessageAsync(string messageGuid)
+    public async Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid)
     {
+        // Server first: a local-only soft delete is overwritten by the next sync (the server's
+        // copy still has DateDeleted = null), so only touch the cache once the server has deleted.
+        try
+        {
+            var response = await _api.DeleteMessageFromChatAsync(chatGuid, messageGuid);
+            if (response.Status is < 200 or >= 300)
+            {
+                AppLog.Warn(LogCategory.Api,
+                    $"Delete message failed for {messageGuid}: server returned {response.Status}");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Api, $"Delete message failed for {messageGuid}: {ex.Message}");
+            return false;
+        }
+
         await _saveLock.WaitAsync();
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
             var entity = await db.Messages.FirstOrDefaultAsync(m => m.Guid == messageGuid);
-            if (entity is null) return;
+            if (entity is null) return true;
 
             entity.DateDeleted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             await db.SaveChangesAsync();
@@ -361,6 +379,7 @@ public class MessagesService : IMessagesService
         {
             _saveLock.Release();
         }
+        return true;
     }
 
     public async Task<List<MessageEntity>> LoadReactionsAsync(IReadOnlyCollection<string> parentGuids)

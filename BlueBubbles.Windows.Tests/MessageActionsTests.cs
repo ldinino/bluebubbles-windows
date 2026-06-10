@@ -166,15 +166,23 @@ public class MessagesServiceEditTests
     }
 
     [Fact]
-    public async Task SoftDelete_SetsDateDeleted_AndHidesFromLoad()
+    public async Task Delete_CallsServer_SetsDateDeleted_AndHidesFromLoad()
     {
         var factory = TestDbContextFactory.Create();
-        var svc = CreateService(factory);
+        var api = new MockApiService();
+        (string chatGuid, string messageGuid)? deleted = null;
+        api.DeleteMessageFunc = (chatGuid, messageGuid) =>
+        {
+            deleted = (chatGuid, messageGuid);
+            return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null));
+        };
+        var svc = new MessagesService(factory, api);
         var chat = SeedChat(factory);
 
         await svc.SaveIncomingMessageAsync(chat.Guid, BaseMessage("m4", "delete me", true, 1000));
-        await svc.SoftDeleteMessageAsync("m4");
+        Assert.True(await svc.DeleteMessageAsync(chat.Guid, "m4"));
 
+        Assert.Equal((chat.Guid, "m4"), deleted);
         Assert.Empty(await svc.LoadMessagesAsync(chat.Id));
 
         using var db = factory.CreateDbContext();
@@ -182,13 +190,41 @@ public class MessagesServiceEditTests
     }
 
     [Fact]
-    public async Task SoftDelete_UnknownGuid_IsNoOp()
+    public async Task Delete_ServerFailure_LeavesMessageUntouched()
+    {
+        // A local-only soft delete is overwritten by the next sync, so a failed server call must
+        // leave the row alone and report failure.
+        var factory = TestDbContextFactory.Create();
+        var api = new MockApiService
+        {
+            DeleteMessageFunc = (_, _) =>
+                Task.FromResult(new ApiResponse<JsonElement>(500, "error", default, null))
+        };
+        var svc = new MessagesService(factory, api);
+        var chat = SeedChat(factory);
+
+        await svc.SaveIncomingMessageAsync(chat.Guid, BaseMessage("m4", "keep me", true, 1000));
+        Assert.False(await svc.DeleteMessageAsync(chat.Guid, "m4"));
+
+        Assert.Single(await svc.LoadMessagesAsync(chat.Id));
+
+        using var db = factory.CreateDbContext();
+        Assert.Null(db.Messages.First(m => m.Guid == "m4").DateDeleted);
+    }
+
+    [Fact]
+    public async Task Delete_UnknownGuid_StillSucceedsWithoutLocalRow()
     {
         var factory = TestDbContextFactory.Create();
-        var svc = CreateService(factory);
-        SeedChat(factory);
+        var api = new MockApiService
+        {
+            DeleteMessageFunc = (_, _) =>
+                Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null))
+        };
+        var svc = new MessagesService(factory, api);
+        var chat = SeedChat(factory);
 
-        // Should not throw.
-        await svc.SoftDeleteMessageAsync("does-not-exist");
+        // Server says deleted, no matching local row — should not throw.
+        Assert.True(await svc.DeleteMessageAsync(chat.Guid, "does-not-exist"));
     }
 }

@@ -398,10 +398,10 @@ internal class RecordingMessagesService : IMessagesService
 
     public List<string> DeletedGuids { get; } = [];
 
-    public Task SoftDeleteMessageAsync(string messageGuid)
+    public Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid)
     {
         DeletedGuids.Add(messageGuid);
-        return Task.CompletedTask;
+        return Task.FromResult(true);
     }
 
     public Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0)
@@ -464,7 +464,7 @@ internal class RecordingChatsService : IChatsService
     public Task ReorderPinsAsync(List<string> chatGuids) => Task.CompletedTask;
     public Task ArchiveChatAsync(string chatGuid) => Task.CompletedTask;
     public Task UnarchiveChatAsync(string chatGuid) => Task.CompletedTask;
-    public Task DeleteChatAsync(string chatGuid) => Task.CompletedTask;
+    public Task<bool> DeleteChatAsync(string chatGuid) => Task.FromResult(true);
     public Task<bool> RenameChatAsync(string chatGuid, string newName) => Task.FromResult(true);
     public Task ToggleMuteAsync(string chatGuid) => Task.CompletedTask;
     public Task<bool> AddParticipantAsync(string chatGuid, string address) => Task.FromResult(true);

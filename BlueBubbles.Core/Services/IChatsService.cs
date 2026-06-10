@@ -25,7 +25,11 @@ public interface IChatsService
     Task ReorderPinsAsync(List<string> chatGuids);
     Task ArchiveChatAsync(string chatGuid);
     Task UnarchiveChatAsync(string chatGuid);
-    Task DeleteChatAsync(string chatGuid);
+
+    /// <summary>Deletes the chat on the server (which removes it from Messages on the Mac), then
+    /// removes it from the local cache. Returns false — leaving local state untouched — when the
+    /// server call fails, since a local-only delete would just be re-pulled by the next sync.</summary>
+    Task<bool> DeleteChatAsync(string chatGuid);
 
     string? FindExistingChatGuid(IEnumerable<string> addresses);
     Task EnsureChatInDatabaseAsync(Chat chat, string? messageText);

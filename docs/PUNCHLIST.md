@@ -25,57 +25,26 @@
 > `catch { }`s now logged (`ChatsService`, `SyncService`, `SocketService`); small leaks/doc rot
 > (deterministic `SoftwareBitmap` dispose in `MessageComposer`, CLAUDE.md corrections,
 > `App.xaml.cs` DPAPI comment fix).
+>
+> **0.20.4 bugfix release (B5–B9):** Ctrl+Click deselect left the tile highlighted —
+> ListViewBase applies its own click-selection *after* `ItemClick`, re-selecting what the
+> handler cleared (deferred re-clear via `DispatcherQueue` in `ConversationListPage`); chat and
+> message deletes never reached the server so the next sync resurrected them — now server-first
+> (`ChatsService.DeleteChatAsync` / `MessagesService.DeleteMessageAsync` call the existing
+> wire-correct API endpoints and only mutate the cache on success; failures surface via
+> `ContentDialog`, chat delete gained a confirmation dialog since it's now destructive
+> server-side); new-chat "To" field kept partial text after picking a suggestion (VM→TextBox
+> sync via the existing `PropertyChanged` switch); repeated "New message" clicks stacked
+> NewChatPage back-stack entries (dedupe in `ShellPage.OnNewChatRequested`, reset-in-place with
+> a discard-draft confirmation); composer placeholder hardcoded "iMessage" (now reflects
+> `Chat.Service` — "Text Message" for non-iMessage, never "SMS" since the server doesn't
+> distinguish SMS from RCS).
 
 ---
 
 ## Open bugs
 
-#### B5. Ctrl+Click deselect doesn't un-highlight the conversation
-- [ ] Ctrl+clicking the selected conversation in the list deselects it (the thread closes /
-      selection is cleared in the view model), but the list item stays visually highlighted.
-
-#### B6. Deleting a message or conversation doesn't write back to the server
-- [ ] `MessagesService.SoftDeleteMessageAsync` and `ChatsService.DeleteChatAsync` only mutate the
-      local SQLite cache (set `DateDeleted` / remove the row) — they never call the server.
-      `IBlueBubblesApiService` already has `DeleteMessageFromChatAsync(chatGuid, ...)` and
-      `DeleteChatAsync(guid)` but nothing calls them.
-- [ ] Net effect: a local delete is **undone** the next time `SyncService` syncs down from the
-      server (the message/chat still exists server-side and gets re-pulled). Need to call the
-      server delete endpoint first (private-API), and only update the local cache on success.
-
-#### B7. New-chat "To" field keeps partial text after picking a suggestion
-- [ ] In the new-conversation composer, typing a partial name/number and clicking a suggestion in
-      `ResultsList` adds the recipient chip, but `RecipientSearchBox.Text` keeps the partially
-      typed text instead of clearing.
-- [ ] Root cause: `RecipientSearchBox` only binds one-way to `NewChatViewModel.SearchQuery` (via
-      `OnRecipientSearchTextChanged`, `NewChatPage.xaml.cs`). `AddRecipient` resets `SearchQuery`
-      to `string.Empty` (`NewChatViewModel.cs`), but nothing writes that back to
-      `RecipientSearchBox.Text`. Fix in `OnResultItemClick`/`OnRemoveChipClick` (or wherever a
-      recipient is added) by also clearing `RecipientSearchBox.Text`.
-
-#### B8. Repeated "New message" clicks stack multiple draft pages
-- [ ] Clicking "New message" while already on a new-chat draft calls `ChatFrame.Navigate(typeof
-      (NewChatPage))` again unconditionally (`ShellPage.xaml.cs`, `OnNewChatRequested`). Since
-      `NewChatPage` isn't cached/deduped, each click pushes another back-stack entry — so the
-      user has to hit Back once per click to actually leave.
-- [ ] **Desired fix:** if `ChatFrame.Content` is already a `NewChatPage`, don't navigate again —
-      just reset the existing draft (`_vm.Reset()` / clear recipients + composer text) in place.
-      If the draft has unsaved content (non-empty `Recipients` or composer text), warn the user
-      before discarding it instead of silently clearing.
-
-#### B9. Composer always says "iMessage", even for forwarded SMS/RCS chats
-- [ ] `MessageComposer.xaml`'s `InputBox` has `PlaceholderText="iMessage"` hardcoded — it never
-      reflects the chat's actual transport, so a chat being relayed via SMS/RCS forwarding still
-      shows "iMessage".
-- [ ] `ChatEntity`/`Chat` already carries a `Service` field (`"iMessage"` vs `"SMS"`, populated
-      from the server's `chat.service` — see `SyncService`/`ChatsService`/`MappingExtensions`).
-      Wire `ChatViewModel` (it already loads the `ChatEntity` via `_chatsService.Chats` in
-      `LoadChatAsync`) to expose this, and have `ChatPage` set the composer placeholder
-      accordingly.
-- [ ] **Wording:** don't show "SMS" for the non-iMessage case — the BlueBubbles server doesn't
-      distinguish SMS from RCS (forwarding works for both), so labeling it "SMS" would be wrong
-      for RCS-forwarded chats. Use a neutral term (e.g. "Text Message") when `Service !=
-      "iMessage"`.
+*(none — B5–B9 shipped in 0.20.4, see the cleared block above)*
 
 ---
 
@@ -154,7 +123,7 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 
 ## Release plan
 
-**Next patch** — Ctrl+Click deselect highlight (B5).
+**Next patch** — nothing queued (B5–B9 shipped in 0.20.4).
 
 **Future minor** — client updater (U1).
 
