@@ -8,102 +8,110 @@
 > mirrors the list), **AT2** (in-app video playback via `MediaPlayerElement` with external
 > fallback), **34** (GH Actions release workflow: `dotnet test` + `publish.ps1 -Platform x64`,
 > draft `v<version>` Release with installer attached), and **35** (flaky
-> `Reaction_FromOther_PersistedAndNotifies` test). Remaining open work below.
+> `Reaction_FromOther_PersistedAndNotifies` test).
+>
+> **0.20.2 bugfix release (B1–B4):** stray `Ctrl+N` tooltip on first conversation hover
+> (`KeyboardAcceleratorPlacementMode="Hidden"` on ShellPage's root Grid); group-chat info Back
+> button needing multiple clicks (duplicate `DetailsRequested` subscriptions on the cached
+> `ChatPage`, fixed with a `-=`/`+=` guard); avatar bubble flickering on contact reload
+> (`LoadFromVCardAsync` now reuses the same `byte[]` reference for unchanged photos —
+> `StablePhoto`); installer not closing the running app during update (`PrepareToInstall`
+> `taskkill`s the instance before copy, unblocking U1).
+>
+> **0.20.3 debug-pass fixes (DP1–DP5):** contact reload could transiently blank avatars/names
+> mid-reload (atomic dictionary swap in `ContactResolverService`); link-preview hero images
+> missed the stale-callback generation guard (`UrlPreview.LoadRemoteHero`); `publish.ps1
+> -Platform arm64` built silently despite S1 (now needs `-AcknowledgeBroken`); three silent
+> `catch { }`s now logged (`ChatsService`, `SyncService`, `SocketService`); small leaks/doc rot
+> (deterministic `SoftwareBitmap` dispose in `MessageComposer`, CLAUDE.md corrections,
+> `App.xaml.cs` DPAPI comment fix).
 
 ---
 
-## B — Bugfix release (0.20.2)
+## Open bugs
 
-#### B1. Stray `Ctrl + N` tooltip on conversation hover
-- [x] Hovering a conversation in the list pops a `Ctrl + N` tooltip — but only right after the
-      window is first brought up. Goes away after the initial interaction.
-- [x] **Fixed:** the app-global `Ctrl+N`/`Ctrl+F`/`Esc` `KeyboardAccelerator`s on ShellPage's root
-      Grid auto-generated a key-combo tooltip (default placement `Auto`) that leaked over the list on
-      first show. Set `KeyboardAcceleratorPlacementMode="Hidden"` on the Grid (`ShellPage.xaml`).
+#### B5. Ctrl+Click deselect doesn't un-highlight the conversation
+- [ ] Ctrl+clicking the selected conversation in the list deselects it (the thread closes /
+      selection is cleared in the view model), but the list item stays visually highlighted.
 
-#### B2. Group-chat info back button needs multiple clicks
-- [x] Opening chat info for a **group** chat requires clicking Back at least twice to return.
-- [x] **Fixed:** ChatPage is `NavigationCacheMode="Required"` (one reused instance), and
-      `OnChatFrameNavigated` subscribed `DetailsRequested` with a bare `+=` — so every conversation
-      switch stacked another handler, and an Info click then `Navigate`d to the details page once per
-      handler, pushing extra back-stack entries. Added the `-=`/`+=` guard (matching
-      `BackToListRequested`) and removed the now-redundant self-unsubscribe (`ShellPage.xaml.cs`).
+#### B6. Deleting a message or conversation doesn't write back to the server
+- [ ] `MessagesService.SoftDeleteMessageAsync` and `ChatsService.DeleteChatAsync` only mutate the
+      local SQLite cache (set `DateDeleted` / remove the row) — they never call the server.
+      `IBlueBubblesApiService` already has `DeleteMessageFromChatAsync(chatGuid, ...)` and
+      `DeleteChatAsync(guid)` but nothing calls them.
+- [ ] Net effect: a local delete is **undone** the next time `SyncService` syncs down from the
+      server (the message/chat still exists server-side and gets re-pulled). Need to call the
+      server delete endpoint first (private-API), and only update the local cache on success.
 
-#### B3. Avatar bubble flickering
-- [x] Avatar bubbles flickered intermittently — the whole list would flash blank→photo.
-- [x] **Root cause (found via the diagnostics below):** every contacts reload
-      (`ContactResolverService.LoadFromVCardAsync`) cleared `_avatarCache` and re-added **freshly
-      parsed** `byte[]` photos. Callers key on **reference** equality — the tile `AvatarBytes`
-      binding (`[ObservableProperty]` on `byte[]`) and `AvatarControl`'s decoded-bitmap cache — so
-      identical photos came back as new arrays: the binding rebound and the cache missed, forcing
-      `PersonPic.ProfilePicture = null` + an async re-decode for every visible avatar at once. The
-      `[Ui]` logs showed a `cache HIT` pass immediately followed by an all-`cache MISS -> clear+decode`
-      pass on each reload.
-- [x] **Fixed:** `LoadFromVCardAsync` now snapshots the prior photo arrays and reuses the **same
-      reference** when the reloaded bytes are byte-identical (`StablePhoto`). Unchanged photos become
-      a no-op (no rebind, no re-decode); only genuinely changed/added photos decode. Regression tests
-      `GetAvatar_KeepsSameReference_WhenReloadedPhotoUnchanged` /
-      `..._ReturnsNewReference_WhenPhotoChanged` cover it.
-- [x] **Diagnostics retained (dormant):** `Debug`-level `[Ui]` avatar tracing stays in the code but
-      is zero-cost (guarded by `AppLog.IsEnabled`). The **Verbose logging** toggle is wired but
-      **hidden** (`Visibility="Collapsed"` in `AboutSettingsPage.xaml`), and startup deliberately
-      does not apply the persisted flag. To re-light: un-hide the toggle (flipping it sets
-      `AppLog.MinLevel` live); see the note in `App.OnLaunched` for persisting across launches.
+#### B7. New-chat "To" field keeps partial text after picking a suggestion
+- [ ] In the new-conversation composer, typing a partial name/number and clicking a suggestion in
+      `ResultsList` adds the recipient chip, but `RecipientSearchBox.Text` keeps the partially
+      typed text instead of clearing.
+- [ ] Root cause: `RecipientSearchBox` only binds one-way to `NewChatViewModel.SearchQuery` (via
+      `OnRecipientSearchTextChanged`, `NewChatPage.xaml.cs`). `AddRecipient` resets `SearchQuery`
+      to `string.Empty` (`NewChatViewModel.cs`), but nothing writes that back to
+      `RecipientSearchBox.Text`. Fix in `OnResultItemClick`/`OnRemoveChipClick` (or wherever a
+      recipient is added) by also clearing `RecipientSearchBox.Text`.
 
-#### B4. Installer doesn't close the running app during update
-- [x] Installing a new version over a running instance doesn't terminate the old app — the installer
-      hangs until the app is manually closed.
-- [x] **Fixed:** `CloseApplications=yes` relied on the Restart Manager, which can't close this
-      WinUI window/tray process (it stalled on the "applications in use" page). Added a `[Code]`
-      `PrepareToInstall` event that `taskkill /F /IM`s the running instance before file copy
-      (mirrors the existing `[UninstallRun]` kill), so upgrades and `/VERYSILENT` runs apply cleanly
-      (`installer/BlueBubbles.iss`).
-- [x] **Unblocks U1 (auto-updater):** an unattended update no longer hangs on a manual close.
+#### B8. Repeated "New message" clicks stack multiple draft pages
+- [ ] Clicking "New message" while already on a new-chat draft calls `ChatFrame.Navigate(typeof
+      (NewChatPage))` again unconditionally (`ShellPage.xaml.cs`, `OnNewChatRequested`). Since
+      `NewChatPage` isn't cached/deduped, each click pushes another back-stack entry — so the
+      user has to hit Back once per click to actually leave.
+- [ ] **Desired fix:** if `ChatFrame.Content` is already a `NewChatPage`, don't navigate again —
+      just reset the existing draft (`_vm.Reset()` / clear recipients + composer text) in place.
+      If the draft has unsaved content (non-empty `Recipients` or composer text), warn the user
+      before discarding it instead of silently clearing.
+
+#### B9. Composer always says "iMessage", even for forwarded SMS/RCS chats
+- [ ] `MessageComposer.xaml`'s `InputBox` has `PlaceholderText="iMessage"` hardcoded — it never
+      reflects the chat's actual transport, so a chat being relayed via SMS/RCS forwarding still
+      shows "iMessage".
+- [ ] `ChatEntity`/`Chat` already carries a `Service` field (`"iMessage"` vs `"SMS"`, populated
+      from the server's `chat.service` — see `SyncService`/`ChatsService`/`MappingExtensions`).
+      Wire `ChatViewModel` (it already loads the `ChatEntity` via `_chatsService.Chats` in
+      `LoadChatAsync`) to expose this, and have `ChatPage` set the composer placeholder
+      accordingly.
+- [ ] **Wording:** don't show "SMS" for the non-iMessage case — the BlueBubbles server doesn't
+      distinguish SMS from RCS (forwarding works for both), so labeling it "SMS" would be wrong
+      for RCS-forwarded chats. Use a neutral term (e.g. "Text Message") when `Service !=
+      "iMessage"`.
 
 ---
 
-## DP — Debug-pass fixes (0.20.3)
+## F — Feature backlog  *(feature → future minor)*
 
-Full-project debug audit (2026-06-09): three parallel deep audits (Core services, WinUI layer,
-build/release/tests/docs), with key claims re-verified against the code and the upstream Flutter
-source. B1–B4 and all previously cleared clusters checked out as genuinely implemented. Fixed:
+#### F1. Scheduled send
+- [ ] Let the user compose a message and pick a future date/time to send it, instead of sending
+      immediately.
+- [ ] `BlueBubbles.Core` already has `IScheduledMessageService` / `ScheduledMessage` and the API
+      client method, but there's no WinUI surface (composer UI to schedule, and a view to list/
+      edit/cancel pending scheduled messages).
 
-#### DP1. Contact reload could blank avatars/names mid-reload
-- [x] `LoadFromVCardAsync` cleared the live name/avatar caches and repopulated them in place, so a
-      tile refresh landing mid-reload read missing entries (blank avatar / raw phone number) — the
-      same flicker class B3 fixed, through a different window. Now builds replacement dictionaries
-      and swaps them in atomically (`ContactResolverService.cs`); the `StablePhoto` reference reuse
-      is unchanged.
+#### F2. Audio message support
+- [ ] Record and send audio messages (voice memos) from the composer, matching iMessage's
+      tap-and-hold-to-record audio bubble.
+- [ ] Inbound audio attachments already play back (`AttachmentHolder`/`AttachmentViewModel`); this
+      is about *recording and sending* a new audio attachment.
 
-#### DP2. Link-preview hero images missed the stale-callback guard
-- [x] `UrlPreview.LoadRemoteHero`'s `ImageOpened`/`ImageFailed` handlers toggled hero visibility
-      with no generation check, so a stale callback on a recycled card could show/hide the wrong
-      hero. Now generation-guarded, matching `LoadLocalHeroAsync`.
-
-#### DP3. arm64 publish footgun
-- [x] `publish.ps1 -Platform arm64` built silently despite S1 (ships the x64 Insights DLL ->
-      broken toast activation, uncatchable without ARM hardware). Now blocked behind a new
-      `-AcknowledgeBroken` switch; `INSTALL.md` no longer advertises the arm64 build.
-
-#### DP4. Silent failures were undiagnosable
-- [x] Logged the three silent `catch { }`s: failed server mark-read/unread (`ChatsService`, Warn),
-      server-info capability refresh (`SyncService`, Debug), health-ping failure before restart
-      (`SocketService`, Debug).
-
-#### DP5. Small leaks / doc rot
-- [x] Dispose the pasted `SoftwareBitmap` deterministically (`MessageComposer`).
-- [x] CLAUDE.md: removed the stale hardcoded version; the Flutter protocol reference now points at
-      the upstream repo (the Dart source is no longer vendored here); private-API rule sharpened
-      (multipart/react/edit/unsend legitimately send **no** `method` field — matches the Flutter
-      wire format, verified upstream).
-- [x] `App.xaml.cs` comment claimed passwords come from PasswordVault (a forbidden
-      package-identity API) — now correctly says DPAPI `CredentialService`.
-
-**Audit false-positives (recorded so nobody "fixes" them later):**
-`SendMultipartAsync`/`SendTapbackAsync` sending no `method` field matches the Flutter wire format
-exactly (those endpoints are private-API-only server-side). The ConversationListPage deep-link
-watch is properly guarded (permanent page; `StopDeepLinkWatch` re-entry + 10 s timeout).
-`SettingsViewModel`'s `AppLog.EntryAdded` subscription is safe (DI singleton by design).
+#### F3. Improve taskbar unread-badge rendering quality
+- [ ] **Researched (2026-06-10):** the "modern" badge API
+      (`Windows.UI.Notifications.BadgeUpdateManager` /
+      [Microsoft Learn: Badge notifications](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/badges))
+      is **not viable** here — both `CreateBadgeUpdaterForApplication()` overloads update a
+      packaged app's Start tile / require the caller to belong to a package, i.e. it's a
+      `Package.Current`-class API and throws unpackaged, same as the APIs already forbidden in
+      CLAUDE.md. There's no AUMID-only path for it like `AppNotificationManager` has for toasts.
+      No OS-version gate is needed because the API can't be used at all on this distribution
+      model — `TaskbarBadgeService`'s `ITaskbarList3.SetOverlayIcon` + `BadgeIconRenderer` is the
+      correct (only) mechanism for an unpackaged Win32 app, on every supported Windows version.
+- [ ] **Real improvement:** `BadgeIconRenderer` renders a 16x16 GDI bitmap (plain `Ellipse` +
+      `CreateFont`/`DrawText`, no anti-aliasing), which looks blocky/pixelated next to native
+      Windows 11 badges, especially at higher DPI. Improve quality instead: render at a larger
+      size (e.g. 32x32 or 48x48, matching `GetSystemMetrics(SM_CXICON)`/DPI) and downscale, or
+      switch to GDI+ (`System.Drawing.Graphics` with `SmoothingMode.AntiAlias` /
+      `TextRenderingHint.AntiAliasGridFit`) for a smooth circle and crisp digits, matching the
+      red badge styling Windows 11 uses for its own app badges.
 
 ---
 
@@ -145,6 +153,8 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 ---
 
 ## Release plan
+
+**Next patch** — Ctrl+Click deselect highlight (B5).
 
 **Future minor** — client updater (U1).
 
