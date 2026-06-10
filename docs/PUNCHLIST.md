@@ -39,12 +39,27 @@
 > a discard-draft confirmation); composer placeholder hardcoded "iMessage" (now reflects
 > `Chat.Service` — "Text Message" for non-iMessage, never "SMS" since the server doesn't
 > distinguish SMS from RCS).
+>
+> **B10 (follow-up to B6, same 0.20.4 release):** drafting a new message to a contact whose chat
+> had just been deleted silently failed and the conversation never (re)appeared in the list.
+> Root cause chain: `FindExistingChatGuid` matches by participant *address*, so it can return a
+> stale local row whose chat no longer exists server-side (relic rows from old syncs survive —
+> verified live: local row's guid 404'd on the server); `SendToExistingChatAsync` then sent to
+> the dead guid and **ignored the API response** — no error surfaced, `ChatReady` fired as if
+> sent, and nothing bumped the chat's `LatestMessageDate`, so even a successful send to a stale
+> tile stayed buried at its old sort position. Fix (`NewChatViewModel`): the existing-chat path
+> now checks every response — on a clean rejection *before anything was delivered* it falls back
+> to `chat/new` (which creates/returns the canonical chat and self-heals the relic); on success
+> it calls `ChatsService.HandleNewMessageAsync` (bump sort date, undo soft-delete, reload list)
+> instead of relying on the not-guaranteed self-echo; partial failures are logged, never
+> retried (no double-send). Not unit-tested: lives in the WinUI project, which the `net8.0`
+> test project can't reference (see T1).
 
 ---
 
 ## Open bugs
 
-*(none — B5–B9 shipped in 0.20.4, see the cleared block above)*
+*(none — B5–B10 shipped in 0.20.4, see the cleared block above)*
 
 ---
 
@@ -123,7 +138,7 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 
 ## Release plan
 
-**Next patch** — nothing queued (B5–B9 shipped in 0.20.4).
+**Next patch** — nothing queued (B5–B10 shipped in 0.20.4).
 
 **Future minor** — client updater (U1).
 
