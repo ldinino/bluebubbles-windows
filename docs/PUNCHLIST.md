@@ -54,23 +54,68 @@
 > instead of relying on the not-guaranteed self-echo; partial failures are logged, never
 > retried (no double-send). Not unit-tested: lives in the WinUI project, which the `net8.0`
 > test project can't reference (see T1).
+>
+> **B11–B15 (fixed, shipping with 0.21.0):** Danger Zone reset left stale/cross-wired in-memory
+> caches re-syncing into the wiped DB — reset now relaunches the process via
+> `AppInstance.Restart` (unpackaged-safe; tray icon removed first since Restart skips Closed
+> handlers; in-place SetupPage navigation kept as the failure fallback; dead `ResetRequested`
+> event removed). "Scroll to bottom" FAB stuck visible on short threads — `ViewChanged` only
+> fires on *offset* changes, so a transient `ScrollableHeight > 0` during initial layout never
+> got re-evaluated; `ChatPage` now registers a property-changed callback on
+> `ScrollViewer.ScrollableHeight` and re-runs the `IsNearBottom()` rule whenever it changes.
+> Sent image vanished after navigating away/back — the locally-picked file never entered the
+> attachment cache under the *server* guid; `IAttachmentCacheService.SeedFromLocalFileAsync`
+> copies it in when the send response returns the real attachment guid (wired in
+> `OutgoingMessageService` + both direct-send paths in `NewChatViewModel`; covered by
+> `SentAttachment_SeedsCacheUnderServerGuid`). Blank tile preview for attachment-only last
+> message — new `MessagePreview.Derive` (Core/Utils) strips U+FFFC placeholders and falls back
+> to "Image"/"Video"/"Audio Message"/"Attachment" (pluralized) from attachment mime types;
+> applied in `ChatsService.LoadChatsInternalAsync` (last-message query now `Include`s
+> attachments), `IncomingMessageProcessor`, and `NewChatViewModel` (unit-tested). Tray icon gone
+> for good after an Explorer restart — `MainWindow.WndProc` now watches the registered
+> `"TaskbarCreated"` broadcast and `SystemTrayService.HandleTaskbarCreated()` re-runs
+> `Shell_NotifyIcon(NIM_ADD)`.
 
 ---
 
 ## Open bugs
 
-*(none — B5–B10 shipped in 0.20.4, see the cleared block above)*
+*(none)*
 
 ---
 
 ## F — Feature backlog  *(feature → future minor)*
 
-#### F1. Scheduled send
-- [ ] Let the user compose a message and pick a future date/time to send it, instead of sending
-      immediately.
-- [ ] `BlueBubbles.Core` already has `IScheduledMessageService` / `ScheduledMessage` and the API
-      client method, but there's no WinUI surface (composer UI to schedule, and a view to list/
-      edit/cancel pending scheduled messages).
+#### F1. Scheduled send — **shipped in 0.21.0**
+- [x] **Architecture (investigated 2026-06-10):** the BlueBubbles *server* owns all timing — its
+      `scheduledMessagesService` persists scheduled messages in the server DB, arms a
+      `setTimeout` per message, and at fire time sends through the normal private-api path. It
+      is a queue, **not** Apple's native iOS 18 "Send Later" (unreachable via the private API).
+      Client = CRUD only, no client-side timer; the Mac server must be running at fire time; the
+      message then arrives in-thread via the normal `new-message` socket path (no tempGuid —
+      covered by the existing out-of-order delayed-emit logic). Payload is text-only.
+- [x] Core: `ScheduledMessageService` (thin pass-through + validation guards; always sends
+      `schedule: {type:"once"}` — the server validator rejects the empty schedule the old
+      API-client default would have sent), the five `scheduled-message-*` socket events
+      registered and routed via `IActionHandler.ScheduledMessagesChanged` (deleted event carries
+      an array; others a single object, `data`-wrap tolerated), `ScheduledForLocal` ISO-parse
+      helper + status constants on the model.
+- [x] UI: right-click/long-press the send button → "Send later…" (`ScheduleSendDialog`:
+      CalendarDatePicker + TimePicker, DST-safe combine, must be ≥ now+1 min). Text-only —
+      disabled for staged attachments / reply / edit modes.
+- [x] **In-thread pending display (UX rework, same release):** Apple-style "Send Later" — each
+      pending scheduled message renders as a dashed-outline bubble pinned at the bottom of the
+      thread (`ChatViewModel.ScheduledItems` + the `ScheduledSection` row in `ChatPage.xaml`),
+      captioned "Send later — Thu, Apr 10 at 7:00 AM", with errored ones showing the server
+      error inline. Right-click a bubble → Edit… (reopens `ScheduleSendDialog` prefilled) or
+      Cancel send (confirm dialog — the composed text is lost). The list live-refreshes from the
+      `scheduled-message-*` socket events and reloads on chat open; on `sent` the outlined
+      bubble disappears and the real message arrives via the normal new-message path. The
+      original hidden-queue surface (`ScheduledMessagesDialog`/`Flow`/`ViewModel`, the
+      ChatDetailsPage entry, and the "Scheduled messages…" flyout item) was removed.
+- [ ] **Future enhancement (not v1):** recurring schedules (wire format already supports
+      `{type:"recurring", interval, intervalType}`); scheduling a reply (`selectedMessageGuid`
+      is plumbed through the service, no UI).
 
 #### F2. Audio message support
 - [ ] Record and send audio messages (voice memos) from the composer, matching iMessage's
@@ -78,8 +123,8 @@
 - [ ] Inbound audio attachments already play back (`AttachmentHolder`/`AttachmentViewModel`); this
       is about *recording and sending* a new audio attachment.
 
-#### F3. Improve taskbar unread-badge rendering quality
-- [ ] **Researched (2026-06-10):** the "modern" badge API
+#### F3. Improve taskbar unread-badge rendering quality — **shipped in 0.21.0**
+- [x] **Researched (2026-06-10):** the "modern" badge API
       (`Windows.UI.Notifications.BadgeUpdateManager` /
       [Microsoft Learn: Badge notifications](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/badges))
       is **not viable** here — both `CreateBadgeUpdaterForApplication()` overloads update a
@@ -89,13 +134,17 @@
       No OS-version gate is needed because the API can't be used at all on this distribution
       model — `TaskbarBadgeService`'s `ITaskbarList3.SetOverlayIcon` + `BadgeIconRenderer` is the
       correct (only) mechanism for an unpackaged Win32 app, on every supported Windows version.
-- [ ] **Real improvement:** `BadgeIconRenderer` renders a 16x16 GDI bitmap (plain `Ellipse` +
-      `CreateFont`/`DrawText`, no anti-aliasing), which looks blocky/pixelated next to native
-      Windows 11 badges, especially at higher DPI. Improve quality instead: render at a larger
-      size (e.g. 32x32 or 48x48, matching `GetSystemMetrics(SM_CXICON)`/DPI) and downscale, or
-      switch to GDI+ (`System.Drawing.Graphics` with `SmoothingMode.AntiAlias` /
-      `TextRenderingHint.AntiAliasGridFit`) for a smooth circle and crisp digits, matching the
-      red badge styling Windows 11 uses for its own app badges.
+- [x] **Implemented (2026-06-11):** `BadgeIconRenderer` rewritten from raw GDI (16x16
+      `Ellipse`/`DrawText`, no anti-aliasing, no alpha — `CreateCompatibleBitmap` corners were
+      undefined memory) to GDI+ via `System.Drawing.Common` (pinned 8.0.x to match the net8
+      TFM): true 32bpp ARGB surface, `SmoothingMode.AntiAlias` circle in Windows 11's badge red
+      (#C42B1C) + anti-aliased bold Segoe UI digits, rendered at 4x supersampling and
+      downscaled `HighQualityBicubic`. Size is DPI-aware (`GetDpiForWindow` on the main window,
+      16px @ 96dpi scaled up; cache keyed by count+size). The HICON is built manually with
+      `CreateIconIndirect` over a 32bpp DIB section plus an alpha-derived 1bpp AND mask —
+      **not** `Bitmap.GetHicon()`, which collapses smooth alpha to a 1-bit mask and re-creates
+      the jagged box edge. Verified via standalone render harness: corner pixels alpha 0,
+      anti-aliased rim, clean composite over a dark taskbar background.
 
 ---
 
@@ -138,7 +187,7 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 
 ## Release plan
 
-**Next patch** — nothing queued (B5–B10 shipped in 0.20.4).
+**Next minor (0.21.0)** — scheduled send (F1) + bugfixes B11–B15 — implemented, pending release.
 
 **Future minor** — client updater (U1).
 

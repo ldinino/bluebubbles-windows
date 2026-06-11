@@ -83,7 +83,7 @@ internal sealed class TaskbarBadgeService : IDisposable
             }
             else
             {
-                var hIcon = BadgeIconRenderer.GetBadgeIcon(count);
+                var hIcon = BadgeIconRenderer.GetBadgeIcon(count, _hWnd);
                 _taskbar.SetOverlayIcon(_hWnd, hIcon, $"{count} unread");
             }
         }

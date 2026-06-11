@@ -1,59 +1,53 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 
 namespace BlueBubbles.Windows.Helpers;
 
+/// <summary>
+/// Renders the taskbar unread-count overlay badge (red circle + white count) as an HICON for
+/// <c>ITaskbarList3.SetOverlayIcon</c>. Drawn with GDI+ on a 32bpp ARGB surface at 4x
+/// supersampling so the circle and digits are anti-aliased, then converted to an icon via
+/// CreateIconIndirect with a 32bpp DIB section — Bitmap.GetHicon() must NOT be used here, it
+/// collapses the smooth alpha channel to a 1-bit mask and brings back jagged edges.
+/// </summary>
 internal static class BadgeIconRenderer
 {
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteDC(IntPtr hdc);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int cx, int cy);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteObject(IntPtr ho);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateSolidBrush(uint crColor);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
-
-    [DllImport("gdi32.dll")]
-    private static extern int SetBkMode(IntPtr hdc, int mode);
-
-    [DllImport("gdi32.dll")]
-    private static extern uint SetTextColor(IntPtr hdc, uint color);
-
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateFont(
-        int cHeight, int cWidth, int cEscapement, int cOrientation,
-        int cWeight, uint bItalic, uint bUnderline, uint bStrikeOut,
-        uint iCharSet, uint iOutPrecision, uint iClipPrecision,
-        uint iQuality, uint iPitchAndFamily, string pszFaceName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int DrawText(IntPtr hdc, string lpchText, int cchText, ref RECT lprc, uint format);
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
-    private static extern IntPtr GetDC(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    private static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
 
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr hIcon);
 
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateDIBSection(
+        IntPtr hdc, ref BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateBitmap(int nWidth, int nHeight, uint nPlanes, uint nBitCount, byte[]? lpBits);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr ho);
+
     [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
+    private struct BITMAPINFO
     {
-        public int Left, Top, Right, Bottom;
+        public int biSize;
+        public int biWidth;
+        public int biHeight;
+        public short biPlanes;
+        public short biBitCount;
+        public int biCompression;
+        public int biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public int biClrUsed;
+        public int biClrImportant;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -66,34 +60,30 @@ internal static class BadgeIconRenderer
         public IntPtr hbmColor;
     }
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
+    // Windows 11's own taskbar badges use the system critical-fill red.
+    private static readonly Color BadgeRed = Color.FromArgb(0xC4, 0x2B, 0x1C);
 
-    private const int TRANSPARENT = 1;
-    private const uint DT_CENTER = 0x01;
-    private const uint DT_VCENTER = 0x04;
-    private const uint DT_SINGLELINE = 0x20;
-    private const int FW_BOLD = 700;
-
-    // RGB packed as 0x00BBGGRR for GDI
-    private const uint RedBrush = 0x002020E0; // #E02020 in BGR
-    private const uint WhiteText = 0x00FFFFFF;
+    private const int SuperSample = 4;
+    private const int BaseSizePx = 16; // overlay icon size at 96 DPI (SM_CXSMICON)
 
     private static readonly object _cacheLock = new();
-    private static readonly Dictionary<int, IntPtr> _iconCache = new();
+    private static readonly Dictionary<(int Count, int Size), IntPtr> _iconCache = new();
 
-    public static IntPtr GetBadgeIcon(int count)
+    public static IntPtr GetBadgeIcon(int count, IntPtr hwnd)
     {
         if (count <= 0) return IntPtr.Zero;
-        var key = Math.Min(count, 10);
+        var capped = Math.Min(count, 10);
+        var size = GetBadgeSize(hwnd);
 
         lock (_cacheLock)
         {
-            if (_iconCache.TryGetValue(key, out var cached))
+            if (_iconCache.TryGetValue((capped, size), out var cached))
                 return cached;
 
-            var icon = RenderBadgeIcon(key > 9 ? "9+" : key.ToString());
-            _iconCache[key] = icon;
+            using var bitmap = RenderBadgeBitmap(capped > 9 ? "9+" : capped.ToString(), size);
+            var icon = CreateIconWithAlpha(bitmap);
+            if (icon != IntPtr.Zero)
+                _iconCache[(capped, size)] = icon;
             return icon;
         }
     }
@@ -108,65 +98,96 @@ internal static class BadgeIconRenderer
         }
     }
 
-    private static IntPtr RenderBadgeIcon(string text)
+    private static int GetBadgeSize(IntPtr hwnd)
     {
-        const int size = 16;
+        uint dpi = hwnd != IntPtr.Zero ? GetDpiForWindow(hwnd) : 0;
+        if (dpi == 0) dpi = 96;
+        return (int)Math.Round(BaseSizePx * dpi / 96.0);
+    }
 
-        var screenDc = GetDC(IntPtr.Zero);
-        var memDc = CreateCompatibleDC(screenDc);
-        var hBitmap = CreateCompatibleBitmap(screenDc, size, size);
-        var hMask = CreateCompatibleBitmap(screenDc, size, size);
-        var oldBitmap = SelectObject(memDc, hBitmap);
+    internal static Bitmap RenderBadgeBitmap(string text, int size)
+    {
+        var big = size * SuperSample;
+        using var bigBitmap = new Bitmap(big, big, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bigBitmap))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            using var fill = new SolidBrush(BadgeRed);
+            g.FillEllipse(fill, 1, 1, big - 2, big - 2);
 
-        // Fill background with red circle
-        var brush = CreateSolidBrush(RedBrush);
-        var oldBrush = SelectObject(memDc, brush);
-        Ellipse(memDc, 0, 0, size, size);
-        SelectObject(memDc, oldBrush);
-        DeleteObject(brush);
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            var em = big * (text.Length > 1 ? 0.50f : 0.62f);
+            using var font = new Font("Segoe UI", em, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var format = new StringFormat(StringFormat.GenericTypographic)
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+            };
+            g.DrawString(text, font, Brushes.White, new RectangleF(0, 0, big, big), format);
+        }
 
-        // Draw white number text
-        SetBkMode(memDc, TRANSPARENT);
-        SetTextColor(memDc, WhiteText);
-        var fontSize = text.Length > 1 ? 9 : 11;
-        var hFont = CreateFont(fontSize, 0, 0, 0, FW_BOLD, 0, 0, 0, 0, 0, 0, 0, 0, "Segoe UI");
-        var oldFont = SelectObject(memDc, hFont);
+        var result = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(result))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(bigBitmap, new Rectangle(0, 0, size, size));
+        }
+        return result;
+    }
 
-        var rect = new RECT { Left = 0, Top = 0, Right = size, Bottom = size };
-        DrawText(memDc, text, text.Length, ref rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    private static IntPtr CreateIconWithAlpha(Bitmap bitmap)
+    {
+        int w = bitmap.Width, h = bitmap.Height;
 
-        SelectObject(memDc, oldFont);
-        DeleteObject(hFont);
+        var bmi = new BITMAPINFO
+        {
+            biSize = 40,
+            biWidth = w,
+            biHeight = -h, // top-down, matching LockBits row order
+            biPlanes = 1,
+            biBitCount = 32,
+        };
+        var hColor = CreateDIBSection(IntPtr.Zero, ref bmi, 0, out var bits, IntPtr.Zero, 0);
+        if (hColor == IntPtr.Zero) return IntPtr.Zero;
 
-        // Create mask (all opaque — the circle-on-square shape handles itself visually)
-        var maskDc = CreateCompatibleDC(screenDc);
-        var oldMask = SelectObject(maskDc, hMask);
-        var blackBrush = CreateSolidBrush(0x00000000);
-        var maskRect = new RECT { Left = 0, Top = 0, Right = size, Bottom = size };
-        // Fill mask with black (opaque) via ellipse too
-        var oldMaskBrush = SelectObject(maskDc, blackBrush);
-        Ellipse(maskDc, 0, 0, size, size);
-        SelectObject(maskDc, oldMaskBrush);
-        DeleteObject(blackBrush);
-        SelectObject(maskDc, oldMask);
-        DeleteDC(maskDc);
+        // The 1bpp AND mask is only consulted by legacy non-alpha renderers; derive it from the
+        // alpha channel anyway so the badge stays circular even there. Mono rows are WORD-aligned.
+        var maskStride = (w + 15) / 16 * 2;
+        var mask = new byte[maskStride * h];
 
-        SelectObject(memDc, oldBitmap);
-        DeleteDC(memDc);
-        ReleaseDC(IntPtr.Zero, screenDc);
+        var data = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var row = new byte[w * 4];
+            for (var y = 0; y < h; y++)
+            {
+                Marshal.Copy(data.Scan0 + y * data.Stride, row, 0, row.Length);
+                Marshal.Copy(row, 0, bits + y * w * 4, row.Length);
+                for (var x = 0; x < w; x++)
+                {
+                    if (row[x * 4 + 3] == 0)
+                        mask[y * maskStride + (x >> 3)] |= (byte)(0x80 >> (x & 7));
+                }
+            }
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
 
+        var hMask = CreateBitmap(w, h, 1, 1, mask);
         var iconInfo = new ICONINFO
         {
             fIcon = true,
-            xHotspot = 0,
-            yHotspot = 0,
             hbmMask = hMask,
-            hbmColor = hBitmap
+            hbmColor = hColor,
         };
         var hIcon = CreateIconIndirect(ref iconInfo);
 
-        DeleteObject(hBitmap);
-        DeleteObject(hMask);
+        DeleteObject(hColor);
+        if (hMask != IntPtr.Zero) DeleteObject(hMask);
 
         return hIcon;
     }
