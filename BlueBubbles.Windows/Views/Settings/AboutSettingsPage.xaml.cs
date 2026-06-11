@@ -147,7 +147,7 @@ public sealed partial class AboutSettingsPage : Page
         var dialog = new ContentDialog
         {
             Title = "Reset App?",
-            Content = "This will delete all local data — chats, messages, contacts, and settings — and return to setup. This cannot be undone.",
+            Content = "This will delete all local data — chats, messages, contacts, and settings — then restart the app into setup. This cannot be undone.",
             PrimaryButtonText = "Reset",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
@@ -157,6 +157,17 @@ public sealed partial class AboutSettingsPage : Page
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
 
         await _vm.ResetAppCommand.ExecuteAsync(null);
+
+        // Relaunch instead of navigating in place: the still-running process holds in-memory
+        // chat/contact/message caches that re-sync into the wiped DB and can cross-wire
+        // conversations (B11). A fresh process matches the true first-run experience. Drop the
+        // tray icon first — Restart terminates without running Closed handlers, which would
+        // leave a ghost icon next to the new instance's.
+        App.MainWindow.RemoveTrayIcon();
+        var reason = Microsoft.Windows.AppLifecycle.AppInstance.Restart(string.Empty);
+
+        // Restart only returns on failure — fall back to the old in-place setup navigation.
+        AppLog.Warn(LogCategory.App, $"Restart after reset failed ({reason}); navigating to setup in-place.");
         App.MainWindow.RootNavigationFrame.Navigate(typeof(Setup.SetupPage));
     }
 }

@@ -116,6 +116,29 @@ public class ChatsServiceTests
     }
 
     [Fact]
+    public async Task LoadChatsAsync_AttachmentOnlyLastMessage_DerivesPreview()
+    {
+        var (svc, factory) = CreateService();
+        // Attachment-only: text is just the U+FFFC placeholder iMessage leaves for attachments.
+        await SeedChat(factory, "chat1", latestDate: 1000, lastMessageText: "￼");
+        using (var db = factory.CreateDbContext())
+        {
+            var msg = db.Messages.First(m => m.Guid == "msg-chat1");
+            db.Attachments.Add(new AttachmentEntity
+            {
+                Guid = "att-1",
+                MessageId = msg.Id,
+                MimeType = "image/jpeg"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await svc.LoadChatsAsync();
+
+        Assert.Equal("Image", svc.Chats[0].LastMessageText);
+    }
+
+    [Fact]
     public async Task HandleNewMessageAsync_ReordersList()
     {
         var (svc, factory) = CreateService();

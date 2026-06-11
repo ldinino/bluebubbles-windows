@@ -359,6 +359,7 @@ public partial class App : Application
         services.AddSingleton<IChatsService, ChatsService>();
         services.AddSingleton<IMessagesService, MessagesService>();
         services.AddSingleton<IOutgoingMessageService, OutgoingMessageService>();
+        services.AddSingleton<IScheduledMessageService, ScheduledMessageService>();
         services.AddSingleton<INotificationSoundService, NotificationSoundService>();
         services.AddSingleton<INotificationService>(sp =>
             new NotificationService(

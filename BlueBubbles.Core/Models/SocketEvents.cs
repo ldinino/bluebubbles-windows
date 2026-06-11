@@ -15,6 +15,11 @@ public static class SocketEvents
     public const string IncomingFacetime = "incoming-facetime";
     public const string FtCallStatusChanged = "ft-call-status-changed";
     public const string IMessageAliasesRemoved = "imessage-aliases-removed";
+    public const string ScheduledMessageCreated = "scheduled-message-created";
+    public const string ScheduledMessageUpdated = "scheduled-message-updated";
+    public const string ScheduledMessageDeleted = "scheduled-message-deleted";
+    public const string ScheduledMessageSent = "scheduled-message-sent";
+    public const string ScheduledMessageError = "scheduled-message-error";
 }
 
 public enum SocketState
@@ -35,3 +40,9 @@ public record MessageEventArgs(Message Message, string? TempGuid);
 public record ReactionEventArgs(Message Reaction, string ParentGuid);
 
 public record ChatUpdatedEventArgs(string EventType, JsonElement Data);
+
+/// <summary>
+/// EventType is the raw scheduled-message socket event name; Messages is normalized to a list
+/// (the deleted event arrives as an array, the rest as a single object).
+/// </summary>
+public record ScheduledMessagesEventArgs(string EventType, List<ScheduledMessage> Messages);

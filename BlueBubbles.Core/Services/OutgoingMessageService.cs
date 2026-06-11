@@ -9,6 +9,7 @@ public class OutgoingMessageService : IOutgoingMessageService
 {
     private readonly IBlueBubblesApiService _api;
     private readonly IActionHandler _actionHandler;
+    private readonly IAttachmentCacheService _attachmentCache;
     private readonly AppSettings _settings;
     private readonly Channel<OutgoingItem> _queue;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _delayCancellations = new();
@@ -18,10 +19,12 @@ public class OutgoingMessageService : IOutgoingMessageService
     public OutgoingMessageService(
         IBlueBubblesApiService api,
         IActionHandler actionHandler,
+        IAttachmentCacheService attachmentCache,
         AppSettings settings)
     {
         _api = api;
         _actionHandler = actionHandler;
+        _attachmentCache = attachmentCache;
         _settings = settings;
         _queue = Channel.CreateUnbounded<OutgoingItem>(new UnboundedChannelOptions
         {
@@ -187,6 +190,7 @@ public class OutgoingMessageService : IOutgoingMessageService
                 if (response.Status == 200 && response.Data is not null)
                 {
                     _actionHandler.RemoveOutOfOrderGuid(response.Data.Guid);
+                    await SeedAttachmentCacheAsync(item, response.Data);
                     MessageStateChanged?.Invoke(this,
                         new OutgoingMessageEvent(item.TempGuid, item.ChatGuid,
                             OutgoingMessageState.Sent, response.Data));
@@ -204,6 +208,31 @@ public class OutgoingMessageService : IOutgoingMessageService
                 MessageStateChanged?.Invoke(this,
                     new OutgoingMessageEvent(item.TempGuid, item.ChatGuid,
                         OutgoingMessageState.Failed, ErrorMessage: ex.Message));
+            }
+        }
+    }
+
+    /// <summary>Copies a just-sent local attachment into the cache under the server-assigned
+    /// attachment guid. Without this, a bubble rebuilt from the DB (after navigating away and
+    /// back) looks up the real guid, finds no cache entry, and renders nothing until a delta
+    /// sync re-downloads the file we already have (B13).</summary>
+    private async Task SeedAttachmentCacheAsync(OutgoingItem item, Message serverMessage)
+    {
+        if (item.Type != OutgoingItemType.Attachment || item.FilePath is null) return;
+        if (serverMessage.Attachments is not { Count: > 0 } attachments) return;
+
+        foreach (var att in attachments)
+        {
+            if (att.Guid is null) continue;
+            try
+            {
+                await _attachmentCache.SeedFromLocalFileAsync(att.Guid, item.FilePath);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: the attachment stays downloadable from the server.
+                AppLog.Warn(LogCategory.App,
+                    $"Seeding attachment cache for {att.Guid} failed: {ex.Message}");
             }
         }
     }

@@ -31,6 +31,14 @@ internal sealed class SystemTrayService : IDisposable
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern bool Shell_NotifyIcon(int dwMessage, ref NOTIFYICONDATA lpData);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
+    /// <summary>The "TaskbarCreated" broadcast Windows sends every top-level window when Explorer
+    /// (re)starts. A new taskbar has no memory of previously added notification icons, so the
+    /// window proc must watch for this and re-add ours (see <see cref="HandleTaskbarCreated"/>).</summary>
+    internal static readonly uint WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
+
     [DllImport("user32.dll")]
     private static extern IntPtr CreatePopupMenu();
 
@@ -106,6 +114,14 @@ internal sealed class SystemTrayService : IDisposable
 
         Shell_NotifyIcon(NIM_ADD, ref _nid);
         _created = true;
+    }
+
+    /// <summary>Re-adds the icon after Explorer restarts (the recreated taskbar starts empty).
+    /// Safe to call repeatedly: NIM_ADD simply fails if the icon is already present.</summary>
+    public void HandleTaskbarCreated()
+    {
+        if (!_created) return;
+        Shell_NotifyIcon(NIM_ADD, ref _nid);
     }
 
     public void UpdateTooltip(string tooltip)

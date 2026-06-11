@@ -95,6 +95,11 @@ public partial class SocketService : ObservableObject, ISocketService
         RegisterEvent(SocketEvents.ParticipantLeft);
         RegisterEvent(SocketEvents.FtCallStatusChanged);
         RegisterEvent(SocketEvents.IMessageAliasesRemoved);
+        RegisterEvent(SocketEvents.ScheduledMessageCreated);
+        RegisterEvent(SocketEvents.ScheduledMessageUpdated);
+        RegisterEvent(SocketEvents.ScheduledMessageDeleted);
+        RegisterEvent(SocketEvents.ScheduledMessageSent);
+        RegisterEvent(SocketEvents.ScheduledMessageError);
 
         _socket.On(SocketEvents.IncomingFacetime, response =>
         {

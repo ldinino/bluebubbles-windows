@@ -525,7 +525,9 @@ public class BlueBubblesApiService : IBlueBubblesApiService
             payload = new { chatGuid, message, method, effectId, subject,
                 selectedMessageGuid, partIndex },
             scheduledFor = scheduledForMs,
-            schedule = schedule ?? new Dictionary<string, object?>()
+            // The server validator requires schedule.type ("once"/"recurring"); an empty
+            // schedule object is rejected.
+            schedule = schedule ?? new Dictionary<string, object?> { ["type"] = "once" }
         }, ct: ct);
 
     public Task<ApiResponse<ScheduledMessage>> UpdateScheduledMessageAsync(
@@ -540,7 +542,7 @@ public class BlueBubblesApiService : IBlueBubblesApiService
             payload = new { chatGuid, message, method, effectId, subject,
                 selectedMessageGuid, partIndex },
             scheduledFor = scheduledForMs,
-            schedule = schedule ?? new Dictionary<string, object?>()
+            schedule = schedule ?? new Dictionary<string, object?> { ["type"] = "once" }
         }, ct: ct);
 
     public Task<ApiResponse<JsonElement>> DeleteScheduledMessageAsync(
