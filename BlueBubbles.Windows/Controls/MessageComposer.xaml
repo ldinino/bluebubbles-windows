@@ -197,6 +197,21 @@
                     ToolTipService.ToolTip="Send message"
                     AutomationProperties.Name="Send message">
                 <FontIcon Glyph="&#xE724;" FontSize="16" />
+                <!-- Right-click / long-press: schedule a future server-side send. Unreachable
+                     while the button is disabled (empty composer) — fine, there's nothing to
+                     schedule; pending sends are managed inline in the thread (ChatPage's
+                     Send Later section). -->
+                <Button.ContextFlyout>
+                    <MenuFlyout Placement="TopEdgeAlignedRight" Opening="OnSendFlyoutOpening">
+                        <MenuFlyoutItem x:Name="SendLaterItem"
+                                        Text="Send later…"
+                                        Click="OnSendLaterClick">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE823;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.ContextFlyout>
             </Button>
         </Grid>
     </Grid>

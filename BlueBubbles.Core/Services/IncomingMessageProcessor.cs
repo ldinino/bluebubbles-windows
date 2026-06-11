@@ -85,7 +85,9 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
 
         await _messagesService.SaveIncomingMessageAsync(chatGuid, e.Message);
         await _chatsService.HandleNewMessageAsync(
-            chatGuid, e.Message.Text, e.Message.DateCreated ?? 0,
+            chatGuid,
+            MessagePreview.Derive(e.Message.Text, e.Message.Attachments?.Select(a => a.MimeType)),
+            e.Message.DateCreated ?? 0,
             e.Message.IsFromMe, e.Message.Handle?.Address);
         _chatsService.NotifyMessagesPersisted(chatGuid);
 

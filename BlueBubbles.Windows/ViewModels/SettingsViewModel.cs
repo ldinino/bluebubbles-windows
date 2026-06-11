@@ -41,8 +41,6 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial int ContactCount { get; set; }
     [ObservableProperty] public partial bool HasVCard { get; set; }
 
-    public event EventHandler? ResetRequested;
-
     public SettingsViewModel(
         ISocketService socketService,
         IFirebaseService firebase,
@@ -276,7 +274,6 @@ public partial class SettingsViewModel : ObservableObject
         await ClearDataDirectoryAsync();
 
         _appSettings.FinishedSetup = false;
-        ResetRequested?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>

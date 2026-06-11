@@ -300,4 +300,68 @@ public class ActionHandlerTests
 
         Assert.Null(exception);
     }
+
+    private const string ScheduledMessageJson = """
+    {
+        "id": 12,
+        "type": "send-message",
+        "payload": {
+            "chatGuid": "iMessage;-;+11234567890",
+            "message": "Happy birthday!",
+            "method": "private-api"
+        },
+        "scheduledFor": "2026-06-11T15:30:00.000Z",
+        "schedule": { "type": "once" },
+        "status": "pending",
+        "created": "2026-06-10T15:30:00.000Z"
+    }
+    """;
+
+    [Fact]
+    public void ScheduledMessageCreated_FiresEvent_WithSingleMessage()
+    {
+        var handler = new ActionHandler();
+        ScheduledMessagesEventArgs? received = null;
+        handler.ScheduledMessagesChanged += (_, e) => received = e;
+
+        handler.HandleEvent(SocketEvents.ScheduledMessageCreated,
+            Parse(ScheduledMessageJson), "Test");
+
+        Assert.NotNull(received);
+        Assert.Equal(SocketEvents.ScheduledMessageCreated, received!.EventType);
+        Assert.Single(received.Messages);
+        Assert.Equal(12, received.Messages[0].Id);
+        Assert.Equal("iMessage;-;+11234567890", received.Messages[0].Payload!.ChatGuid);
+    }
+
+    [Fact]
+    public void ScheduledMessageSent_FiresEvent_WhenWrappedInData()
+    {
+        var handler = new ActionHandler();
+        ScheduledMessagesEventArgs? received = null;
+        handler.ScheduledMessagesChanged += (_, e) => received = e;
+
+        handler.HandleEvent(SocketEvents.ScheduledMessageSent,
+            Parse($$"""{ "data": {{ScheduledMessageJson}} }"""), "Test");
+
+        Assert.NotNull(received);
+        Assert.Equal(SocketEvents.ScheduledMessageSent, received!.EventType);
+        Assert.Single(received.Messages);
+        Assert.Equal(12, received.Messages[0].Id);
+    }
+
+    [Fact]
+    public void ScheduledMessageDeleted_FiresEvent_WithList()
+    {
+        var handler = new ActionHandler();
+        ScheduledMessagesEventArgs? received = null;
+        handler.ScheduledMessagesChanged += (_, e) => received = e;
+
+        handler.HandleEvent(SocketEvents.ScheduledMessageDeleted,
+            Parse($$"""[ {{ScheduledMessageJson}}, {{ScheduledMessageJson}} ]"""), "Test");
+
+        Assert.NotNull(received);
+        Assert.Equal(SocketEvents.ScheduledMessageDeleted, received!.EventType);
+        Assert.Equal(2, received.Messages.Count);
+    }
 }

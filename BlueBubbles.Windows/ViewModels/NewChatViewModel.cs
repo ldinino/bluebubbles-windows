@@ -35,6 +35,7 @@ public partial class NewChatViewModel : ObservableObject
     private readonly IBlueBubblesApiService _api;
     private readonly IContactResolverService _contacts;
     private readonly IChatsService _chatsService;
+    private readonly IAttachmentCacheService _attachmentCache;
 
     private CancellationTokenSource? _searchCts;
 
@@ -54,11 +55,13 @@ public partial class NewChatViewModel : ObservableObject
     public NewChatViewModel(
         IBlueBubblesApiService api,
         IContactResolverService contacts,
-        IChatsService chatsService)
+        IChatsService chatsService,
+        IAttachmentCacheService attachmentCache)
     {
         _api = api;
         _contacts = contacts;
         _chatsService = chatsService;
+        _attachmentCache = attachmentCache;
     }
 
     public void Reset()
@@ -312,6 +315,7 @@ public partial class NewChatViewModel : ObservableObject
     {
         var sentDate = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var anySent = false;
+        var sentMimes = new List<string?>();
 
         if (hasText)
         {
@@ -340,11 +344,15 @@ public partial class NewChatViewModel : ObservableObject
             }
             sentDate = response.Data?.DateCreated ?? sentDate;
             anySent = true;
+            sentMimes.AddRange(response.Data?.Attachments?.Select(a => a.MimeType) ?? [null]);
+            await SeedAttachmentCacheAsync(response.Data, attachment.FilePath);
         }
 
         // The socket echo for self-sent REST messages isn't guaranteed; surface the conversation
         // ourselves (bump LatestMessageDate, undo any soft delete, reload the list if needed).
-        await _chatsService.HandleNewMessageAsync(chatGuid, messageText, sentDate, isFromMe: true);
+        // Attachment-only drafts get an "Image"/"Video"-style preview instead of a blank tile (B14).
+        await _chatsService.HandleNewMessageAsync(
+            chatGuid, Core.Utils.MessagePreview.Derive(messageText, sentMimes), sentDate, isFromMe: true);
         return true;
     }
 
@@ -357,8 +365,33 @@ public partial class NewChatViewModel : ObservableObject
             var response = await _api.SendAttachmentAsync(chatGuid, tempGuid, stream, attachment.FileName,
                 method: "private-api");
             if (response.Status is < 200 or >= 300)
+            {
                 AppLog.Warn(LogCategory.Api,
                     $"Attachment '{attachment.FileName}' failed ({response.Status}) for new chat {chatGuid}");
+                continue;
+            }
+            await SeedAttachmentCacheAsync(response.Data, attachment.FilePath);
+        }
+    }
+
+    /// <summary>Copies a just-sent local attachment into the cache under its server-assigned
+    /// guid, so the thread we navigate into renders it without waiting for a delta sync (B13).</summary>
+    private async Task SeedAttachmentCacheAsync(Core.Models.Message? serverMessage, string filePath)
+    {
+        if (serverMessage?.Attachments is not { Count: > 0 } attachments) return;
+
+        foreach (var att in attachments)
+        {
+            if (att.Guid is null) continue;
+            try
+            {
+                await _attachmentCache.SeedFromLocalFileAsync(att.Guid, filePath);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn(LogCategory.App,
+                    $"Seeding attachment cache for {att.Guid} failed: {ex.Message}");
+            }
         }
     }
 

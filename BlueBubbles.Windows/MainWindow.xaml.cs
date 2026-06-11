@@ -151,6 +151,11 @@ public sealed partial class MainWindow : Window
         Close();
     }
 
+    /// <summary>Removes the tray icon without closing the window. Used before
+    /// <c>AppInstance.Restart</c>, which terminates the process without running Closed handlers
+    /// and would otherwise leave a ghost icon beside the restarted instance's.</summary>
+    internal void RemoveTrayIcon() => _trayService?.Dispose();
+
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == WM_GETMINMAXINFO)
@@ -169,6 +174,11 @@ public sealed partial class MainWindow : Window
             _trayService?.HandleTrayMessage(lParam);
             return IntPtr.Zero;
         }
+
+        // Explorer (re)started: its new taskbar has no notification icons, so re-add ours or it's
+        // gone until the app restarts. Fall through to the default proc like other broadcasts.
+        if (msg == SystemTrayService.WM_TASKBARCREATED)
+            _trayService?.HandleTaskbarCreated();
 
         if (msg == WM_POWERBROADCAST &&
             ((int)wParam == PBT_APMRESUMESUSPEND || (int)wParam == PBT_APMRESUMEAUTOMATIC))

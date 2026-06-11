@@ -7,21 +7,23 @@ namespace BlueBubbles.Windows.Tests;
 
 public class OutgoingMessageServiceTests
 {
-    private static Message MakeMessage(string guid, string? text = null) =>
+    private static Message MakeMessage(string guid, string? text = null, List<Attachment>? attachments = null) =>
         new(null, guid, null, null, text, null, null, 0,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), null, null,
             false, true, false, null, 0, null, 0, null, null, null, null, null,
-            null, false, false, null, null, null, null, null, null, null, null,
-            null, false, null, false, false, false);
+            null, attachments is not null, false, null, null, null, null, attachments, null,
+            null, null, null, false, null, false, false, false);
 
-    private static (OutgoingMessageService Service, MockApiService Api, ActionHandler ActionHandler, AppSettings Settings)
+    private static (OutgoingMessageService Service, MockApiService Api, ActionHandler ActionHandler, AttachmentCacheService Cache)
         CreateService(int sendDelay = 0)
     {
         var api = new MockApiService();
         var actionHandler = new ActionHandler();
         var settings = new AppSettings { SendDelay = sendDelay };
-        var service = new OutgoingMessageService(api, actionHandler, settings);
-        return (service, api, actionHandler, settings);
+        var cache = new AttachmentCacheService(api,
+            Path.Combine(Path.GetTempPath(), "bb-outgoing-tests-" + Guid.NewGuid().ToString("N")));
+        var service = new OutgoingMessageService(api, actionHandler, cache, settings);
+        return (service, api, actionHandler, cache);
     }
 
     [Fact]
@@ -215,6 +217,46 @@ public class OutgoingMessageServiceTests
         Assert.False(actionHandler.ContainsOutOfOrderGuid("server-guid-1"));
     }
 
+    [Fact]
+    public async Task SentAttachment_SeedsCacheUnderServerGuid()
+    {
+        var (svc, api, _, cache) = CreateService();
+
+        var sourceFile = Path.Combine(Path.GetTempPath(), $"bb-test-{Guid.NewGuid():N}.jpg");
+        await File.WriteAllBytesAsync(sourceFile, [1, 2, 3, 4]);
+        try
+        {
+            var attachment = new Attachment(null, "server-att-1", null, "image/jpeg",
+                true, Path.GetFileName(sourceFile), 4, null, null, false, null);
+            api.SendAttachmentResponse = new ApiResponse<Message>(
+                200, "OK",
+                MakeMessage("server-guid-1", attachments: [attachment]),
+                null);
+
+            var sentTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            svc.MessageStateChanged += (_, e) =>
+            {
+                if (e.State == OutgoingMessageState.Sent)
+                    sentTcs.TrySetResult();
+            };
+
+            svc.EnqueueAttachment("chat;+11234567890", sourceFile);
+
+            await Task.WhenAny(sentTcs.Task, Task.Delay(5000));
+            Assert.True(sentTcs.Task.IsCompleted, "Sent event was not received within timeout");
+
+            // B13: the local file must now be in the cache under the *server* attachment guid,
+            // so a bubble rebuilt from the DB finds it without a delta sync.
+            var cachedPath = cache.GetCachedPath("server-att-1");
+            Assert.NotNull(cachedPath);
+            Assert.Equal(new byte[] { 1, 2, 3, 4 }, await File.ReadAllBytesAsync(cachedPath!));
+        }
+        finally
+        {
+            File.Delete(sourceFile);
+        }
+    }
+
     private static async Task WaitForEvents(List<OutgoingMessageEvent> events, int expectedCount, int timeout)
     {
         var deadline = Environment.TickCount64 + timeout;
@@ -227,6 +269,7 @@ internal class MockApiService : IBlueBubblesApiService
 {
     public string? OriginOverride { get; set; }
     public ApiResponse<Message>? SendTextResponse { get; set; }
+    public ApiResponse<Message>? SendAttachmentResponse { get; set; }
     public Func<string, string, string, Task<ApiResponse<Message>>>? SendTextFunc { get; set; }
     public Exception? ThrowOnSendText { get; set; }
     public string? LastMethod { get; private set; }
@@ -259,7 +302,7 @@ internal class MockApiService : IBlueBubblesApiService
         string? method = null, string? effectId = null, string? subject = null,
         string? selectedMessageGuid = null, int? partIndex = null, bool? isAudioMessage = null,
         IProgress<double>? progress = null, CancellationToken ct = default)
-        => Task.FromResult(new ApiResponse<Message>(200, "OK",
+        => Task.FromResult(SendAttachmentResponse ?? new ApiResponse<Message>(200, "OK",
             MockMessage("attach-guid", fileName), null));
 
     // Stubs — only SendText/SendAttachment are wired; rest throw
@@ -311,10 +354,40 @@ internal class MockApiService : IBlueBubblesApiService
     public Task<ApiResponse<Message>> UnsendMessageAsync(string messageGuid, int partIndex = 0, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Message>> EditMessageAsync(string messageGuid, string editedMessage, string backwardsCompatMessage, int partIndex = 0, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> NotifyMessageAsync(string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<ScheduledMessage>>> GetScheduledMessagesAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<ScheduledMessage>> CreateScheduledMessageAsync(string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<ScheduledMessage>> UpdateScheduledMessageAsync(int id, string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> DeleteScheduledMessageAsync(int id, CancellationToken ct = default) => throw new NotImplementedException();
+    // Scheduled messages: capture hooks for ScheduledMessageServiceTests
+    public record ScheduledCall(int? Id, string ChatGuid, string Message, long ScheduledForMs,
+        string Method, Dictionary<string, object?>? Schedule);
+    public ScheduledCall? LastScheduledCall { get; private set; }
+    public int? LastDeletedScheduledId { get; private set; }
+    public ApiResponse<List<ScheduledMessage>>? GetScheduledResponse { get; set; }
+    public ApiResponse<ScheduledMessage>? ScheduledResponse { get; set; }
+
+    internal static ScheduledMessage MockScheduledMessage(int id = 1) =>
+        new(id, "send-message",
+            new ScheduledMessagePayload("chat;+11234567890", "Hello", "private-api"),
+            "2026-06-11T15:30:00.000Z", new ScheduledMessageSchedule("once", null, null),
+            "pending", null, null, "2026-06-10T15:30:00.000Z");
+
+    public Task<ApiResponse<List<ScheduledMessage>>> GetScheduledMessagesAsync(CancellationToken ct = default)
+        => Task.FromResult(GetScheduledResponse
+            ?? new ApiResponse<List<ScheduledMessage>>(200, "OK", [], null));
+    public Task<ApiResponse<ScheduledMessage>> CreateScheduledMessageAsync(string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default)
+    {
+        LastScheduledCall = new ScheduledCall(null, chatGuid, message, scheduledForMs, method, schedule);
+        return Task.FromResult(ScheduledResponse
+            ?? new ApiResponse<ScheduledMessage>(200, "OK", MockScheduledMessage(), null));
+    }
+    public Task<ApiResponse<ScheduledMessage>> UpdateScheduledMessageAsync(int id, string chatGuid, string message, long scheduledForMs, string method = "private-api", string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, Dictionary<string, object?>? schedule = null, CancellationToken ct = default)
+    {
+        LastScheduledCall = new ScheduledCall(id, chatGuid, message, scheduledForMs, method, schedule);
+        return Task.FromResult(ScheduledResponse
+            ?? new ApiResponse<ScheduledMessage>(200, "OK", MockScheduledMessage(id), null));
+    }
+    public Task<ApiResponse<JsonElement>> DeleteScheduledMessageAsync(int id, CancellationToken ct = default)
+    {
+        LastDeletedScheduledId = id;
+        return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null));
+    }
     public Task<ApiResponse<List<Handle>>> QueryHandlesAsync(List<string>? withQuery = null, string? address = null, int offset = 0, int limit = 100, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Handle>> GetHandleAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetHandleFocusStateAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();

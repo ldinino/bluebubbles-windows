@@ -14,6 +14,7 @@ public interface IActionHandler
     event EventHandler<JsonElement>? IncomingFaceTime;
     event EventHandler<JsonElement>? FaceTimeStatusChanged;
     event EventHandler<List<string>>? AliasesRemoved;
+    event EventHandler<ScheduledMessagesEventArgs>? ScheduledMessagesChanged;
 
     void HandleEvent(string eventName, JsonElement data, string source);
     bool ShouldNotifyForNewMessageGuid(string guid);

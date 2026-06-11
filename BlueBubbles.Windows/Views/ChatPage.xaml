@@ -36,6 +36,7 @@
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -140,15 +141,81 @@
             </Button>
         </Grid>
 
+        <!-- Pending scheduled sends ("Send Later"): outlined bubbles pinned at the bottom of the
+             thread, mirroring Apple's Send Later UI. The server owns the queue; these reflect it
+             and disappear when the server sends (the real message then arrives via the socket).
+             Right-click a bubble to edit or cancel. -->
+        <ScrollViewer x:Name="ScheduledSection"
+                      Grid.Row="2"
+                      Visibility="Collapsed"
+                      MaxHeight="220"
+                      VerticalScrollBarVisibility="Auto"
+                      Padding="16,0">
+            <ItemsControl x:Name="ScheduledList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ScheduledMessageItem">
+                        <StackPanel HorizontalAlignment="Right" Spacing="3" Margin="0,2,0,6">
+                            <StackPanel Orientation="Horizontal" Spacing="5"
+                                        HorizontalAlignment="Right" Margin="0,0,6,0">
+                                <FontIcon Glyph="&#xE823;" FontSize="11"
+                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="{x:Bind DisplayTime}"
+                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <Grid HorizontalAlignment="Right" MaxWidth="420"
+                                  ToolTipService.ToolTip="Right-click to edit or cancel">
+                                <Rectangle RadiusX="16" RadiusY="16"
+                                           Stroke="{ThemeResource AccentFillColorDefaultBrush}"
+                                           StrokeDashArray="3 2"
+                                           StrokeThickness="1.5"
+                                           Fill="Transparent" />
+                                <TextBlock Text="{x:Bind Text}"
+                                           TextWrapping="Wrap"
+                                           Margin="14,9"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <Grid.ContextFlyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Text="Edit…"
+                                                        Tag="{x:Bind}"
+                                                        Click="OnScheduledEditClick">
+                                            <MenuFlyoutItem.Icon>
+                                                <FontIcon Glyph="&#xE70F;" />
+                                            </MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                        <MenuFlyoutItem Text="Cancel send"
+                                                        Tag="{x:Bind}"
+                                                        Click="OnScheduledCancelClick">
+                                            <MenuFlyoutItem.Icon>
+                                                <FontIcon Glyph="&#xE74D;" />
+                                            </MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                    </MenuFlyout>
+                                </Grid.ContextFlyout>
+                            </Grid>
+                            <TextBlock Text="{x:Bind Error}"
+                                       Visibility="{x:Bind HasError}"
+                                       HorizontalAlignment="Right"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                       TextWrapping="Wrap"
+                                       MaxWidth="420"
+                                       Margin="0,0,6,0" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
         <!-- Typing indicator: its own row so it pushes the thread up instead of overlapping it -->
         <controls:TypingIndicator x:Name="TypingDots"
-                                  Grid.Row="2"
+                                  Grid.Row="3"
                                   Visibility="Collapsed"
                                   HorizontalAlignment="Left"
                                   Margin="16,2,0,6" />
 
         <!-- Composer -->
-        <Border Grid.Row="3"
+        <Border Grid.Row="4"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">
             <controls:MessageComposer x:Name="Composer" />

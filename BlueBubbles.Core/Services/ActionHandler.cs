@@ -23,6 +23,7 @@ public class ActionHandler : IActionHandler
     public event EventHandler<JsonElement>? IncomingFaceTime;
     public event EventHandler<JsonElement>? FaceTimeStatusChanged;
     public event EventHandler<List<string>>? AliasesRemoved;
+    public event EventHandler<ScheduledMessagesEventArgs>? ScheduledMessagesChanged;
 
     public bool ShouldNotifyForNewMessageGuid(string guid)
     {
@@ -73,7 +74,33 @@ public class ActionHandler : IActionHandler
             case SocketEvents.IMessageAliasesRemoved:
                 HandleAliasesRemoved(data);
                 break;
+            case SocketEvents.ScheduledMessageCreated:
+            case SocketEvents.ScheduledMessageUpdated:
+            case SocketEvents.ScheduledMessageDeleted:
+            case SocketEvents.ScheduledMessageSent:
+            case SocketEvents.ScheduledMessageError:
+                HandleScheduledMessage(eventName, data);
+                break;
         }
+    }
+
+    private void HandleScheduledMessage(string eventName, JsonElement data)
+    {
+        // The deleted event carries an array, the others a single object; either form may be
+        // wrapped in { "data": ... } depending on the server's emit path.
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("data", out var inner))
+            data = inner;
+
+        List<ScheduledMessage>? messages = data.ValueKind switch
+        {
+            JsonValueKind.Array => data.Deserialize<List<ScheduledMessage>>(JsonDefaults.Options),
+            JsonValueKind.Object when data.Deserialize<ScheduledMessage>(JsonDefaults.Options) is { } single
+                => [single],
+            _ => null
+        };
+
+        if (messages is null or { Count: 0 }) return;
+        ScheduledMessagesChanged?.Invoke(this, new ScheduledMessagesEventArgs(eventName, messages));
     }
 
     private void HandleNewMessage(JsonElement data)

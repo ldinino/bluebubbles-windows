@@ -18,6 +18,10 @@ public sealed partial class MessageComposer : UserControl
     public event EventHandler<string>? TextChanged;
     public event EventHandler? ReplyCancelled;
     public event EventHandler? EditCancelled;
+    public event EventHandler? ScheduleRequested;
+    /// <summary>Raised when the send button's context flyout opens, so the page can refresh
+    /// <see cref="IsScheduleEnabled"/> from the view model's current state.</summary>
+    public event EventHandler? ScheduleMenuOpening;
 
     public MessageComposer()
     {
@@ -124,6 +128,28 @@ public sealed partial class MessageComposer : UserControl
     private void OnSendClick(object sender, RoutedEventArgs e)
     {
         SendRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Enables/disables "Send later…" (scheduling is text-only; reply/edit excluded).</summary>
+    public bool IsScheduleEnabled
+    {
+        get => SendLaterItem.IsEnabled;
+        set
+        {
+            SendLaterItem.IsEnabled = value;
+            ToolTipService.SetToolTip(SendLaterItem,
+                value ? null : "Scheduling supports text-only messages");
+        }
+    }
+
+    private void OnSendFlyoutOpening(object sender, object e)
+    {
+        ScheduleMenuOpening?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnSendLaterClick(object sender, RoutedEventArgs e)
+    {
+        ScheduleRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private async void OnPickPhoto(object sender, RoutedEventArgs e)

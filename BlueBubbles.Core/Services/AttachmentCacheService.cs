@@ -66,6 +66,38 @@ public class AttachmentCacheService : IAttachmentCacheService
         }
     }
 
+    public async Task<string?> SeedFromLocalFileAsync(string attachmentGuid, string sourceFilePath,
+        CancellationToken ct = default)
+    {
+        var existing = GetCachedPath(attachmentGuid);
+        if (existing is not null) return existing;
+
+        var guidLock = _perGuidLocks.GetOrAdd(attachmentGuid, _ => new SemaphoreSlim(1, 1));
+        await guidLock.WaitAsync(ct);
+        try
+        {
+            existing = GetCachedPath(attachmentGuid);
+            if (existing is not null) return existing;
+
+            // The source can be a transient file (e.g. a clipboard-paste temp) — tolerate it
+            // disappearing; the attachment is still downloadable from the server later.
+            if (!File.Exists(sourceFilePath)) return null;
+
+            var dir = GetAttachmentDir(attachmentGuid);
+            Directory.CreateDirectory(dir);
+
+            var fileName = SanitizeFileName(Path.GetFileName(sourceFilePath)) ?? "attachment";
+            var filePath = Path.Combine(dir, fileName);
+            await Task.Run(() => File.Copy(sourceFilePath, filePath, overwrite: true), ct);
+            return filePath;
+        }
+        finally
+        {
+            guidLock.Release();
+            _perGuidLocks.TryRemove(attachmentGuid, out _);
+        }
+    }
+
     public async Task PurgeCacheAsync(CancellationToken ct = default)
     {
         await Task.Run(() =>

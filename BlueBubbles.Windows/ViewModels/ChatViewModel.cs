@@ -20,6 +20,7 @@ public partial class ChatViewModel : ObservableObject
     private readonly ISocketService _socketService;
     private readonly IAttachmentCacheService _attachmentCache;
     private readonly ISyncService _syncService;
+    private readonly IScheduledMessageService _scheduledMessages;
     private readonly ILinkPreviewService? _linkPreview;
     private readonly AppSettings _settings;
 
@@ -46,6 +47,10 @@ public partial class ChatViewModel : ObservableObject
 
     public ObservableCollection<object> Items { get; } = [];
     public ObservableCollection<StagedAttachment> StagedAttachments { get; } = [];
+
+    /// <summary>This chat's pending (or errored) server-side scheduled messages, shown as
+    /// outlined bubbles pinned at the bottom of the thread until the server sends them.</summary>
+    public ObservableCollection<ScheduledMessageItem> ScheduledItems { get; } = [];
 
     /// <summary>GUID of the first unread message in the loaded page, or null. Used by the optional
     /// "Scroll to last unread" setting to open the thread at the first unread message.</summary>
@@ -94,6 +99,7 @@ public partial class ChatViewModel : ObservableObject
         ISocketService socketService,
         IAttachmentCacheService attachmentCache,
         ISyncService syncService,
+        IScheduledMessageService scheduledMessages,
         AppSettings settings,
         ILinkPreviewService? linkPreview = null)
     {
@@ -105,6 +111,7 @@ public partial class ChatViewModel : ObservableObject
         _socketService = socketService;
         _attachmentCache = attachmentCache;
         _syncService = syncService;
+        _scheduledMessages = scheduledMessages;
         _settings = settings;
         _linkPreview = linkPreview;
 
@@ -120,6 +127,7 @@ public partial class ChatViewModel : ObservableObject
         _actionHandler.MessageUpdated += (s, e) => RunOnUI(() => OnMessageUpdated(s, e));
         _actionHandler.ReactionReceived += (s, e) => RunOnUI(() => OnReactionReceived(s, e));
         _actionHandler.TypingIndicatorChanged += (s, e) => RunOnUI(() => OnTypingIndicatorChanged(s, e));
+        _actionHandler.ScheduledMessagesChanged += (s, e) => RunOnUI(() => OnScheduledMessagesChanged(e));
         _outgoingService.MessageStateChanged += (s, e) => RunOnUI(() => OnOutgoingMessageStateChanged(s, e));
         _contacts.ContactsChanged += (s, e) => RunOnUI(RefreshContactInfo);
 
@@ -199,6 +207,7 @@ public partial class ChatViewModel : ObservableObject
             : tile.Participants.FirstOrDefault()?.Address ?? string.Empty;
 
         Items.Clear();
+        ScheduledItems.Clear();
         _oldestMessageDate = null;
         _reconcilePending = false;
         _pendingTempGuids.Clear();
@@ -206,6 +215,8 @@ public partial class ChatViewModel : ObservableObject
         MessageText = string.Empty;
         StagedAttachments.Clear();
         StopTypingIndicator();
+
+        _ = RefreshScheduledMessagesAsync();
 
         IsLoading = true;
         try
@@ -358,6 +369,105 @@ public partial class ChatViewModel : ObservableObject
             _chatGuid, previewText,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             isFromMe: true);
+    }
+
+    /// <summary>GUID of the open chat, or empty when no chat is loaded. Used by the page to
+    /// scope the scheduled-messages dialog.</summary>
+    public string ChatGuid => _chatGuid;
+
+    /// <summary>Whether "Send later" is currently possible: a loaded chat, non-empty text, and
+    /// no staged attachments / reply / edit (the server's scheduled payload is text-only, and a
+    /// scheduled reply is a deliberate v1 scope cut).</summary>
+    public bool CanScheduleSend =>
+        !string.IsNullOrEmpty(_chatGuid) &&
+        !string.IsNullOrWhiteSpace(MessageText) &&
+        StagedAttachments.Count == 0 &&
+        EditingMessage is null &&
+        ReplyingTo is null;
+
+    /// <summary>
+    /// Schedules the composer text for a future server-side send and clears the composer.
+    /// Returns null on success, or a user-facing error message. The message shows up in
+    /// <see cref="ScheduledItems"/> (outlined pending bubble) — it only enters the thread
+    /// proper when the server sends it at fire time, via the normal new-message socket path.
+    /// </summary>
+    public async Task<string?> ScheduleCurrentMessageAsync(DateTimeOffset sendAt)
+    {
+        if (!CanScheduleSend)
+            return "This message can't be scheduled.";
+
+        StopTypingIndicator();
+
+        var response = await _scheduledMessages.CreateAsync(
+            _chatGuid, MessageText.Trim(), sendAt.ToUnixTimeMilliseconds());
+        if (response.Status is < 200 or >= 300)
+            return response.Error?.ErrorMessage ?? response.Message;
+
+        MessageText = string.Empty;
+        CanSend = false;
+        await RefreshScheduledMessagesAsync();
+        return null;
+    }
+
+    /// <summary>Cancels a pending scheduled message server-side and drops its bubble.
+    /// Returns null on success, or a user-facing error message.</summary>
+    public async Task<string?> CancelScheduledAsync(ScheduledMessageItem item)
+    {
+        var response = await _scheduledMessages.DeleteAsync(item.Id);
+        if (response.Status is < 200 or >= 300)
+            return response.Error?.ErrorMessage ?? response.Message;
+
+        ScheduledItems.Remove(item);
+        return null;
+    }
+
+    /// <summary>Reschedules (text and/or time) a pending scheduled message.
+    /// Returns null on success, or a user-facing error message.</summary>
+    public async Task<string?> UpdateScheduledAsync(ScheduledMessageItem item, string text, DateTimeOffset sendAt)
+    {
+        var response = await _scheduledMessages.UpdateAsync(
+            item.Id, _chatGuid, text, sendAt.ToUnixTimeMilliseconds());
+        if (response.Status is < 200 or >= 300)
+            return response.Error?.ErrorMessage ?? response.Message;
+
+        await RefreshScheduledMessagesAsync();
+        return null;
+    }
+
+    /// <summary>Reloads this chat's pending/errored scheduled messages from the server. The
+    /// guid is captured up front so a reply landing after a chat switch is discarded.</summary>
+    private async Task RefreshScheduledMessagesAsync()
+    {
+        var guid = _chatGuid;
+        if (string.IsNullOrEmpty(guid)) return;
+
+        var response = await _scheduledMessages.GetAllAsync();
+        if (response.Status is < 200 or >= 300 || response.Data is null) return;
+
+        var items = response.Data
+            .Where(m => m.Payload?.ChatGuid == guid &&
+                        m.Status is ScheduledMessageStatus.Pending or ScheduledMessageStatus.Error)
+            .OrderBy(m => m.ScheduledForLocal ?? DateTimeOffset.MaxValue)
+            .Select(ScheduledMessageItem.From)
+            .ToList();
+
+        RunOnUI(() =>
+        {
+            if (_chatGuid != guid) return;
+            ScheduledItems.Clear();
+            foreach (var item in items)
+                ScheduledItems.Add(item);
+        });
+    }
+
+    /// <summary>Socket push for any scheduled-message change (created/updated/deleted/sent/
+    /// error): if it touches the open chat, re-pull the pending list. A 'sent' event clears
+    /// the outlined bubble; the real message then arrives via the new-message path.</summary>
+    private void OnScheduledMessagesChanged(ScheduledMessagesEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+        if (!e.Messages.Any(m => m.Payload?.ChatGuid == _chatGuid)) return;
+        _ = RefreshScheduledMessagesAsync();
     }
 
     public void AddStagedAttachment(string filePath)
@@ -1264,3 +1374,24 @@ public record ReplyDraft(string MessageGuid, int PartIndex, string SenderLabel, 
 /// <summary>The message being edited while the composer is in edit mode. <see cref="OriginalText"/> is
 /// the pre-edit text, used to suppress no-op edits.</summary>
 public record EditDraft(string MessageGuid, int PartIndex, string OriginalText);
+
+/// <summary>A pending (or errored) server-side scheduled message, rendered as an outlined
+/// bubble pinned at the bottom of the thread until the server sends it.</summary>
+public record ScheduledMessageItem(
+    int Id,
+    string Text,
+    DateTimeOffset? ScheduledForLocal,
+    string DisplayTime,
+    bool HasError,
+    string? Error)
+{
+    public static ScheduledMessageItem From(ScheduledMessage m) => new(
+        m.Id,
+        m.Payload?.MessageText ?? string.Empty,
+        m.ScheduledForLocal,
+        m.ScheduledForLocal is { } t
+            ? $"Send later — {t.LocalDateTime:ddd, MMM d 'at' h:mm tt}"
+            : "Send later",
+        m.Status == ScheduledMessageStatus.Error,
+        m.Error);
+}

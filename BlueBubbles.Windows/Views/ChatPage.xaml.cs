@@ -14,6 +14,7 @@ public sealed partial class ChatPage : Page
     private readonly ChatViewModel _vm;
     private readonly AppSettings _settings;
     private ScrollViewer? _scrollViewer;
+    private long _scrollableHeightCallbackToken = -1;
     private bool _suppressScrollLoadMore;
     private ConversationTileViewModel? _currentTile;
 
@@ -54,10 +55,16 @@ public sealed partial class ChatPage : Page
         Composer.TextChanged += OnComposerTextChanged;
         Composer.ReplyCancelled += OnReplyCancelled;
         Composer.EditCancelled += OnEditCancelled;
+        Composer.ScheduleMenuOpening += OnScheduleMenuOpening;
+        Composer.ScheduleRequested += OnScheduleRequested;
         Composer.SendWithReturn = _settings.SendWithReturn;
         Composer.SetStagingSource(_vm.StagedAttachments);
 
         _vm.StagedAttachments.CollectionChanged += OnStagedAttachmentsChanged;
+
+        ScheduledList.ItemsSource = _vm.ScheduledItems;
+        _vm.ScheduledItems.CollectionChanged += OnScheduledItemsChanged;
+        UpdateScheduledSectionVisibility();
 
         if (e.Parameter is ConversationTileViewModel tile)
         {
@@ -94,21 +101,43 @@ public sealed partial class ChatPage : Page
         Composer.TextChanged -= OnComposerTextChanged;
         Composer.ReplyCancelled -= OnReplyCancelled;
         Composer.EditCancelled -= OnEditCancelled;
+        Composer.ScheduleMenuOpening -= OnScheduleMenuOpening;
+        Composer.ScheduleRequested -= OnScheduleRequested;
 
         _vm.StagedAttachments.CollectionChanged -= OnStagedAttachmentsChanged;
+        _vm.ScheduledItems.CollectionChanged -= OnScheduledItemsChanged;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (_scrollViewer is not null)
+        {
             _scrollViewer.ViewChanged -= OnScrollViewChanged;
+            if (_scrollableHeightCallbackToken != -1)
+                _scrollViewer.UnregisterPropertyChangedCallback(
+                    ScrollViewer.ScrollableHeightProperty, _scrollableHeightCallbackToken);
+        }
 
         _scrollViewer = FindDescendant<ScrollViewer>(MessagesList);
         if (_scrollViewer is not null)
+        {
             _scrollViewer.ViewChanged += OnScrollViewChanged;
+            // ViewChanged only fires when the *offset* changes, but ScrollableHeight can change
+            // with the offset parked (content/images finish sizing). In a short thread the initial
+            // layout can transiently report ScrollableHeight > 0, flag the FAB visible, then settle
+            // back to 0 with no further ViewChanged — leaving the button stuck (B12). Re-evaluate
+            // whenever ScrollableHeight itself changes.
+            _scrollableHeightCallbackToken = _scrollViewer.RegisterPropertyChangedCallback(
+                ScrollViewer.ScrollableHeightProperty, OnScrollableHeightChanged);
+        }
 
         UpdateHeader();
         Composer.FocusInput();
+    }
+
+    private void OnScrollableHeightChanged(DependencyObject sender, DependencyProperty dp)
+    {
+        ScrollToBottomBtn.Visibility = IsNearBottom() ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void UpdateHeader()
@@ -189,6 +218,78 @@ public sealed partial class ChatPage : Page
         var dialog = new ContentDialog
         {
             Title = "Couldn't Delete Message",
+            Content = message,
+            CloseButtonText = "OK",
+            XamlRoot = XamlRoot
+        };
+        await dialog.ShowAsync();
+    }
+
+    private void OnScheduleMenuOpening(object? sender, EventArgs e)
+    {
+        Composer.IsScheduleEnabled = _vm.CanScheduleSend;
+    }
+
+    private async void OnScheduleRequested(object? sender, EventArgs e)
+    {
+        var dialog = new Controls.ScheduleSendDialog { XamlRoot = XamlRoot };
+        dialog.Initialize(_vm.MessageText, existingTime: null);
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        // The user may have tweaked the text inside the dialog.
+        _vm.MessageText = dialog.MessageText;
+        var error = await _vm.ScheduleCurrentMessageAsync(dialog.Result!.Value);
+        if (error is not null)
+            await ShowErrorDialogAsync("Couldn't Schedule Message", error);
+    }
+
+    private void OnScheduledItemsChanged(object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => UpdateScheduledSectionVisibility();
+
+    private void UpdateScheduledSectionVisibility()
+        => ScheduledSection.Visibility = _vm.ScheduledItems.Count > 0
+            ? Visibility.Visible : Visibility.Collapsed;
+
+    private async void OnScheduledEditClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: ScheduledMessageItem item }) return;
+
+        var dialog = new Controls.ScheduleSendDialog { XamlRoot = XamlRoot };
+        dialog.Initialize(item.Text, item.ScheduledForLocal);
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var error = await _vm.UpdateScheduledAsync(item, dialog.MessageText, dialog.Result!.Value);
+        if (error is not null)
+            await ShowErrorDialogAsync("Couldn't Update Scheduled Message", error);
+    }
+
+    private async void OnScheduledCancelClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: ScheduledMessageItem item }) return;
+
+        // Destructive (the composed text is lost) — confirm like other server-side deletes.
+        var confirm = new ContentDialog
+        {
+            Title = "Cancel scheduled message?",
+            Content = "The message won't be sent and its text will be discarded.",
+            PrimaryButtonText = "Cancel send",
+            CloseButtonText = "Keep",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var error = await _vm.CancelScheduledAsync(item);
+        if (error is not null)
+            await ShowErrorDialogAsync("Couldn't Cancel Scheduled Message", error);
+    }
+
+    private async Task ShowErrorDialogAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
             Content = message,
             CloseButtonText = "OK",
             XamlRoot = XamlRoot

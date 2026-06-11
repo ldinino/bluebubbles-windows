@@ -2,6 +2,7 @@ using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
+using BlueBubbles.Core.Utils;
 using Microsoft.EntityFrameworkCore;
 
 namespace BlueBubbles.Core.Services;
@@ -96,6 +97,8 @@ public class ChatsService : IChatsService
         var lastMessages = lastMessageIds.Count > 0
             ? await db.Messages
                 .Where(m => lastMessageIds.Contains(m.Id))
+                // Attachments feed the preview fallback for attachment-only messages (B14).
+                .Include(m => m.Attachments)
                 .ToDictionaryAsync(m => m.ChatId, m => m)
             : new Dictionary<int, MessageEntity>();
 
@@ -149,7 +152,9 @@ public class ChatsService : IChatsService
 
             lastMessages.TryGetValue(chat.Id, out var lastMsg);
             recentSendersByChat.TryGetValue(chat.Id, out var recentSenders);
-            items.Add(new ChatWithParticipants(chat, participants, lastMsg?.Text, recentSenders,
+            var preview = MessagePreview.Derive(
+                lastMsg?.Text, lastMsg?.Attachments.Select(a => a.MimeType));
+            items.Add(new ChatWithParticipants(chat, participants, preview, recentSenders,
                 lastMsg?.IsFromMe ?? false, lastMsg?.DateDelivered, lastMsg?.DateRead));
         }
 
