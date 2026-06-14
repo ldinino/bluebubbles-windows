@@ -201,6 +201,13 @@ public class SyncService : ISyncService
             catch (Exception ex) { AppLog.Warn(LogCategory.Sync, $"Failed to sync messages for chat {chatGuid}: {ex.Message}"); }
         }
 
+        // Server is the single source of truth for which chats exist: the paginated query above is
+        // the authoritative list, so any local chat whose GUID it didn't return was deleted on the
+        // server (or another device) and is pruned here. Guard against a transient empty response
+        // wiping the list — only prune when chats were collected, or the server genuinely has none.
+        if (totalChats == 0 || chatEntityIds.Count > 0)
+            await PruneDeletedChatsAsync(chatEntityIds.Select(c => c.Guid).ToHashSet(), ct);
+
         progress?.Report(new(SyncPhase.FetchingFcmConfig, 0, 0, "Fetching Firebase config..."));
         await FetchFcmConfigAsync(ct);
 
@@ -319,6 +326,12 @@ public class SyncService : ISyncService
                 offset += IncrementalBatchSize;
                 hasMore = messages.Count == IncrementalBatchSize;
             }
+
+            // Pull deletions down too: a chat removed on the server (or another device) emits no
+            // socket event and arrives in no message delta, so the only way to learn it's gone is to
+            // reconcile against the server's current chat list. Runs on every delta (launch, socket
+            // reconnect, sleep/network recovery) so deletions propagate without a manual full resync.
+            await ReconcileChatsAsync(ct);
 
             await _chatsService.LoadChatsAsync();
         }
@@ -459,6 +472,116 @@ public class SyncService : ISyncService
             chat.HasUnreadMessage = false;
             await db.SaveChangesAsync(ct);
         }
+    }
+
+    /// <summary>Fetches the server's full chat list and prunes any local chat it no longer returns,
+    /// keeping the cache in step with deletions made on the server or another device. Best-effort and
+    /// self-guarding: a failed or partial fetch prunes nothing (it would otherwise hide live chats).</summary>
+    private async Task ReconcileChatsAsync(CancellationToken ct)
+    {
+        var serverGuids = new HashSet<string>();
+        var offset = 0;
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            ApiResponse<List<Chat>> resp;
+            try
+            {
+                // Bare query (no participants/lastmessage expansion) — we only need GUIDs, and a
+                // lean payload keeps this cheap to run on every delta.
+                resp = await _api.QueryChatsAsync(
+                    withQuery: [], offset: offset, limit: ChatPageSize, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn(LogCategory.Sync,
+                    $"Chat reconcile fetch failed at offset {offset}; skipping prune: {ex.Message}");
+                return;
+            }
+
+            if (resp.Status is < 200 or >= 300 || resp.Data is null)
+            {
+                AppLog.Warn(LogCategory.Sync,
+                    $"Chat reconcile fetch returned status {resp.Status}; skipping prune");
+                return;
+            }
+
+            foreach (var chat in resp.Data)
+                serverGuids.Add(chat.Guid);
+
+            // Page until the server returns a short page; trusting /chat/count for the bound could
+            // let an undercount truncate the snapshot and over-prune.
+            if (resp.Data.Count < ChatPageSize) break;
+            offset += ChatPageSize;
+        }
+
+        // An empty list is indistinguishable from a transient server hiccup, so only trust it (and
+        // prune everything) when the count endpoint independently confirms the server has no chats.
+        if (serverGuids.Count == 0 && !await ServerReportsZeroChatsAsync(ct))
+        {
+            AppLog.Warn(LogCategory.Sync,
+                "Chat reconcile got an empty list but the server count is non-zero/unknown; skipping prune");
+            return;
+        }
+
+        await PruneDeletedChatsAsync(serverGuids, ct);
+    }
+
+    /// <summary>Confirms via the count endpoint that the server genuinely has zero chats, used to
+    /// distinguish a real "all chats deleted" from a flaky empty query response. Conservative: any
+    /// failure returns false so the caller skips pruning rather than risk wiping the list.</summary>
+    private async Task<bool> ServerReportsZeroChatsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var resp = await _api.GetChatCountAsync(ct);
+            if (resp.Status is < 200 or >= 300) return false;
+            return resp.Data!.TryGetProperty("total", out var total) && total.GetInt32() == 0;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug(LogCategory.Sync, $"Chat count probe failed during reconcile: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Soft-deletes every visible local chat whose GUID is absent from <paramref name="serverChatGuids"/>.
+    /// Soft delete (not a row removal) mirrors the empty-chat prune and is reversible: if the chat
+    /// reappears — iMessage chat GUIDs are deterministic — the next message resurrects it via
+    /// EnsureChatExistsAsync/HandleNewMessageAsync. Callers MUST pass a complete, trusted server
+    /// snapshot; pruning against a partial fetch would wrongly hide live chats.</summary>
+    private async Task<int> PruneDeletedChatsAsync(IReadOnlySet<string> serverChatGuids, CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+
+        // Diff in memory: keeps the GUID comparison case-exact and avoids translating a (possibly
+        // large) IN-clause over the server set. Already soft-deleted chats are skipped — re-pruning
+        // them would needlessly bump DateDeleted.
+        var visible = await db.Chats
+            .Where(c => c.DateDeleted == null)
+            .Select(c => new { c.Id, c.Guid })
+            .ToListAsync(ct);
+
+        var staleIds = visible
+            .Where(c => !serverChatGuids.Contains(c.Guid))
+            .Select(c => c.Id)
+            .ToList();
+
+        if (staleIds.Count == 0) return 0;
+
+        var staleChats = await db.Chats.Where(c => staleIds.Contains(c.Id)).ToListAsync(ct);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var chat in staleChats)
+        {
+            chat.DateDeleted = now;
+            chat.HasUnreadMessage = false;
+        }
+
+        await db.SaveChangesAsync(ct);
+        AppLog.Info(LogCategory.Sync, $"Pruned {staleChats.Count} chat(s) deleted on the server");
+        return staleChats.Count;
     }
 
     private long _maxSyncedRowId;

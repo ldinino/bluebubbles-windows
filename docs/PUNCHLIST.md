@@ -75,6 +75,21 @@
 > for good after an Explorer restart — `MainWindow.WndProc` now watches the registered
 > `"TaskbarCreated"` broadcast and `SystemTrayService.HandleTaskbarCreated()` re-runs
 > `Shell_NotifyIcon(NIM_ADD)`.
+>
+> **B16 (fixed, shipping with 0.21.1):** chat deletions made on the server or another device never
+> propagated down — sync only ever upserted chats, so a chat deleted elsewhere lingered in the list
+> forever (the server emits no chat-deleted socket event, and a deletion rides in no message delta).
+> `SyncService` now reconciles against the server's chat list as the single source of truth: a new
+> `ReconcileChatsAsync` pages the bare `chat/query` list on every incremental delta (launch, socket
+> reconnect, sleep/network recovery) and `PruneDeletedChatsAsync` soft-deletes any local chat the
+> server no longer returns (soft, not a row removal — mirrors the empty-chat prune and is
+> reversible: a returning chat keeps its deterministic iMessage GUID and is resurrected by
+> `EnsureChatExistsAsync`/`HandleNewMessageAsync` on the next message, history intact). Full sync
+> prunes too, reusing the authoritative list it already paged. Absence-based pruning is guarded
+> against mass-wipe on a flaky fetch — any non-2xx/throw on a page aborts the prune entirely, and an
+> empty list is trusted only when `chat/count` independently confirms zero. Covered by
+> `SyncServiceTests` (prune on incremental + full sync, the genuine all-deleted path, and both
+> safety guards).
 
 ---
 
