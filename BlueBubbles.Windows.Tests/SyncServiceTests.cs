@@ -339,7 +339,8 @@ public class SyncServiceTests
         {
             MakeMessage("d-1", "back", handle, 1700000000500) with { OriginalRowId = 5, Chats = [chat] }
         };
-        var api = new SyncMockApiService([], queryMessages: offset => offset == 0 ? batch : []);
+        // The chat still exists on the server (it just received a message), so reconcile must keep it.
+        var api = new SyncMockApiService([chat], queryMessages: offset => offset == 0 ? batch : []);
 
         var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
         var svc = new SyncService(api, factory, new MockFirebaseService(),
@@ -350,6 +351,141 @@ public class SyncServiceTests
         using var db2 = factory.CreateDbContext();
         var resurrected = db2.Chats.Single(c => c.Guid == "chat-zombie");
         Assert.Null(resurrected.DateDeleted);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_PrunesChatDeletedOnServer()
+    {
+        // Server is the single source of truth: a chat present locally but absent from the server's
+        // chat list was deleted there (or on another device) and must be soft-deleted here.
+        var handle = MakeHandle("+15551234567");
+        var keep = MakeChat("chat-keep", [handle]);
+
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-keep" });
+            db.Chats.Add(new ChatEntity { Guid = "chat-gone", HasUnreadMessage = true });
+            db.SaveChanges();
+        }
+
+        // Server still has chat-keep; chat-gone is gone. No new messages in the delta.
+        var api = new SyncMockApiService([keep], queryMessages: _ => []);
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-keep").DateDeleted);
+
+        var gone = db2.Chats.Single(c => c.Guid == "chat-gone");
+        Assert.NotNull(gone.DateDeleted);
+        Assert.False(gone.HasUnreadMessage);
+    }
+
+    [Fact]
+    public async Task FullSync_PrunesStaleChatNotOnServer()
+    {
+        // Re-running a full sync over an existing cache must drop chats the server no longer has.
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var keep = MakeChat("chat-keep", [handle], lastMsg);
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-keep"] = [MakeMessage("msg-1", "hello", handle, recentDate - 1000)]
+        };
+
+        var api = new SyncMockApiService([keep], messages);
+        var (svc, factory) = CreateService(api);
+
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-stale" });
+            db.SaveChanges();
+        }
+
+        await svc.RunFullSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-keep").DateDeleted);
+        Assert.NotNull(db2.Chats.Single(c => c.Guid == "chat-stale").DateDeleted);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_ServerHasNoChats_PrunesAll()
+    {
+        // The honest "everything was deleted" case: an empty query AND a zero count -> prune all.
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-a" });
+            db.Chats.Add(new ChatEntity { Guid = "chat-b" });
+            db.SaveChanges();
+        }
+
+        var api = new SyncMockApiService([], queryMessages: _ => []); // count defaults to 0
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.All(db2.Chats.ToList(), c => Assert.NotNull(c.DateDeleted));
+    }
+
+    [Fact]
+    public async Task IncrementalSync_EmptyServerListButNonZeroCount_DoesNotPrune()
+    {
+        // A flaky empty query response must NOT wipe the cache: pruning is skipped unless the count
+        // endpoint independently confirms the server really has zero chats.
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-live" });
+            db.SaveChanges();
+        }
+
+        // Query returns nothing, but the server insists it has chats — treat the empty list as a glitch.
+        var api = new SyncMockApiService([], queryMessages: _ => [], chatCountOverride: 3);
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-live").DateDeleted);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_ChatFetchFails_DoesNotPrune()
+    {
+        // If the chat-list fetch errors, reconcile must prune nothing rather than hide live chats.
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-live" });
+            db.SaveChanges();
+        }
+
+        var api = new SyncMockApiService([], queryMessages: _ => [],
+            onQueryChats: () => throw new InvalidOperationException("network dropped"));
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-live").DateDeleted);
     }
 }
 
@@ -370,6 +506,7 @@ internal class SyncMockApiService : IBlueBubblesApiService
     private readonly Dictionary<string, List<Message>> _chatMessages;
     private readonly Action? _onQueryChats;
     private readonly Func<int, List<Message>>? _queryMessages;
+    private readonly int? _chatCountOverride;
 
     public int QueryChatsCallCount { get; private set; }
     public List<ChatMessageCall> ChatMessageCalls { get; } = [];
@@ -378,18 +515,23 @@ internal class SyncMockApiService : IBlueBubblesApiService
         List<Chat> chats,
         Dictionary<string, List<Message>>? chatMessages = null,
         Action? onQueryChats = null,
-        Func<int, List<Message>>? queryMessages = null)
+        Func<int, List<Message>>? queryMessages = null,
+        int? chatCountOverride = null)
     {
         _chats = chats;
         _chatMessages = chatMessages ?? new();
         _onQueryChats = onQueryChats;
         _queryMessages = queryMessages;
+        // Lets a test decouple the reported count from the queryable list (e.g. count > 0 while the
+        // query returns empty) to exercise reconcile's transient-empty-response guard.
+        _chatCountOverride = chatCountOverride;
     }
 
     public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var json = JsonSerializer.Deserialize<JsonElement>($"{{\"total\":{_chats.Count}}}");
+        var total = _chatCountOverride ?? _chats.Count;
+        var json = JsonSerializer.Deserialize<JsonElement>($"{{\"total\":{total}}}");
         return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", json, null));
     }
 
