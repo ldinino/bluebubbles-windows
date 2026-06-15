@@ -24,6 +24,12 @@ public partial class AppSettings : ObservableObject
     // Sync
     [ObservableProperty] public partial long LastIncrementalSync { get; set; }
     [ObservableProperty] public partial long LastIncrementalSyncRowId { get; set; }
+    // Watermark for the "updated-since" sweep: edits/unsends to already-synced messages don't bump
+    // ROWID, so the ROWID delta misses them. This tracks the last time we trued-up in-place changes.
+    [ObservableProperty] public partial long LastUpdatedSync { get; set; }
+    // Bumped to force a one-time full heal on upgrade (e.g. to apply server deletes the old cache
+    // never reconciled). Compared against SyncService.CurrentSyncModelVersion at launch.
+    [ObservableProperty] public partial int SyncModelVersion { get; set; }
 
     // Appearance
     [ObservableProperty] public partial int Theme { get; set; }

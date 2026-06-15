@@ -23,6 +23,15 @@ public partial class App : Application
     // network switch) so we don't fire a flurry of pings/restarts.
     private Timer? _recoverDebounce;
 
+    // Gentle always-on poll that catches conversation deletes the server never pushes (it emits no
+    // socket event for a chat delete). Each tick reconciles only when GetForegroundWindow says we're
+    // in the foreground, so it's idle (a cheap focus check, no network) while backgrounded/in tray.
+    private Timer? _foregroundReconcile;
+    private static readonly TimeSpan ForegroundReconcileInterval = TimeSpan.FromSeconds(60);
+    private static long _lastChatReconcileTicks;
+    // Collapse rapid triggers (poll tick + focus-regain + tray-restore) into at most one reconcile.
+    private const long ChatReconcileThrottleMs = 15_000;
+
     public static IServiceProvider Services { get; private set; } = null!;
 
     public static MainWindow MainWindow => (MainWindow)((App)Current)._window!;
@@ -110,9 +119,52 @@ public partial class App : Application
         NetworkChange.NetworkAddressChanged += (_, _) => ScheduleConnectivityRecovery();
 
         // Launch-time catch-up: kick a delta immediately (independent of the socket's OnConnected),
-        // so a relaunch backfills anything missed even before the socket settles.
+        // so a relaunch backfills anything missed even before the socket settles. After an upgrade
+        // that changed how the cache converges, run a one-time full heal first (it applies server-side
+        // deletes/edits an older build never reconciled) and skip the redundant delta.
         if (appSettings.FinishedSetup)
-            _ = Services.GetRequiredService<ISyncService>().RunIncrementalSyncAsync();
+        {
+            var sync = Services.GetRequiredService<ISyncService>();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (!await sync.RunHealIfNeededAsync())
+                        await sync.RunIncrementalSyncAsync();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Warn(LogCategory.Sync, $"Launch catch-up failed: {ex.Message}");
+                }
+            });
+
+            // Conversation deletes are never pushed over the socket (a server limitation), so the only
+            // way to catch one while the app is open is to diff the chat list. An always-on poll gated
+            // by GetForegroundWindow reconciles only when the window is actually in the foreground —
+            // Window.Activated is unreliable here (missed at launch, and tray hide/show via Win32
+            // bypasses it). RestoreFromTray and focus-regain also trigger it for immediacy.
+            _foregroundReconcile = new Timer(_ =>
+            {
+                if (Services.GetRequiredService<IWindowStateService>().IsWindowFocused)
+                    RequestChatReconcile();
+            }, null, ForegroundReconcileInterval, ForegroundReconcileInterval);
+        }
+    }
+
+    /// <summary>Throttled, fire-and-forget lean chat reconcile (catches server-side conversation
+    /// deletes). Triggered by the foreground poll, focus-regain, and tray-restore; the throttle and the
+    /// SyncService's own guard keep overlapping triggers from issuing redundant requests.</summary>
+    internal static void RequestChatReconcile()
+    {
+        var now = Environment.TickCount64;
+        if (now - Interlocked.Read(ref _lastChatReconcileTicks) < ChatReconcileThrottleMs) return;
+        Interlocked.Exchange(ref _lastChatReconcileTicks, now);
+
+        _ = Task.Run(async () =>
+        {
+            try { await Services.GetRequiredService<ISyncService>().ReconcileChatsAsync(); }
+            catch (Exception ex) { AppLog.Warn(LogCategory.Sync, $"Foreground chat reconcile failed: {ex.Message}"); }
+        });
     }
 
     /// <summary>Coalesces resume/network-change signals and, after a short settle delay, verifies the

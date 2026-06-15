@@ -18,9 +18,15 @@ public class SyncService : ISyncService
     private readonly IChatsService _chatsService;
 
     private int _isIncrementalSyncing;
+    private int _isReconcilingChats;
 
     public bool IsSyncing { get; private set; }
     public event EventHandler<bool>? SyncStateChanged;
+
+    // Bumped when an upgrade needs a one-time full true-up to converge caches written by an older,
+    // less-authoritative sync (e.g. one that never applied server-side message deletes). See
+    // RunHealIfNeededAsync. v1 = first server-authoritative model (delete-aware reconcile).
+    public const int CurrentSyncModelVersion = 1;
 
     private const int ChatPageSize = 200;
     private const int IncrementalBatchSize = 1000;
@@ -59,7 +65,11 @@ public class SyncService : ISyncService
 
         await EnsureSchemaExtensionsAsync(ct);
 
-        _appSettings.LastIncrementalSync = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var syncStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        _appSettings.LastIncrementalSync = syncStartedAt;
+        // A full sync just pulled every chat's newest page fresh, so the in-place "updated-since"
+        // sweep should start from now rather than re-examining all history.
+        _appSettings.LastUpdatedSync = syncStartedAt;
 
         progress?.Report(new(SyncPhase.Starting, 0, 0, "Getting chat count..."));
 
@@ -99,21 +109,9 @@ public class SyncService : ISyncService
                     db.Chats.Add(chatEntity);
                 }
 
-                chatEntity.ChatIdentifier = chat.ChatIdentifier;
-                chatEntity.DisplayName = chat.DisplayName;
-                chatEntity.IsArchived = chat.IsArchived;
-                chatEntity.IsPinned = chat.IsPinned;
-                chatEntity.HasUnreadMessage = chat.HasUnreadMessage;
-                chatEntity.Service = chat.Service;
-                chatEntity.MuteType = chat.MuteType;
-                chatEntity.MuteArgs = chat.MuteArgs;
-                chatEntity.AutoSendReadReceipts = chat.AutoSendReadReceipts;
-                chatEntity.AutoSendTypingIndicators = chat.AutoSendTypingIndicators;
-                chatEntity.DateDeleted = chat.DateDeleted;
-                chatEntity.Style = chat.Style;
-                chatEntity.LockChatName = chat.LockChatName;
-                chatEntity.LockChatIcon = chat.LockChatIcon;
-                chatEntity.LastReadMessageGuid = chat.LastReadMessageGuid;
+                // Server-owned fields only; client-owned pin/mute/archive are preserved (the server
+                // has no endpoint for them and returns defaults). See ChatFieldMerge.
+                ChatFieldMerge.ApplyServerOwnedFields(chatEntity, chat);
                 chatEntity.LatestMessageDate = chat.LastMessage?.DateCreated;
                 await db.SaveChangesAsync(ct);
 
@@ -184,7 +182,7 @@ public class SyncService : ISyncService
                     continue;
                 }
 
-                await SaveMessagesAsync(chatId, messages, handleCache, ct);
+                await ReconcileChatWindowAsync(chatId, messages, handleCache, ct);
 
                 var oldestDate = messages
                     .Where(m => m.DateCreated.HasValue)
@@ -213,9 +211,25 @@ public class SyncService : ISyncService
 
         if (_maxSyncedRowId > 0)
             _appSettings.LastIncrementalSyncRowId = _maxSyncedRowId;
+        // A full sync is itself a complete server-authoritative true-up, so mark the cache current —
+        // this is also what the one-time upgrade heal sets, so a fresh setup never re-heals.
+        _appSettings.SyncModelVersion = CurrentSyncModelVersion;
         _settingsService.Save();
 
         progress?.Report(new(SyncPhase.Complete, 0, 0, "Sync complete!"));
+    }
+
+    /// <summary>Runs a one-time full true-up after an upgrade that changed how the cache converges
+    /// (e.g. to apply server-side deletes an older build never reconciled). Gated by
+    /// <see cref="CurrentSyncModelVersion"/> so it fires once; returns true if a heal ran.</summary>
+    public async Task<bool> RunHealIfNeededAsync(CancellationToken ct = default)
+    {
+        if (_appSettings.SyncModelVersion >= CurrentSyncModelVersion) return false;
+
+        AppLog.Info(LogCategory.Sync,
+            "Running one-time sync heal (full server-authoritative true-up) after upgrade");
+        await RunFullSyncAsync(skipEmptyChats: true, ct: ct); // sets SyncModelVersion on completion
+        return true;
     }
 
     public async Task RunIncrementalSyncAsync(CancellationToken ct = default)
@@ -327,11 +341,15 @@ public class SyncService : ISyncService
                 hasMore = messages.Count == IncrementalBatchSize;
             }
 
+            // Catch in-place changes the ROWID delta can't see: an edit/unsend to an already-synced
+            // message updates its row without bumping ROWID, so it never appears in the delta above.
+            await UpdatedSinceSweepAsync(ct);
+
             // Pull deletions down too: a chat removed on the server (or another device) emits no
             // socket event and arrives in no message delta, so the only way to learn it's gone is to
             // reconcile against the server's current chat list. Runs on every delta (launch, socket
             // reconnect, sleep/network recovery) so deletions propagate without a manual full resync.
-            await ReconcileChatsAsync(ct);
+            await ReconcileChatsCoreAsync(ct);
 
             await _chatsService.LoadChatsAsync();
         }
@@ -347,6 +365,115 @@ public class SyncService : ISyncService
         }
     }
 
+    // chat.db stores date_* columns as nanoseconds since 2001-01-01 UTC (Apple epoch). A raw
+    // where-clause compares against those raw values, so a unix-ms watermark must be converted.
+    private const long AppleEpochUnixMs = 978307200000L;
+
+    /// <summary>Trues up in-place message changes (edits, unsends) that the ROWID delta misses because
+    /// editing a message doesn't bump its ROWID. Gated by the cheap <c>message/count/updated</c>
+    /// endpoint so the common "nothing changed" cycle costs a single lightweight call.</summary>
+    /// <remarks>The where-clause runs as raw SQL against the live chat.db (same mechanism as the
+    /// delta's <c>message.ROWID &gt; :id</c>), so the date column is Apple-epoch nanoseconds. The exact
+    /// column token is the one piece that needs validation against a live server; every failure mode
+    /// here is non-destructive (a bad token errors out or fetches an idempotently-upserted superset,
+    /// never deletes), and the count-gate keeps it from running unless the server reports changes.</remarks>
+    private async Task UpdatedSinceSweepAsync(CancellationToken ct)
+    {
+        var watermark = _appSettings.LastUpdatedSync;
+        if (watermark == 0)
+        {
+            // First run: seed from the delta watermark so we don't sweep all history. If we've never
+            // synced, there's nothing to true up.
+            watermark = _appSettings.LastIncrementalSync;
+            if (watermark == 0) return;
+            _appSettings.LastUpdatedSync = watermark;
+            _settingsService.Save();
+        }
+
+        var sweepStart = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        int updatedCount;
+        try
+        {
+            var countResp = await _api.GetUpdatedMessageCountAsync(after: watermark, ct: ct);
+            if (countResp.Status is < 200 or >= 300) return;
+            updatedCount = countResp.Data.TryGetProperty("total", out var total)
+                ? total.GetInt32() : 0;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug(LogCategory.Sync, $"Updated-message count probe failed: {ex.Message}");
+            return;
+        }
+
+        if (updatedCount <= 0)
+        {
+            // Nothing changed in-place; advance the watermark so the query window can't grow unbounded.
+            _appSettings.LastUpdatedSync = sweepStart;
+            _settingsService.Save();
+            return;
+        }
+
+        var appleNs = (watermark - AppleEpochUnixMs) * 1_000_000L;
+        var where = new List<object>
+        {
+            new Dictionary<string, object>
+            {
+                ["statement"] = "message.date_edited > :updatedAfter",
+                ["args"] = new Dictionary<string, object> { ["updatedAfter"] = appleNs }
+            }
+        };
+
+        var handleCache = new Dictionary<string, int>();
+        int offset = 0;
+        bool hasMore = true;
+
+        while (hasMore)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            ApiResponse<List<Message>> response;
+            try
+            {
+                response = await _api.QueryMessagesAsync(
+                    withQuery: IncrementalWithQuery, where: where, sort: "ASC",
+                    offset: offset, limit: IncrementalBatchSize, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn(LogCategory.Sync, $"Updated-since fetch failed: {ex.Message}");
+                return; // leave the watermark untouched so a transient failure retries next cycle
+            }
+
+            if (response.Status is < 200 or >= 300 || response.Data is null) return;
+            var messages = response.Data;
+            if (messages.Count == 0) break;
+
+            var messagesByChat = new Dictionary<string, List<Message>>();
+            foreach (var msg in messages)
+            {
+                var chatData = msg.Chats?.FirstOrDefault();
+                if (chatData is null) continue;
+                if (!messagesByChat.TryGetValue(chatData.Guid, out var list))
+                    messagesByChat[chatData.Guid] = list = [];
+                list.Add(msg);
+            }
+
+            foreach (var (chatGuid, chatMessages) in messagesByChat)
+            {
+                var chatId = await EnsureChatExistsAsync(chatGuid, chatMessages[0], handleCache, ct);
+                await SaveMessagesAsync(chatId, chatMessages, handleCache, ct);
+                _chatsService.NotifyMessagesPersisted(chatGuid);
+            }
+
+            offset += IncrementalBatchSize;
+            hasMore = messages.Count == IncrementalBatchSize;
+        }
+
+        _appSettings.LastUpdatedSync = sweepStart;
+        _settingsService.Save();
+    }
+
     private async Task<int> EnsureChatExistsAsync(
         string chatGuid, Message sampleMessage,
         Dictionary<string, int> handleCache, CancellationToken ct)
@@ -360,9 +487,21 @@ public class SyncService : ISyncService
             .FirstOrDefaultAsync(c => c.Guid == chatGuid, ct);
         if (chat is not null)
         {
-            // A new message means the chat is live again — undo any prior soft-delete (e.g. it
-            // had been pruned as empty) so it resurfaces in the list.
             var dirty = false;
+
+            // Refresh server-owned metadata (display name, service, read state, etc.) from the
+            // delta's embedded chat so a rename/read change made on another device propagates.
+            // Client-owned pin/mute/archive are left untouched. See ChatFieldMerge.
+            if (chatData is not null)
+            {
+                ChatFieldMerge.ApplyServerOwnedFields(chat, chatData);
+                dirty = true;
+            }
+
+            // A new message means the chat is live again — undo any prior soft-delete (e.g. it
+            // had been pruned as empty) so it resurfaces in the list. ApplyServerOwnedFields already
+            // copies the server's DateDeleted, but the delta's embedded chat can lag, so force it
+            // clear: we are holding a live message for this chat right now.
             if (chat.DateDeleted is not null)
             {
                 chat.DateDeleted = null;
@@ -474,10 +613,36 @@ public class SyncService : ISyncService
         }
     }
 
+    /// <summary>Lean, standalone chat-deletion reconcile for foreground use: diffs the server's chat
+    /// GUID list against the cache and reloads the list only if something was actually pruned. The
+    /// server emits no socket event for a conversation delete (a server limitation the Flutter app
+    /// shares), so this is the only way to catch one while the app sits open. Cheap: a GUID-only
+    /// query plus an in-memory diff, no message refetch. Skipped while a full delta is in flight
+    /// (that already reconciles) and never overlaps itself.</summary>
+    public async Task ReconcileChatsAsync(CancellationToken ct = default)
+    {
+        if (Volatile.Read(ref _isIncrementalSyncing) == 1) return;
+        if (Interlocked.Exchange(ref _isReconcilingChats, 1) == 1) return;
+        try
+        {
+            if (await ReconcileChatsCoreAsync(ct) > 0)
+                await _chatsService.LoadChatsAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Foreground chat reconcile failed: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isReconcilingChats, 0);
+        }
+    }
+
     /// <summary>Fetches the server's full chat list and prunes any local chat it no longer returns,
     /// keeping the cache in step with deletions made on the server or another device. Best-effort and
-    /// self-guarding: a failed or partial fetch prunes nothing (it would otherwise hide live chats).</summary>
-    private async Task ReconcileChatsAsync(CancellationToken ct)
+    /// self-guarding: a failed or partial fetch prunes nothing (it would otherwise hide live chats).
+    /// Returns the number of chats soft-deleted so callers can skip a needless list reload.</summary>
+    private async Task<int> ReconcileChatsCoreAsync(CancellationToken ct)
     {
         var serverGuids = new HashSet<string>();
         var offset = 0;
@@ -498,14 +663,14 @@ public class SyncService : ISyncService
             {
                 AppLog.Warn(LogCategory.Sync,
                     $"Chat reconcile fetch failed at offset {offset}; skipping prune: {ex.Message}");
-                return;
+                return 0;
             }
 
             if (resp.Status is < 200 or >= 300 || resp.Data is null)
             {
                 AppLog.Warn(LogCategory.Sync,
                     $"Chat reconcile fetch returned status {resp.Status}; skipping prune");
-                return;
+                return 0;
             }
 
             foreach (var chat in resp.Data)
@@ -523,10 +688,10 @@ public class SyncService : ISyncService
         {
             AppLog.Warn(LogCategory.Sync,
                 "Chat reconcile got an empty list but the server count is non-zero/unknown; skipping prune");
-            return;
+            return 0;
         }
 
-        await PruneDeletedChatsAsync(serverGuids, ct);
+        return await PruneDeletedChatsAsync(serverGuids, ct);
     }
 
     /// <summary>Confirms via the count endpoint that the server genuinely has zero chats, used to
@@ -593,6 +758,25 @@ public class SyncService : ISyncService
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
         var (_, _, maxRowId) = await MessagePersistenceHelper.SaveMessagesAsync(
             db, chatId, messages, handleCache, ct);
+        if (maxRowId > _maxSyncedRowId)
+            _maxSyncedRowId = maxRowId;
+    }
+
+    /// <summary>Full-sync per-chat persistence that is delete-aware: the fetched newest page is
+    /// authoritative for its range, so a server-side delete inside it is applied (not just upserts).
+    /// This is what lets the one-time upgrade heal converge caches an older build left stale.</summary>
+    private async Task ReconcileChatWindowAsync(
+        int chatId, List<Message> messages,
+        Dictionary<string, int> handleCache, CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
+
+        var maxRowId = messages
+            .Where(m => m.OriginalRowId.HasValue)
+            .Select(m => m.OriginalRowId!.Value)
+            .DefaultIfEmpty(0)
+            .Max();
         if (maxRowId > _maxSyncedRowId)
             _maxSyncedRowId = maxRowId;
     }

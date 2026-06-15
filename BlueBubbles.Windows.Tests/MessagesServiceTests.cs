@@ -237,6 +237,72 @@ public class MessagesServiceTests
     }
 
     [Fact]
+    public async Task RefreshLatest_PreservesLocalBookmark_StillAppliesServerText()
+    {
+        // IsBookmarked is client-owned; a re-fetch/true-up (which carries the server default false)
+        // must not clear a locally-set bookmark, while server-owned fields like Text still update.
+        var serverMsg = MakeMessage("msg-1", "hello updated", null, 1000);
+        var api = new SyncMockApiService([], new Dictionary<string, List<Message>>
+        {
+            ["chat-bm"] = [serverMsg]
+        });
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-bm");
+
+        using (var db = factory.CreateDbContext())
+        {
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "msg-1", ChatId = chat.Id, Text = "hello", DateCreated = 1000, IsBookmarked = true
+            });
+            db.SaveChanges();
+        }
+
+        await svc.RefreshLatestFromServerAsync(chat.Id, "chat-bm");
+
+        using var db2 = factory.CreateDbContext();
+        var msg = db2.Messages.Single(m => m.Guid == "msg-1");
+        Assert.True(msg.IsBookmarked);            // preserved
+        Assert.Equal("hello updated", msg.Text);  // server-owned applied
+    }
+
+    [Fact]
+    public async Task RefreshLatest_SoftDeletesMessageServerOmittedFromWindow()
+    {
+        // A delete we missed over the socket must converge: the server's returned page is authoritative
+        // for its [oldest..newest] range, so a local message inside that span but absent from the page
+        // is soft-deleted. Messages outside the span (older/newer) are left alone.
+        var handle = MakeHandle("+15551234567");
+        var serverWindow = new Dictionary<string, List<Message>>
+        {
+            ["chat-x"] = [
+                MakeMessage("msg-2", "two", handle, 2000),
+                MakeMessage("msg-3", "three", handle, 3000)
+            ]
+        };
+        var api = new SyncMockApiService([], serverWindow);
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-x");
+
+        using (var db = factory.CreateDbContext())
+        {
+            db.Messages.Add(new MessageEntity { Guid = "msg-1", ChatId = chat.Id, Text = "one", DateCreated = 1000 });    // older than window
+            db.Messages.Add(new MessageEntity { Guid = "msg-2", ChatId = chat.Id, Text = "two", DateCreated = 2000 });    // in window, present
+            db.Messages.Add(new MessageEntity { Guid = "msg-gone", ChatId = chat.Id, Text = "gone", DateCreated = 2500 });// in window, omitted -> delete
+            db.Messages.Add(new MessageEntity { Guid = "msg-4", ChatId = chat.Id, Text = "four", DateCreated = 4000 });   // newer than window
+            db.SaveChanges();
+        }
+
+        await svc.RefreshLatestFromServerAsync(chat.Id, "chat-x");
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Messages.Single(m => m.Guid == "msg-1").DateDeleted);       // outside (older) -> survives
+        Assert.Null(db2.Messages.Single(m => m.Guid == "msg-2").DateDeleted);       // present -> survives
+        Assert.NotNull(db2.Messages.Single(m => m.Guid == "msg-gone").DateDeleted); // omitted from covered span -> deleted
+        Assert.Null(db2.Messages.Single(m => m.Guid == "msg-4").DateDeleted);       // outside (newer) -> survives
+    }
+
+    [Fact]
     public async Task SaveIncoming_NewHandle_CreatesHandleEntity()
     {
         var (svc, factory, _) = CreateService();
