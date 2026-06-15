@@ -93,7 +93,8 @@ the About page. Bump **only** that one value:
 
 Cut releases via the manual `release.yml` GitHub Actions workflow (`workflow_dispatch`); ship
 the **CI** build, not a local `publish.ps1` build. **x64 only** — arm64 is blocked on the
-vendored x64 `Microsoft.WindowsAppRuntime.Insights.Resource.dll`.
+vendored x64 `Microsoft.WindowsAppRuntime.Insights.Resource.dll`. Write the GitHub Release body
+following `docs/release-notes.md` (mandatory disclaimer, no emoji, fixed section structure).
 
 ## Build / run / test
 
@@ -131,6 +132,8 @@ requirements:
   "Critical Flutter Source Files" table mapping each concern to its Dart source).
 - `docs/PUNCHLIST.md` — the live TODO (open bugs, backlog, release plan).
 - `docs/msix-removal.md` — why MSIX was removed and what's load-bearing.
+- `docs/release-notes.md` — required format for every GitHub Release body (disclaimer,
+  sections, no emoji).
 - `BlueBubbles.Windows/.github/instructions/*.instructions.md` — detailed WinUI 3 / security /
   accessibility / performance / code-quality rules.
 - `README.md` / `INSTALL.md` — user-facing overview and installer docs.
