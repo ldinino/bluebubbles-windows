@@ -139,6 +139,8 @@ public class DependencyInjectionTests
         public Task RunFullSyncAsync(bool skipEmptyChats = true, IProgress<BlueBubbles.Core.Models.SyncProgress>? progress = null,
             CancellationToken ct = default) => Task.CompletedTask;
         public Task RunIncrementalSyncAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> RunHealIfNeededAsync(CancellationToken ct = default) => Task.FromResult(false);
+        public Task ReconcileChatsAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
     private class StubFirebaseService : IFirebaseService
     {

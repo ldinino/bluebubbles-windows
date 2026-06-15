@@ -100,6 +100,10 @@ public sealed partial class MainWindow : Window
     {
         if (args.WindowActivationState == WindowActivationState.Deactivated) return;
 
+        // Focus regain is a good moment to catch a conversation deleted elsewhere (the server pushes
+        // no socket event for it). Best-effort/immediate; the foreground poll is the reliable backstop.
+        App.RequestChatReconcile();
+
         // Regaining focus while a chat is on screen means you're now reading it — mark it read (which
         // also clears its toasts). While the window was unfocused we deliberately leave the on-screen
         // chat unread so its notification can fire (punchlist N1), so we reconcile the read here on
@@ -139,6 +143,10 @@ public sealed partial class MainWindow : Window
         ShowWindow(_hWnd, SW_RESTORE);
         SetForegroundWindow(_hWnd);
         Activate();
+
+        // Win32 hide/show bypasses Window.Activated, so reconcile the chat list explicitly here to
+        // catch a conversation deleted on the server while we were in the tray.
+        App.RequestChatReconcile();
     }
 
     /// <summary>Hides the window to the system tray (used for launch-at-startup-minimized).</summary>

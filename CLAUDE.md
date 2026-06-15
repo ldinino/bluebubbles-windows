@@ -60,6 +60,18 @@ events are marshaled onto the UI thread.
   architecture, tangled settings, conditional logic, or UX; build the WinUI 3 side from scratch
   with proper .NET patterns. When Flutter has complexity, ask whether it's protocol-required or
   just client baggage (usually baggage).
+- **The server is the source of truth; the local cache has zero authority.** The SQLite cache is
+  only a fast copy of data we previously fetched. Every local mutation must reach the server and
+  isn't "done" until the server confirms; every server change (including deletions) must be applied
+  locally. Two rules fall out of this: (1) **never let a server payload overwrite a client-only
+  field.** Pin/mute/archive have **no** server endpoint (the API has only read/unread), so the
+  server always returns the defaults — blindly copying them wiped the user's state every sync. All
+  chat upserts go through `ChatFieldMerge.ApplyServerOwnedFields` (the single ownership authority);
+  the client-only set — `IsArchived`, `IsPinned`, `PinIndex`, `MuteType`, `MuteArgs`,
+  `CustomAvatarPath`, `OldestSyncedMessageDate`, and message `IsBookmarked` — is preserved by
+  omission. Do **not** add these to the merge or copy them inline. (2) **Reconciliation applies
+  deletes, not just upserts** — a re-fetched server window is authoritative for its range, so local
+  rows the server omitted are soft-deleted (a missed socket delete must still converge).
 - **Async image loads in recycled WinUI containers need a generation counter.** Any
   `BitmapImage.SetSourceAsync` inside a control a `ListView` can recycle must clear the source
   (`= null`) and bump a generation counter before the await, then check it after — otherwise a

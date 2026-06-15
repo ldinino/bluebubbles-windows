@@ -11,11 +11,18 @@ internal static class MessagePersistenceHelper
 {
     public static async Task<(long? OldestDate, long? LatestDate, long MaxRowId)> SaveMessagesAsync(
         BlueBubblesDbContext db, int chatId, List<Message> messages,
-        Dictionary<string, int> handleCache, CancellationToken ct)
+        Dictionary<string, int> handleCache, CancellationToken ct,
+        IReadOnlySet<string>? protectedGuids = null)
     {
         long? latestDate = null;
         long? oldestDate = null;
         long maxRowId = 0;
+
+        // A true-up must never overwrite a message that has an un-acked local mutation pending
+        // (an edit/unsend/delete sitting in the outbox). The server's copy doesn't reflect that
+        // change yet, so applying it would visibly revert the user's action until the op confirms.
+        if (protectedGuids is { Count: > 0 })
+            messages = messages.Where(m => !protectedGuids.Contains(m.Guid)).ToList();
 
         foreach (var msg in messages)
         {
@@ -55,6 +62,7 @@ internal static class MessagePersistenceHelper
             var entity = await db.Messages.FirstOrDefaultAsync(
                 m => m.Guid == msg.Guid, ct);
 
+            var isNew = entity is null;
             if (entity is null)
             {
                 entity = new MessageEntity { Guid = msg.Guid };
@@ -95,7 +103,9 @@ internal static class MessagePersistenceHelper
             entity.DateEdited = msg.DateEdited;
             entity.WasDeliveredQuietly = msg.WasDeliveredQuietly;
             entity.DidNotifyRecipient = msg.DidNotifyRecipient;
-            entity.IsBookmarked = msg.IsBookmarked;
+            // IsBookmarked is client-owned (the server has no concept of it and defaults it false).
+            // Seed it on insert, but never let a re-fetch/true-up clear a locally-set bookmark.
+            if (isNew) entity.IsBookmarked = msg.IsBookmarked;
             entity.MetadataJson = Serialize(msg.Metadata);
             entity.AttributedBodyJson = Serialize(msg.AttributedBody);
             entity.MessageSummaryInfoJson = Serialize(msg.MessageSummaryInfo);

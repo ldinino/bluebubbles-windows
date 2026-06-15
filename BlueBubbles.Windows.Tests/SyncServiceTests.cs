@@ -487,6 +487,223 @@ public class SyncServiceTests
         using var db2 = factory.CreateDbContext();
         Assert.Null(db2.Chats.Single(c => c.Guid == "chat-live").DateDeleted);
     }
+
+    [Fact]
+    public async Task FullSync_PreservesClientOwnedFields_AndUpdatesServerOwned()
+    {
+        // The server has no endpoint for pin/mute/archive and returns the defaults (false/null).
+        // A full sync must keep the user's local pin/mute/archive/avatar while still applying
+        // server-owned changes like a rename. See ChatFieldMerge.
+        var handle = MakeHandle("+15551234567");
+        var serverChat = new Chat("chat-1", "chat-1", "Server Renamed", [handle], null,
+            false, false, false, "iMessage", null, null, null, null, null, null, false, false, null);
+
+        var api = new SyncMockApiService([serverChat]);
+        var (svc, factory) = CreateService(api);
+
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity
+            {
+                Guid = "chat-1",
+                DisplayName = "Old Name",
+                IsPinned = true,
+                PinIndex = 0,
+                MuteType = "mute",
+                IsArchived = true,
+                CustomAvatarPath = "avatar.jpg"
+            });
+            db.SaveChanges();
+        }
+
+        await svc.RunFullSyncAsync(skipEmptyChats: false);
+
+        using var db2 = factory.CreateDbContext();
+        var chat = db2.Chats.Single(c => c.Guid == "chat-1");
+        // Client-owned: preserved despite the server's defaults.
+        Assert.True(chat.IsPinned);
+        Assert.Equal(0, chat.PinIndex);
+        Assert.Equal("mute", chat.MuteType);
+        Assert.True(chat.IsArchived);
+        Assert.Equal("avatar.jpg", chat.CustomAvatarPath);
+        // Server-owned: refreshed from the server.
+        Assert.Equal("Server Renamed", chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_PreservesClientOwnedFields_OnExistingChat()
+    {
+        // The delta path refreshes server-owned metadata (e.g. a rename from another device) from
+        // the message's embedded chat, but must leave client-owned pin/mute/archive untouched.
+        var handle = MakeHandle("+15551234567");
+        var serverChat = new Chat("chat-1", "chat-1", "Server Renamed", [handle], null,
+            false, false, false, "iMessage", null, null, null, null, null, null, false, false, null);
+
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity
+            {
+                Guid = "chat-1",
+                DisplayName = "Old Name",
+                IsPinned = true,
+                MuteType = "mute",
+                IsArchived = true,
+                CustomAvatarPath = "avatar.jpg"
+            });
+            db.SaveChanges();
+        }
+
+        var batch = new List<Message>
+        {
+            MakeMessage("d-1", "hi", handle, 1700000000500) with { OriginalRowId = 5, Chats = [serverChat] }
+        };
+        var api = new SyncMockApiService([serverChat], queryMessages: offset => offset == 0 ? batch : []);
+
+        var appSettings = new AppSettings { LastIncrementalSync = 1700000000000 };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        var chat = db2.Chats.Single(c => c.Guid == "chat-1");
+        Assert.True(chat.IsPinned);
+        Assert.Equal("mute", chat.MuteType);
+        Assert.True(chat.IsArchived);
+        Assert.Equal("avatar.jpg", chat.CustomAvatarPath);
+        Assert.Equal("Server Renamed", chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_UpdatedSinceSweep_AppliesEditToAlreadySyncedMessage()
+    {
+        // Editing a message doesn't bump its ROWID, so the ROWID delta can't see it. The count-gated
+        // updated-since sweep must fetch it and re-merge the new text/dateEdited onto the stored row.
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-1", [handle]);
+
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-1" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "old-1", ChatId = c.Id, Text = "before edit",
+                DateCreated = 1700000000000, OriginalRowId = 1
+            });
+            db.SaveChanges();
+        }
+
+        var edited = MakeMessage("old-1", "after edit", handle, 1700000000000) with
+        {
+            OriginalRowId = 1,
+            DateEdited = 1700000005000,
+            Chats = [chat]
+        };
+
+        // No new rows for the ROWID delta; the sweep reports 1 changed and returns the edited copy.
+        var api = new SyncMockApiService([chat], queryMessages: _ => [],
+            updatedCount: 1, updatedMessages: [edited]);
+
+        var appSettings = new AppSettings
+        {
+            LastIncrementalSync = 1699999999000,
+            LastUpdatedSync = 1699999999000
+        };
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            appSettings, new MockSettingsService(), new MockChatsService());
+
+        await svc.RunIncrementalSyncAsync();
+
+        using var db2 = factory.CreateDbContext();
+        var msg = db2.Messages.Single(m => m.Guid == "old-1");
+        Assert.Equal("after edit", msg.Text);
+        Assert.Equal(1700000005000, msg.DateEdited);
+    }
+
+    [Fact]
+    public async Task RunHealIfNeeded_RunsOnce_ThenNoOp()
+    {
+        // First launch after the upgrade (SyncModelVersion below current) heals via a full true-up;
+        // subsequent launches are no-ops because the full sync marked the cache current.
+        var handle = MakeHandle("+15551234567");
+        var recentDate = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("last-msg", "hi", handle, recentDate);
+        var chats = new List<Chat> { MakeChat("chat-1", [handle], lastMsg) };
+        var messages = new Dictionary<string, List<Message>>
+        {
+            ["chat-1"] = [MakeMessage("msg-1", "hello", handle, recentDate - 1000)]
+        };
+        var api = new SyncMockApiService(chats, messages);
+        var (svc, _) = CreateService(api);
+
+        Assert.True(await svc.RunHealIfNeededAsync());   // version 0 < current -> heals
+        Assert.False(await svc.RunHealIfNeededAsync());  // now current -> no-op
+    }
+
+    [Fact]
+    public async Task FullSync_SoftDeletesMessageServerNoLongerHasInWindow()
+    {
+        // The full sync (and thus the upgrade heal) is delete-aware: a message present locally but
+        // absent from the server's returned page for that chat is soft-deleted.
+        var handle = MakeHandle("+15551234567");
+        var d = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds();
+        var lastMsg = MakeMessage("keep-2", "two", handle, d);
+        var chats = new List<Chat> { MakeChat("chat-1", [handle], lastMsg) };
+        var serverMsgs = new Dictionary<string, List<Message>>
+        {
+            ["chat-1"] = [MakeMessage("keep-1", "one", handle, d - 2000), MakeMessage("keep-2", "two", handle, d)]
+        };
+        var api = new SyncMockApiService(chats, serverMsgs);
+        var (svc, factory) = CreateService(api);
+
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-1" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            // A local message inside the server's [d-2000 .. d] window that the server won't return.
+            db.Messages.Add(new MessageEntity { Guid = "gone", ChatId = c.Id, Text = "gone", DateCreated = d - 1000 });
+            db.SaveChanges();
+        }
+
+        await svc.RunFullSyncAsync(skipEmptyChats: true);
+
+        using var db2 = factory.CreateDbContext();
+        Assert.NotNull(db2.Messages.Single(m => m.Guid == "gone").DateDeleted);
+        Assert.Null(db2.Messages.Single(m => m.Guid == "keep-1").DateDeleted);
+        Assert.Null(db2.Messages.Single(m => m.Guid == "keep-2").DateDeleted);
+    }
+
+    [Fact]
+    public async Task ReconcileChats_SoftDeletesChatAbsentFromServer()
+    {
+        // The lean foreground reconcile (focus/timer) catches a conversation deleted on the server,
+        // which is never pushed over the socket.
+        var handle = MakeHandle("+15551234567");
+        var keep = MakeChat("chat-keep", [handle]);
+
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity { Guid = "chat-keep" });
+            db.Chats.Add(new ChatEntity { Guid = "chat-gone", HasUnreadMessage = true });
+            db.SaveChanges();
+        }
+
+        var api = new SyncMockApiService([keep], queryMessages: _ => []);
+        var svc = new SyncService(api, factory, new MockFirebaseService(),
+            new AppSettings(), new MockSettingsService(), new MockChatsService());
+
+        await svc.ReconcileChatsAsync();
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Null(db2.Chats.Single(c => c.Guid == "chat-keep").DateDeleted);
+        Assert.NotNull(db2.Chats.Single(c => c.Guid == "chat-gone").DateDeleted);
+    }
 }
 
 internal class SyncTestProgress<T> : IProgress<T>
@@ -507,6 +724,8 @@ internal class SyncMockApiService : IBlueBubblesApiService
     private readonly Action? _onQueryChats;
     private readonly Func<int, List<Message>>? _queryMessages;
     private readonly int? _chatCountOverride;
+    private readonly int _updatedCount;
+    private readonly List<Message>? _updatedMessages;
 
     public int QueryChatsCallCount { get; private set; }
     public List<ChatMessageCall> ChatMessageCalls { get; } = [];
@@ -516,7 +735,9 @@ internal class SyncMockApiService : IBlueBubblesApiService
         Dictionary<string, List<Message>>? chatMessages = null,
         Action? onQueryChats = null,
         Func<int, List<Message>>? queryMessages = null,
-        int? chatCountOverride = null)
+        int? chatCountOverride = null,
+        int updatedCount = 0,
+        List<Message>? updatedMessages = null)
     {
         _chats = chats;
         _chatMessages = chatMessages ?? new();
@@ -525,6 +746,9 @@ internal class SyncMockApiService : IBlueBubblesApiService
         // Lets a test decouple the reported count from the queryable list (e.g. count > 0 while the
         // query returns empty) to exercise reconcile's transient-empty-response guard.
         _chatCountOverride = chatCountOverride;
+        // Drives the updated-since sweep: the count gate and the messages its date_edited query returns.
+        _updatedCount = updatedCount;
+        _updatedMessages = updatedMessages;
     }
 
     public Task<ApiResponse<JsonElement>> GetChatCountAsync(CancellationToken ct = default)
@@ -606,13 +830,28 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+
+        // The updated-since sweep is distinguished by its date_edited where-clause; serve it from the
+        // dedicated updated-messages list so it doesn't collide with the ROWID/after delta.
+        var isUpdatedSweep = where?.Any(w => w is Dictionary<string, object> d
+            && d.TryGetValue("statement", out var s) && s.ToString()!.Contains("date_edited")) == true;
+        if (isUpdatedSweep)
+        {
+            var page = (_updatedMessages ?? []).Skip(offset).Take(limit).ToList();
+            return Task.FromResult(new ApiResponse<List<Message>>(200, "OK", page, null));
+        }
+
         if (_queryMessages is null) throw new NotImplementedException();
         return Task.FromResult(new ApiResponse<List<Message>>(200, "OK", _queryMessages(offset), null));
     }
     public Task<ApiResponse<Message>> GetMessageAsync(string guid, string? withQuery = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetEmbeddedMediaAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> GetUpdatedMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> GetUpdatedMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default)
+    {
+        var json = JsonSerializer.Deserialize<JsonElement>($"{{\"total\":{_updatedCount}}}");
+        return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", json, null));
+    }
     public Task<ApiResponse<JsonElement>> GetMyMessageCountAsync(long? after = null, long? before = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Message>> SendTextAsync(string chatGuid, string tempGuid, string message, string? method = null, string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, bool? ddScan = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Message>> SendAttachmentAsync(string chatGuid, string tempGuid, Stream fileStream, string fileName, string? method = null, string? effectId = null, string? subject = null, string? selectedMessageGuid = null, int? partIndex = null, bool? isAudioMessage = null, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();

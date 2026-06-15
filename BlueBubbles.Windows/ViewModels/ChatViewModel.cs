@@ -940,9 +940,27 @@ public partial class ChatViewModel : ObservableObject
         if (_chatGuid != chatGuid) return;
 
         var byGuid = entities.ToDictionary(m => m.Guid);
+
+        // A message deleted on the server during the gap (applied to the cache by the window
+        // reconcile in RefreshLatestFromServerAsync) must also disappear from the open thread, not
+        // just from future loads. GetMessagesByGuidsAsync returns soft-deleted rows, so we can spot them.
+        var deletedGuids = byGuid.Values
+            .Where(m => m.DateDeleted != null)
+            .Select(m => m.Guid)
+            .ToHashSet();
+        if (deletedGuids.Count > 0)
+        {
+            foreach (var b in Items.OfType<MessageBubbleViewModel>()
+                         .Where(b => deletedGuids.Contains(b.MessageGuid)).ToList())
+                Items.Remove(b);
+            PruneOrphanDateSeparators();
+            UpdateTails();
+        }
+
         foreach (var bubble in Items.OfType<MessageBubbleViewModel>().ToList())
         {
             if (!byGuid.TryGetValue(bubble.MessageGuid, out var entity)) continue;
+            if (entity.DateDeleted != null) continue;   // removed above
 
             if (MessageEdits.IsPartRetracted(entity.MessageSummaryInfoJson, 0))
             {

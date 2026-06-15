@@ -197,10 +197,12 @@ public class MessagesService : IMessagesService
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
             if (await db.Chats.FindAsync([chatId], ct) is null) return false;
 
-            // SaveMessagesAsync upserts by GUID, so re-fetched rows reconcile their edited text,
-            // retracted parts, and read/delivery timestamps onto what's already stored.
+            // Reconcile (not just upsert) the fetched window: re-fetched rows pick up their edited
+            // text, retracted parts, and read/delivery timestamps, AND any local message inside the
+            // server's returned range that the server no longer has is soft-deleted — so a delete we
+            // missed over the socket finally converges. See MessageWindowReconciler.
             var handleCache = new Dictionary<string, int>();
-            await MessagePersistenceHelper.SaveMessagesAsync(db, chatId, messages, handleCache, ct);
+            await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
         }
         finally
         {

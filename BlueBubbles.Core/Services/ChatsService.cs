@@ -196,21 +196,9 @@ public class ChatsService : IChatsService
             db.Chats.Add(entity);
         }
 
-        entity.ChatIdentifier = chat.ChatIdentifier;
-        entity.DisplayName = chat.DisplayName;
-        entity.IsArchived = chat.IsArchived;
-        entity.IsPinned = chat.IsPinned;
-        entity.HasUnreadMessage = chat.HasUnreadMessage;
-        entity.Service = chat.Service;
-        entity.MuteType = chat.MuteType;
-        entity.MuteArgs = chat.MuteArgs;
-        entity.AutoSendReadReceipts = chat.AutoSendReadReceipts;
-        entity.AutoSendTypingIndicators = chat.AutoSendTypingIndicators;
-        entity.DateDeleted = chat.DateDeleted;
-        entity.Style = chat.Style;
-        entity.LockChatName = chat.LockChatName;
-        entity.LockChatIcon = chat.LockChatIcon;
-        entity.LastReadMessageGuid = chat.LastReadMessageGuid;
+        // Server-owned fields only; client-owned pin/mute/archive are preserved (the server has no
+        // endpoint for them and returns defaults). See ChatFieldMerge.
+        ChatFieldMerge.ApplyServerOwnedFields(entity, chat);
         entity.LatestMessageDate = chat.LastMessage?.DateCreated
             ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await db.SaveChangesAsync();

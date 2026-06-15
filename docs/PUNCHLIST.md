@@ -90,6 +90,34 @@
 > empty list is trusted only when `chat/count` independently confirms zero. Covered by
 > `SyncServiceTests` (prune on incremental + full sync, the genuine all-deleted path, and both
 > safety guards).
+>
+> **B17-B19 (fixed, shipping with 0.21.2) — server-authoritative sync hardening:** a follow-on to
+> B16, closing the remaining places the cache treated itself as the source of truth.
+> **B17 (client-only state clobbered):** the server has no endpoint for pin/mute/archive (only
+> read/unread), so it returns the defaults — and every chat upsert blindly copied them, silently
+> un-pinning/un-muting/un-archiving the user's chats on each sync (message `IsBookmarked` too).
+> Field ownership is now centralized in `ChatFieldMerge.ApplyServerOwnedFields` (the single authority
+> all chat upserts call); client-owned fields survive by omission and `IsBookmarked` is insert-only.
+> **B18 (remote message deletes/edits never synced down):** sync only ever upserted, and the
+> incremental delta keys on ROWID, which an edit/unsend/delete to an already-synced message doesn't
+> bump — so those changes made elsewhere never arrived. New `MessageWindowReconciler` makes a fetched
+> window authoritative for its range (chat-open `RefreshLatestFromServerAsync` and full sync now
+> soft-delete what the server omitted), plus a count-gated `UpdatedSinceSweepAsync`
+> (`AppSettings.LastUpdatedSync`) catches in-place edits to older messages. A `protectedGuids` guard
+> on `SaveMessagesAsync` keeps a true-up from clobbering an un-acked local mutation.
+> **B19 (chat-delete reconcile didn't fire while the app stayed open):** B16 only reconciled on
+> launch/reconnect/sleep-resume; with the window left open a conversation deleted elsewhere lingered
+> until restart (`Window.Activated` is unreliable here — missed at launch, and tray hide/show via
+> Win32 bypasses it). A public lean `ISyncService.ReconcileChatsAsync` (GUID-diff only, reloads the
+> list only if it pruned) now runs on an always-on poll gated by `GetForegroundWindow`
+> (`IWindowStateService.IsWindowFocused`), on `RestoreFromTray`, and on focus-regain — throttled,
+> and skipped while a full delta is in flight. Shipping alongside: a one-time upgrade **heal**
+> (`SyncService.RunHealIfNeededAsync` + `AppSettings.SyncModelVersion`) that runs a delete-aware full
+> true-up on first launch to converge caches an older build left stale. The durable send outbox
+> (would protect a send across a crash and add retry) was scoped, built, then **deferred** — it
+> rewrites the send path and can't be E2E-verified without a live server; design kept for a focused
+> pass. Covered by `SyncServiceTests`/`MessagesServiceTests` (field preservation, window soft-delete,
+> updated-since edit, heal-once, foreground reconcile).
 
 ---
 
