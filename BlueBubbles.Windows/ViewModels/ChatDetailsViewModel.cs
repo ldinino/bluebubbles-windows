@@ -16,7 +16,7 @@ public partial class ChatDetailsViewModel : ObservableObject
     private readonly IAttachmentCacheService _attachmentCache;
     private readonly IActionHandler _actionHandler;
 
-    private int _chatId;
+    private IReadOnlyList<int> _chatIds = [];
     private string _chatGuid = string.Empty;
     private int _mediaOffset;
     private const int MediaPageSize = 30;
@@ -70,7 +70,7 @@ public partial class ChatDetailsViewModel : ObservableObject
 
     public async Task LoadAsync(ConversationTileViewModel tile)
     {
-        _chatId = tile.Chat.Id;
+        _chatIds = tile.ConstituentChatIds;
         _chatGuid = tile.ChatGuid;
         IsGroupChat = tile.IsGroup;
         ChatDisplayName = tile.DisplayName;
@@ -87,13 +87,33 @@ public partial class ChatDetailsViewModel : ObservableObject
         NewParticipantAddress = string.Empty;
 
         Participants.Clear();
-        foreach (var handle in tile.Participants)
+        if (tile.IsMerged)
         {
+            // A merged conversation is one person reached at several addresses — show a single row whose
+            // address line reads "phone / email" (phone first).
+            var ordered = tile.Participants
+                .OrderByDescending(h => ContactResolverService.IsPhone(h.Address))
+                .ToList();
+            var primary = ordered[0];
+            var combined = string.Join(" / ",
+                ordered.Select(h => ContactResolverService.FormatAddress(h.Address)));
             Participants.Add(new ParticipantItemViewModel(
-                handle,
-                _contacts.GetDisplayName(handle.Address),
-                _contacts.GetAvatarInitials(handle.Address),
-                _contacts.GetAvatar(handle.Address)));
+                primary,
+                _contacts.GetDisplayName(primary.Address),
+                _contacts.GetAvatarInitials(primary.Address),
+                _contacts.GetAvatar(primary.Address),
+                combined));
+        }
+        else
+        {
+            foreach (var handle in tile.Participants)
+            {
+                Participants.Add(new ParticipantItemViewModel(
+                    handle,
+                    _contacts.GetDisplayName(handle.Address),
+                    _contacts.GetAvatarInitials(handle.Address),
+                    _contacts.GetAvatar(handle.Address)));
+            }
         }
         UpdateParticipantCount();
 
@@ -111,7 +131,7 @@ public partial class ChatDetailsViewModel : ObservableObject
         try
         {
             var attachments = await _messagesService.LoadMediaAttachmentsAsync(
-                _chatId, MediaPageSize, _mediaOffset);
+                _chatIds, MediaPageSize, _mediaOffset);
 
             if (attachments.Count < MediaPageSize)
                 HasMoreMedia = false;
@@ -338,17 +358,24 @@ public partial class ChatDetailsViewModel : ObservableObject
 
 public class ParticipantItemViewModel
 {
+    private readonly string? _displayAddress;
+
     public HandleEntity Handle { get; }
     public string DisplayName { get; }
     public string Initials { get; }
     public byte[]? AvatarBytes { get; }
-    public string Address => Handle.Address;
 
-    public ParticipantItemViewModel(HandleEntity handle, string displayName, string initials, byte[]? avatarBytes)
+    /// <summary>The address line shown under the name. Defaults to the handle's address; a merged
+    /// conversation passes an explicit "phone / email" string.</summary>
+    public string Address => _displayAddress ?? Handle.Address;
+
+    public ParticipantItemViewModel(HandleEntity handle, string displayName, string initials,
+        byte[]? avatarBytes, string? displayAddress = null)
     {
         Handle = handle;
         DisplayName = displayName;
         Initials = initials;
         AvatarBytes = avatarBytes;
+        _displayAddress = displayAddress;
     }
 }

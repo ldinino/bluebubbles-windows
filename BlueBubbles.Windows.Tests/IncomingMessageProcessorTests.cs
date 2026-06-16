@@ -369,7 +369,13 @@ internal class RecordingMessagesService : IMessagesService
     public Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null)
         => Task.FromResult(new List<MessageEntity>());
 
+    public Task<List<MessageEntity>> LoadMessagesAsync(IReadOnlyList<int> chatIds, int limit = 50, long? beforeDate = null)
+        => Task.FromResult(new List<MessageEntity>());
+
     public Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate)
+        => Task.FromResult(new List<MessageEntity>());
+
+    public Task<List<MessageEntity>> LoadMessagesAfterAsync(IReadOnlyList<int> chatIds, long afterDate)
         => Task.FromResult(new List<MessageEntity>());
 
     public Task<List<MessageEntity>> FetchOlderMessagesFromServerAsync(
@@ -405,6 +411,9 @@ internal class RecordingMessagesService : IMessagesService
     }
 
     public Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0)
+        => Task.FromResult(new List<AttachmentEntity>());
+
+    public Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(IReadOnlyList<int> chatIds, int limit = 50, int offset = 0)
         => Task.FromResult(new List<AttachmentEntity>());
 
     public Task<List<MessageEntity>> LoadReactionsAsync(IReadOnlyCollection<string> parentGuids)

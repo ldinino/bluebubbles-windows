@@ -56,4 +56,31 @@ public class NotificationPolicyTests
         Assert.True(NotificationPolicy.ShouldShowForWindowState(
             isWindowFocused: true, activeChatGuid: null, chatGuid: ChatA, notifyOnChatList: true));
     }
+
+    // ── Set-aware: a merged conversation has several chats on screen at once ──
+
+    [Fact]
+    public void Focused_MergedConversation_SuppressesAnyConstituent()
+    {
+        // Both ChatA and ChatB are folded into the open conversation: a message on either is suppressed.
+        string[] active = [ChatA, ChatB];
+        Assert.False(NotificationPolicy.ShouldShowForWindowState(
+            isWindowFocused: true, activeChatGuids: active, chatGuid: ChatB, notifyOnChatList: false));
+    }
+
+    [Fact]
+    public void Focused_MergedConversation_ShowsForAnUnrelatedChat()
+    {
+        string[] active = [ChatA];
+        Assert.True(NotificationPolicy.ShouldShowForWindowState(
+            isWindowFocused: true, activeChatGuids: active, chatGuid: ChatB, notifyOnChatList: false));
+    }
+
+    [Fact]
+    public void NotFocused_MergedConversation_AlwaysShows()
+    {
+        string[] active = [ChatA, ChatB];
+        Assert.True(NotificationPolicy.ShouldShowForWindowState(
+            isWindowFocused: false, activeChatGuids: active, chatGuid: ChatA, notifyOnChatList: false));
+    }
 }

@@ -12,6 +12,10 @@ public class ContactResolverService : IContactResolverService
     // half-populated window mid-reload.
     private volatile ConcurrentDictionary<string, string> _nameCache = new(StringComparer.OrdinalIgnoreCase);
     private volatile ConcurrentDictionary<string, byte[]?> _avatarCache = new(StringComparer.OrdinalIgnoreCase);
+    // Maps a normalized address to a stable-within-this-load id for the contact card it belongs to, so
+    // two addresses on the same card (e.g. an iCloud email and a phone number) can be recognized as the
+    // same person — the key for merging "sticky bifurcation" threads. Rebuilt on every load.
+    private volatile ConcurrentDictionary<string, string> _contactIdCache = new(StringComparer.OrdinalIgnoreCase);
     private volatile List<ContactSearchResult> _allContacts = [];
 
     public int ContactCount { get; private set; }
@@ -46,7 +50,9 @@ public class ContactResolverService : IContactResolverService
         var previousAvatars = _avatarCache;
         var newNames = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var newAvatars = new ConcurrentDictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        var newContactIds = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var searchable = new List<ContactSearchResult>(contacts.Count);
+        var contactIndex = 0;
 
         foreach (var contact in contacts)
         {
@@ -55,6 +61,11 @@ public class ContactResolverService : IContactResolverService
 
             if (string.IsNullOrWhiteSpace(displayName))
                 continue;
+
+            // One id per kept card; shared by every address on the card so two addresses on the same
+            // contact (email + phone) collapse to one conversation. First-seen card wins a shared address.
+            var contactId = contactIndex.ToString();
+            contactIndex++;
 
             // Resolved once per contact and reused across all its addresses below, so one contact's
             // photo stays a single shared array (one decode) even spanning multiple phones/emails.
@@ -66,6 +77,7 @@ public class ContactResolverService : IContactResolverService
                 var normalized = NormalizeAddress(phone);
                 if (string.IsNullOrEmpty(normalized)) continue;
                 newNames.TryAdd(normalized, displayName);
+                newContactIds.TryAdd(normalized, contactId);
                 if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
                 newAvatars.TryAdd(normalized, photo);
             }
@@ -75,6 +87,7 @@ public class ContactResolverService : IContactResolverService
                 var normalized = NormalizeAddress(email);
                 if (string.IsNullOrEmpty(normalized)) continue;
                 newNames.TryAdd(normalized, displayName);
+                newContactIds.TryAdd(normalized, contactId);
                 if (!photoResolved) { photo = StablePhoto(contact.Photo, previousAvatars.GetValueOrDefault(normalized)); photoResolved = true; }
                 newAvatars.TryAdd(normalized, photo);
             }
@@ -85,11 +98,32 @@ public class ContactResolverService : IContactResolverService
 
         _nameCache = newNames;
         _avatarCache = newAvatars;
+        _contactIdCache = newContactIds;
         _allContacts = searchable;
         ContactCount = contacts.Count;
         LoadedFilePath = vcfFilePath;
         ContactsChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Clears all imported contacts (names, avatars, contact ids, search index) and forgets the
+    /// loaded file, then raises <see cref="ContactsChanged"/> so the UI falls back to raw addresses and
+    /// any merged conversations split apart. Backs the importer's Reset button.</summary>
+    public void ClearContacts()
+    {
+        _nameCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _avatarCache = new ConcurrentDictionary<string, byte[]?>(StringComparer.OrdinalIgnoreCase);
+        _contactIdCache = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _allContacts = [];
+        ContactCount = 0;
+        LoadedFilePath = null;
+        ContactsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Stable-within-this-load id of the contact card an address belongs to, or null when the
+    /// address isn't in any imported contact. Two addresses share an id iff they're on the same card —
+    /// the test for merging bifurcated threads.</summary>
+    public string? GetContactId(string address)
+        => _contactIdCache.TryGetValue(NormalizeAddress(address), out var id) ? id : null;
 
     public string GetDisplayName(string address)
     {
@@ -192,6 +226,14 @@ public class ContactResolverService : IContactResolverService
 
         var digits = new string(trimmed.Where(char.IsDigit).ToArray());
         return digits.Length >= 10 ? digits[^10..] : trimmed.ToLowerInvariant();
+    }
+
+    /// <summary>True when an address looks like a phone number rather than an email — the basis for
+    /// choosing the phone as a merged conversation's primary identity and ordering "phone / email".</summary>
+    public static bool IsPhone(string address)
+    {
+        var trimmed = address.Trim();
+        return !trimmed.Contains('@') && trimmed.Any(char.IsDigit);
     }
 
     public static string FormatAddress(string address)

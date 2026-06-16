@@ -159,7 +159,9 @@ public class DependencyInjectionTests
     {
         public Task LoadContactsAsync() => Task.CompletedTask;
         public Task LoadFromVCardAsync(string vcfFilePath) => Task.CompletedTask;
+        public void ClearContacts() { }
         public string GetDisplayName(string address) => address;
+        public string? GetContactId(string address) => null;
         public string GetInitials(string displayName) => "?";
         public bool HasContactName(string address) => false;
         public string GetAvatarInitials(string address) => string.Empty;
@@ -208,8 +210,14 @@ public class DependencyInjectionTests
         public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> LoadMessagesAsync(
             int chatId, int limit = 50, long? beforeDate = null)
             => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.MessageEntity>());
+        public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> LoadMessagesAsync(
+            IReadOnlyList<int> chatIds, int limit = 50, long? beforeDate = null)
+            => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.MessageEntity>());
         public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> LoadMessagesAfterAsync(
             int chatId, long afterDate)
+            => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.MessageEntity>());
+        public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> LoadMessagesAfterAsync(
+            IReadOnlyList<int> chatIds, long afterDate)
             => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.MessageEntity>());
         public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> FetchOlderMessagesFromServerAsync(
             int chatId, string chatGuid, int limit = 25, CancellationToken ct = default)
@@ -228,6 +236,9 @@ public class DependencyInjectionTests
             => Task.FromResult(true);
         public Task<List<BlueBubbles.Core.Data.Entities.AttachmentEntity>> LoadMediaAttachmentsAsync(
             int chatId, int limit = 50, int offset = 0)
+            => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.AttachmentEntity>());
+        public Task<List<BlueBubbles.Core.Data.Entities.AttachmentEntity>> LoadMediaAttachmentsAsync(
+            IReadOnlyList<int> chatIds, int limit = 50, int offset = 0)
             => Task.FromResult(new List<BlueBubbles.Core.Data.Entities.AttachmentEntity>());
         public Task<List<BlueBubbles.Core.Data.Entities.MessageEntity>> LoadReactionsAsync(
             IReadOnlyCollection<string> parentGuids)
@@ -267,7 +278,10 @@ public class DependencyInjectionTests
     {
         public bool IsWindowFocused => false;
         public string? ActiveChatGuid => null;
+        public IReadOnlyCollection<string> ActiveChatGuids => Array.Empty<string>();
+        public bool IsChatActive(string? chatGuid) => false;
         public void SetActiveChatGuid(string? chatGuid) { }
+        public void SetActiveChats(IEnumerable<string>? chatGuids) { }
     }
     private class StubNotificationService : INotificationService
     {

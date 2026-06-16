@@ -75,7 +75,7 @@ internal sealed class NotificationService : INotificationService
         }
 
         if (!NotificationPolicy.ShouldShowForWindowState(
-                _windowState.IsWindowFocused, _windowState.ActiveChatGuid,
+                _windowState.IsWindowFocused, _windowState.ActiveChatGuids,
                 n.ChatGuid, _settings.NotifyOnChatList))
             return;
 

@@ -314,8 +314,10 @@ public sealed partial class ConversationListPage : Page
         if (!string.IsNullOrEmpty(_vm.SearchQuery))
             _vm.SearchQuery = string.Empty;
 
+        // A notification deep-link carries the underlying chat's GUID, which for a merged conversation
+        // is a constituent rather than the tile's primary GUID — match on the full constituent set.
         var tile = _vm.Conversations.Concat(_vm.PinnedConversations)
-            .FirstOrDefault(t => t.ChatGuid == chatGuid);
+            .FirstOrDefault(t => t.ContainsGuid(chatGuid));
         if (tile is null) return false;
 
         // Drive the same selection state a user click produces: highlight in the owning list, clear the

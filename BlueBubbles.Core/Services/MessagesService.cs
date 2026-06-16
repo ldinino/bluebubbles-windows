@@ -22,14 +22,17 @@ public class MessagesService : IMessagesService
         _api = api;
     }
 
-    public async Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null)
+    public Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null)
+        => LoadMessagesAsync(new[] { chatId }, limit, beforeDate);
+
+    public async Task<List<MessageEntity>> LoadMessagesAsync(IReadOnlyList<int> chatIds, int limit = 50, long? beforeDate = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var query = db.Messages
             .Include(m => m.Handle)
             .Include(m => m.Attachments)
-            .Where(m => m.ChatId == chatId && m.DateDeleted == null && m.AssociatedMessageGuid == null);
+            .Where(m => chatIds.Contains(m.ChatId) && m.DateDeleted == null && m.AssociatedMessageGuid == null);
 
         if (beforeDate.HasValue)
             query = query.Where(m => m.DateCreated < beforeDate.Value);
@@ -43,14 +46,17 @@ public class MessagesService : IMessagesService
         return messages;
     }
 
-    public async Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate)
+    public Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate)
+        => LoadMessagesAfterAsync(new[] { chatId }, afterDate);
+
+    public async Task<List<MessageEntity>> LoadMessagesAfterAsync(IReadOnlyList<int> chatIds, long afterDate)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         return await db.Messages
             .Include(m => m.Handle)
             .Include(m => m.Attachments)
-            .Where(m => m.ChatId == chatId && m.DateDeleted == null
+            .Where(m => chatIds.Contains(m.ChatId) && m.DateDeleted == null
                 && m.AssociatedMessageGuid == null && m.DateCreated > afterDate)
             .OrderBy(m => m.DateCreated)
             .ToListAsync();
@@ -436,12 +442,15 @@ public class MessagesService : IMessagesService
         }
     }
 
-    public async Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0)
+    public Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0)
+        => LoadMediaAttachmentsAsync(new[] { chatId }, limit, offset);
+
+    public async Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(IReadOnlyList<int> chatIds, int limit = 50, int offset = 0)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         return await db.Attachments
-            .Where(a => a.Message.ChatId == chatId
+            .Where(a => chatIds.Contains(a.Message.ChatId)
                 && a.Message.DateDeleted == null
                 && a.MimeType != null
                 && (a.MimeType.StartsWith("image/") || a.MimeType.StartsWith("video/")))

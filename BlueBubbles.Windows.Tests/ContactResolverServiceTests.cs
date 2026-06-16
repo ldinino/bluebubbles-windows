@@ -108,6 +108,91 @@ public class ContactResolverServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetContactId_SameCard_SharesId_AcrossPhoneAndEmail()
+    {
+        // The "sticky bifurcation" case: one card carrying both a phone and an iCloud email.
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Alex Rivera
+            TEL:+15550001234
+            EMAIL:alex.rivera@example.com
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+
+        var phoneId = svc.GetContactId("5550001234");
+        var emailId = svc.GetContactId("ALEX.RIVERA@EXAMPLE.COM");
+
+        Assert.NotNull(phoneId);
+        Assert.Equal(phoneId, emailId);
+    }
+
+    [Fact]
+    public async Task GetContactId_DifferentCards_DifferAndUnknownIsNull()
+    {
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:John Doe
+            TEL:+15551234567
+            END:VCARD
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Jane Smith
+            TEL:+15559876543
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+
+        Assert.NotNull(svc.GetContactId("5551234567"));
+        Assert.NotEqual(svc.GetContactId("5551234567"), svc.GetContactId("5559876543"));
+        Assert.Null(svc.GetContactId("5550000000"));
+    }
+
+    [Theory]
+    [InlineData("+15550001234", true)]
+    [InlineData("(555) 000-1234", true)]
+    [InlineData("alex.rivera@example.com", false)]
+    public void IsPhone_DistinguishesPhoneFromEmail(string address, bool expected)
+    {
+        Assert.Equal(expected, ContactResolverService.IsPhone(address));
+    }
+
+    [Fact]
+    public async Task ClearContacts_ResetsState_AndRaisesEvent()
+    {
+        var path = WriteVcf("""
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:John Doe
+            TEL:+15551234567
+            EMAIL:john@example.com
+            END:VCARD
+            """);
+
+        var svc = new ContactResolverService(_settings);
+        await svc.LoadFromVCardAsync(path);
+        Assert.Equal(1, svc.ContactCount);
+
+        var raised = false;
+        svc.ContactsChanged += (_, _) => raised = true;
+
+        svc.ClearContacts();
+
+        Assert.True(raised);
+        Assert.Equal(0, svc.ContactCount);
+        Assert.Null(svc.LoadedFilePath);
+        Assert.Null(svc.GetContactId("5551234567"));
+        // Falls back to the formatted raw number, not the contact name.
+        Assert.Equal("(555) 123-4567", svc.GetDisplayName("5551234567"));
+    }
+
+    [Fact]
     public async Task HasContactName_TrueForSavedContact_FalseForRawAddress()
     {
         var path = WriteVcf("""

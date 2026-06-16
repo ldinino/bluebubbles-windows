@@ -27,4 +27,16 @@ public static class NotificationPolicy
         if (activeChatGuid is null && !notifyOnChatList) return false;
         return true;
     }
+
+    /// <summary>Set-aware variant: a merged conversation has several chats on screen at once, so a toast
+    /// for any of them must be suppressed. <paramref name="activeChatGuids"/> empty means the chat list
+    /// (no chat) is on screen.</summary>
+    public static bool ShouldShowForWindowState(
+        bool isWindowFocused, IReadOnlyCollection<string> activeChatGuids, string chatGuid, bool notifyOnChatList)
+    {
+        if (!isWindowFocused) return true;
+        if (activeChatGuids.Contains(chatGuid, StringComparer.OrdinalIgnoreCase)) return false;
+        if (activeChatGuids.Count == 0 && !notifyOnChatList) return false;
+        return true;
+    }
 }

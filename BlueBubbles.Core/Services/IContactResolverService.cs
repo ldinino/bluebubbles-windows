@@ -6,7 +6,13 @@ public interface IContactResolverService
 {
     Task LoadContactsAsync();
     Task LoadFromVCardAsync(string vcfFilePath);
+    /// <summary>Clears all imported contacts and forgets the loaded file, raising
+    /// <see cref="ContactsChanged"/>. Backs the importer's Reset button.</summary>
+    void ClearContacts();
     string GetDisplayName(string address);
+    /// <summary>Stable-within-this-load id of the contact card an address belongs to, or null when
+    /// unknown. Two addresses share an id iff they're on the same card — the merge key.</summary>
+    string? GetContactId(string address);
     string GetInitials(string displayName);
     bool HasContactName(string address);
     /// <summary>Avatar initials for a single address: the contact's initials, or an empty string

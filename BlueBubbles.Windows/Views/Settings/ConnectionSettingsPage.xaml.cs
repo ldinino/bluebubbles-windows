@@ -78,7 +78,11 @@ public sealed partial class ConnectionSettingsPage : Page
         }
     }
 
-    private void UpdateVCardDisplay() => VCardStatusText.Text = _vm.VCardStatus;
+    private void UpdateVCardDisplay()
+    {
+        VCardStatusText.Text = _vm.VCardStatus;
+        ResetVCardButton.IsEnabled = _vm.HasVCard;
+    }
 
     private void UpdateLocalConnectionDisplay()
     {
@@ -119,5 +123,22 @@ public sealed partial class ConnectionSettingsPage : Page
         var file = await picker.PickSingleFileAsync();
         if (file is not null)
             await _vm.ImportVCardCommand.ExecuteAsync(file.Path);
+    }
+
+    private async void OnResetVCardClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Remove imported contacts?",
+            Content = "This clears all contacts loaded from the vCard. Conversations will show raw phone "
+                + "numbers and emails (and any merged threads will split apart) until you import again.",
+            PrimaryButtonText = "Remove",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            _vm.ResetContactsCommand.Execute(null);
     }
 }

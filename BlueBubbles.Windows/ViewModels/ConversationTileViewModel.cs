@@ -15,8 +15,20 @@ public partial class ConversationTileViewModel : ObservableObject
     private long? _lastMessageDelivered;
     private long? _lastMessageRead;
 
-    public ChatEntity Chat { get; }
-    public List<HandleEntity> Participants { get; }
+    public ChatEntity Chat { get; private set; }
+    public List<HandleEntity> Participants { get; private set; }
+
+    /// <summary>The underlying server chats folded into this conversation. One for a normal chat; several
+    /// for a merged ("sticky bifurcation") conversation. Their GUIDs/ids drive loading, reads, and
+    /// notification suppression.</summary>
+    public IReadOnlyList<string> ConstituentGuids { get; private set; }
+    public IReadOnlyList<int> ConstituentChatIds { get; private set; }
+
+    /// <summary>True when this tile folds more than one underlying chat together.</summary>
+    public bool IsMerged { get; private set; }
+
+    /// <summary>The phone (or fallback) address shown on the info bar for a merged conversation.</summary>
+    public string PrimaryAddress { get; private set; }
 
     [ObservableProperty] public partial string DisplayName { get; set; }
     [ObservableProperty] public partial string Initials { get; set; }
@@ -40,53 +52,72 @@ public partial class ConversationTileViewModel : ObservableObject
 
     public string ChatGuid => Chat.Guid;
 
-    public ConversationTileViewModel(ChatWithParticipants data, IContactResolverService contacts, AppSettings settings)
+    public ConversationTileViewModel(MergedConversation data, IContactResolverService contacts, AppSettings settings)
     {
         _contacts = contacts;
         _settings = settings;
         StatusText = string.Empty;
-        Chat = data.Chat;
-        Participants = data.Participants;
-
-        var addresses = Participants.Select(p => p.Address).ToList();
-        DisplayName = contacts.GetChatDisplayName(addresses, data.Chat.DisplayName);
-        Initials = contacts.GetChatInitials(addresses, data.Chat.DisplayName);
-        Preview = data.LastMessageText ?? string.Empty;
-        Timestamp = data.Chat.LatestMessageDate ?? 0;
-        HasUnread = data.Chat.HasUnreadMessage;
-        IsPinned = data.Chat.IsPinned;
-        IsArchived = data.Chat.IsArchived;
-        IsGroup = Participants.Count > 1;
-        AvatarBytes = Participants.Count == 1 ? contacts.GetAvatar(Participants[0].Address) : null;
+        DisplayName = string.Empty;
+        Initials = string.Empty;
+        Preview = string.Empty;
         GroupInitials1 = string.Empty;
         GroupInitials2 = string.Empty;
-        ResolveGroupAvatars(data);
-        CaptureLastMessageStatus(data);
-        ApplyAppearance(_settings);
+        Chat = data.PrimaryChat;
+        Participants = [];
+        ConstituentGuids = [];
+        ConstituentChatIds = [];
+        PrimaryAddress = string.Empty;
+        Apply(data);
     }
 
-    public void Refresh(ChatWithParticipants data)
+    public void Refresh(MergedConversation data) => Apply(data);
+
+    private void Apply(MergedConversation data)
     {
-        var addresses = data.Participants.Select(p => p.Address).ToList();
-        DisplayName = _contacts.GetChatDisplayName(addresses, data.Chat.DisplayName);
-        Initials = _contacts.GetChatInitials(addresses, data.Chat.DisplayName);
+        // Refresh only matches a tile by its primary GUID, so the identity (ChatGuid) is unchanged.
+        Chat = data.PrimaryChat;
+        Participants = data.Participants as List<HandleEntity> ?? data.Participants.ToList();
+        ConstituentGuids = data.ConstituentGuids;
+        ConstituentChatIds = data.ConstituentChatIds;
+        IsMerged = data.IsMerged;
+        PrimaryAddress = data.PrimaryAddress;
+        // A merged 1:1 is one person with several addresses, never a group.
+        IsGroup = data.Primary.Participants.Count > 1;
+
+        if (IsMerged)
+        {
+            // Resolve as the single underlying contact — GetChatDisplayName over the union would read
+            // "Name & Name" since both addresses map to the same card.
+            DisplayName = _contacts.GetDisplayName(PrimaryAddress);
+            Initials = _contacts.GetAvatarInitials(PrimaryAddress);
+            AvatarBytes = _contacts.GetAvatar(PrimaryAddress);
+        }
+        else
+        {
+            var addresses = Participants.Select(p => p.Address).ToList();
+            DisplayName = _contacts.GetChatDisplayName(addresses, Chat.DisplayName);
+            Initials = _contacts.GetChatInitials(addresses, Chat.DisplayName);
+            // Re-resolve the 1:1 avatar too — a contact import can make a photo available
+            // for a tile that previously had none.
+            AvatarBytes = Participants.Count == 1 ? _contacts.GetAvatar(Participants[0].Address) : null;
+        }
+
         Preview = data.LastMessageText ?? string.Empty;
-        Timestamp = data.Chat.LatestMessageDate ?? 0;
-        HasUnread = data.Chat.HasUnreadMessage;
-        IsPinned = data.Chat.IsPinned;
-        IsArchived = data.Chat.IsArchived;
-        IsGroup = data.Participants.Count > 1;
-        // Re-resolve the 1:1 avatar too — a contact import can make a photo available
-        // for a tile that previously had none.
-        AvatarBytes = data.Participants.Count == 1
-            ? _contacts.GetAvatar(data.Participants[0].Address)
-            : null;
-        ResolveGroupAvatars(data);
+        Timestamp = data.Timestamp;
+        HasUnread = data.HasUnread;
+        IsPinned = data.IsPinned;
+        IsArchived = data.IsArchived;
+        ResolveGroupAvatars(data.Primary);
         CaptureLastMessageStatus(data);
         ApplyAppearance(_settings);
     }
 
-    private void CaptureLastMessageStatus(ChatWithParticipants data)
+    /// <summary>True when the given underlying chat GUID belongs to this conversation (any constituent).
+    /// Lets per-GUID events (refresh, deep-links, active-chat) resolve a merged tile.</summary>
+    public bool ContainsGuid(string chatGuid)
+        => ConstituentGuids.Contains(chatGuid, StringComparer.OrdinalIgnoreCase);
+
+    private void CaptureLastMessageStatus(MergedConversation data)
     {
         _lastMessageIsFromMe = data.LastMessageIsFromMe;
         _lastMessageDelivered = data.LastMessageDateDelivered;
@@ -112,7 +143,7 @@ public partial class ConversationTileViewModel : ObservableObject
     /// <summary>Re-runs the timestamp binding (e.g. after the 24-hour-time setting changes).</summary>
     public void RaiseTimestampChanged() => OnPropertyChanged(nameof(Timestamp));
 
-    private void ResolveGroupAvatars(ChatWithParticipants data)
+    private void ResolveGroupAvatars(ChatWithParticipants primary)
     {
         if (!IsGroup)
         {
@@ -121,7 +152,7 @@ public partial class ConversationTileViewModel : ObservableObject
             return;
         }
 
-        var group = GroupAvatarResolver.Resolve(data, _contacts);
+        var group = GroupAvatarResolver.Resolve(primary, _contacts);
         GroupInitials1 = group.Initials1;
         GroupInitials2 = group.Initials2;
         GroupAvatarBytes1 = group.Bytes1;

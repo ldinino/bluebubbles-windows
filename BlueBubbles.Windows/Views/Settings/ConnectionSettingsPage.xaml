@@ -69,11 +69,22 @@
 
             <tk:SettingsCard Header="Contacts">
                 <tk:SettingsCard.Description>
-                    <TextBlock x:Name="VCardStatusText" TextWrapping="Wrap" />
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="VCardStatusText" TextWrapping="Wrap" />
+                        <TextBlock Text="Importing a vCard replaces all currently loaded contacts."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
                 </tk:SettingsCard.Description>
-                <Button x:Name="ImportVCardButton"
-                        Content="Import vCard"
-                        Click="OnImportVCardClick" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="ImportVCardButton"
+                            Content="Import vCard"
+                            Click="OnImportVCardClick" />
+                    <Button x:Name="ResetVCardButton"
+                            Content="Reset"
+                            Click="OnResetVCardClick" />
+                </StackPanel>
             </tk:SettingsCard>
 
         </StackPanel>

@@ -126,6 +126,32 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>Clears all imported contacts and deletes the cached vCard, so conversations fall back to
+    /// raw addresses (and any merged threads split apart) until the next import. Backs the Reset button —
+    /// it isn't otherwise obvious that re-importing replaces what's loaded.</summary>
+    [RelayCommand]
+    private void ResetContacts()
+    {
+        _contacts.ClearContacts();
+        _appSettings.VCardFilePath = string.Empty;
+
+        try
+        {
+            var destPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "BlueBubbles", "contacts.vcf");
+            if (File.Exists(destPath))
+                File.Delete(destPath);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Contacts, $"Failed to delete cached vCard: {ex.Message}");
+        }
+
+        _settings.Save();
+        RefreshVCardStatus();
+    }
+
     private void OnLogEntry(string entry)
     {
         if (!MatchesFilter(entry)) return;

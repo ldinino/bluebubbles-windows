@@ -105,27 +105,30 @@ public partial class ConversationListViewModel : ObservableObject
         // Single source of truth for "which chat is on screen", consumed by the notification
         // suppression logic. Setting null on deselection (e.g. navigating back to the list) is the
         // point — otherwise the last-opened chat would stay suppressed while it's no longer visible.
-        _windowState.SetActiveChatGuid(value?.ChatGuid);
+        // A merged conversation has several underlying chats on screen — register them all so toasts for
+        // any of them are suppressed, and reconcile the read on each.
+        _windowState.SetActiveChats(value?.ConstituentGuids);
 
         if (value is not null)
-            _ = _chatsService.MarkChatReadAsync(value.ChatGuid, true);
+            foreach (var guid in value.ConstituentGuids)
+                _ = _chatsService.MarkChatReadAsync(guid, true);
     }
 
     private void RebuildList()
     {
         var previousGuid = SelectedConversation?.ChatGuid;
-        var chats = _chatsService.Chats;
+        var merged = ConversationMerger.Merge(_chatsService.Chats, _contacts);
 
         var existingByGuid = _allTiles.ToDictionary(t => t.ChatGuid);
 
-        _allTiles = chats.Select(c =>
+        _allTiles = merged.Select(m =>
         {
-            if (existingByGuid.TryGetValue(c.Chat.Guid, out var existing))
+            if (existingByGuid.TryGetValue(m.PrimaryChat.Guid, out var existing))
             {
-                existing.Refresh(c);
+                existing.Refresh(m);
                 return existing;
             }
-            return new ConversationTileViewModel(c, _contacts, _appSettings);
+            return new ConversationTileViewModel(m, _contacts, _appSettings);
         }).ToList();
 
         ApplyFilter();
@@ -160,11 +163,14 @@ public partial class ConversationListViewModel : ObservableObject
 
     private void RefreshTile(string chatGuid)
     {
-        var data = _chatsService.Chats.FirstOrDefault(c => c.Chat.Guid == chatGuid);
-        if (data is null) return;
+        // The updated chat may be a constituent of a merged conversation, so re-merge to get the
+        // aggregated state and refresh the tile that owns it (keyed by its primary GUID).
+        var merged = ConversationMerger.Merge(_chatsService.Chats, _contacts);
+        var m = merged.FirstOrDefault(x => x.ConstituentGuids.Contains(chatGuid, StringComparer.OrdinalIgnoreCase));
+        if (m is null) return;
 
-        var tile = _allTiles.FirstOrDefault(t => t.ChatGuid == chatGuid);
-        tile?.Refresh(data);
+        var tile = _allTiles.FirstOrDefault(t => t.ChatGuid == m.PrimaryChat.Guid);
+        tile?.Refresh(m);
     }
 
     private async void OnIncomingMessageProcessed(object? sender, IncomingMessageProcessedEventArgs e)
@@ -174,7 +180,8 @@ public partial class ConversationListViewModel : ObservableObject
         // would immediately clear the toast we just raised for it — NotificationService drops a chat's
         // toasts as soon as it reads as read. That was the N1 "no notification for the selected chat" bug.
         if (!e.IsFromMe
-            && SelectedConversation?.ChatGuid == e.ChatGuid
+            && SelectedConversation is not null
+            && SelectedConversation.ContainsGuid(e.ChatGuid)
             && _windowState.IsWindowFocused)
         {
             try { await _chatsService.MarkChatReadAsync(e.ChatGuid, true); }
@@ -236,17 +243,17 @@ public partial class ConversationListViewModel : ObservableObject
 
     private void RebuildArchivedList()
     {
-        var chats = _chatsService.ArchivedChats;
+        var merged = ConversationMerger.Merge(_chatsService.ArchivedChats, _contacts);
         var existingByGuid = _archivedTiles.ToDictionary(t => t.ChatGuid);
 
-        _archivedTiles = chats.Select(c =>
+        _archivedTiles = merged.Select(m =>
         {
-            if (existingByGuid.TryGetValue(c.Chat.Guid, out var existing))
+            if (existingByGuid.TryGetValue(m.PrimaryChat.Guid, out var existing))
             {
-                existing.Refresh(c);
+                existing.Refresh(m);
                 return existing;
             }
-            return new ConversationTileViewModel(c, _contacts, _appSettings);
+            return new ConversationTileViewModel(m, _contacts, _appSettings);
         }).ToList();
 
         if (IsShowingArchived)

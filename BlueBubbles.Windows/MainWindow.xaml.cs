@@ -109,13 +109,17 @@ public sealed partial class MainWindow : Window
         // chat unread so its notification can fire (punchlist N1), so we reconcile the read here on
         // focus rather than on message arrival. Guarded on the unread flag so we don't ping the server's
         // read endpoint on every focus change.
-        var activeChat = App.Services.GetRequiredService<IWindowStateService>().ActiveChatGuid;
-        if (activeChat is null) return;
+        var activeChats = App.Services.GetRequiredService<IWindowStateService>().ActiveChatGuids;
+        if (activeChats.Count == 0) return;
 
+        // A merged conversation has several underlying chats on screen — reconcile the read on each.
         var chats = App.Services.GetRequiredService<IChatsService>();
-        var chat = chats.Chats.FirstOrDefault(c => c.Chat.Guid == activeChat);
-        if (chat?.Chat.HasUnreadMessage == true)
-            _ = chats.MarkChatReadAsync(activeChat, true);
+        foreach (var guid in activeChats)
+        {
+            var chat = chats.Chats.FirstOrDefault(c => c.Chat.Guid == guid);
+            if (chat?.Chat.HasUnreadMessage == true)
+                _ = chats.MarkChatReadAsync(guid, true);
+        }
     }
 
     public Frame RootNavigationFrame => RootFrame;

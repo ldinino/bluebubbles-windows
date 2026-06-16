@@ -24,8 +24,17 @@ public partial class ChatViewModel : ObservableObject
     private readonly ILinkPreviewService? _linkPreview;
     private readonly AppSettings _settings;
 
-    private int _chatId;
+    // Primary identity of the open conversation (the merged tile's key / phone-preferred chat).
     private string _chatGuid = string.Empty;
+    // A conversation can fold several underlying chats together ("sticky bifurcation"): these span all
+    // constituents so loading, socket routing, and reconcile cover the whole interleaved history.
+    private List<int> _chatIds = [];
+    private List<string> _constituentGuids = [];
+    private readonly HashSet<string> _chatGuids = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isMerged;
+    private string _primaryAddress = string.Empty;
+    // Outgoing target: the most-recently-active constituent (recomputed on load and on new messages).
+    private string _sendGuid = string.Empty;
     private bool _isGroup;
     private IReadOnlyList<string> _participantAddresses = [];
     private string? _chatDisplayNameRaw;
@@ -144,7 +153,7 @@ public partial class ChatViewModel : ObservableObject
         // step with the DB on every persist, not just on the single end-of-sync pulse above.
         _chatsService.MessagesPersisted += (s, guid) =>
         {
-            if (guid == _chatGuid) RunOnUI(() => _ = AppendPersistedMessagesAsync(guid));
+            if (_chatGuids.Contains(guid)) RunOnUI(() => _ = AppendPersistedMessagesAsync(guid));
         };
     }
 
@@ -153,6 +162,17 @@ public partial class ChatViewModel : ObservableObject
     private void RefreshContactInfo()
     {
         if (string.IsNullOrEmpty(_chatGuid)) return;
+
+        if (_isMerged)
+        {
+            // One person with several addresses — resolve as the single contact, info bar shows the phone.
+            ChatDisplayName = _contacts.GetDisplayName(_primaryAddress);
+            Initials = _contacts.GetAvatarInitials(_primaryAddress);
+            AvatarBytes = _contacts.GetAvatar(_primaryAddress);
+            ParticipantSummary = ContactResolverService.FormatAddress(_primaryAddress);
+            return;
+        }
+
         ChatDisplayName = _contacts.GetChatDisplayName(_participantAddresses, _chatDisplayNameRaw);
         Initials = _contacts.GetChatInitials(_participantAddresses, _chatDisplayNameRaw);
         AvatarBytes = _participantAddresses.Count == 1
@@ -181,9 +201,16 @@ public partial class ChatViewModel : ObservableObject
     {
         if (_chatGuid == tile.ChatGuid) return;
 
-        _chatId = tile.Chat.Id;
         _chatGuid = tile.ChatGuid;
         _isGroup = tile.IsGroup;
+        _isMerged = tile.IsMerged;
+        _primaryAddress = tile.PrimaryAddress;
+        _chatIds = tile.ConstituentChatIds.ToList();
+        _constituentGuids = tile.ConstituentGuids.ToList();
+        _chatGuids.Clear();
+        foreach (var g in _constituentGuids) _chatGuids.Add(g);
+        _sendGuid = _chatGuid;
+        RecomputeSendTarget();
         _participantAddresses = tile.Participants.Select(p => p.Address).ToList();
         _chatDisplayNameRaw = tile.Chat.DisplayName;
         ChatDisplayName = tile.DisplayName;
@@ -204,7 +231,9 @@ public partial class ChatViewModel : ObservableObject
 
         ParticipantSummary = _isGroup
             ? $"{tile.Participants.Count} participants"
-            : tile.Participants.FirstOrDefault()?.Address ?? string.Empty;
+            : _isMerged
+                ? ContactResolverService.FormatAddress(_primaryAddress)
+                : tile.Participants.FirstOrDefault()?.Address ?? string.Empty;
 
         Items.Clear();
         ScheduledItems.Clear();
@@ -221,14 +250,17 @@ public partial class ChatViewModel : ObservableObject
         IsLoading = true;
         try
         {
-            var messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize);
+            var messages = await _messagesService.LoadMessagesAsync(_chatIds, PageSize);
 
             // Safety net: a chat left empty by a missed/incomplete sync would otherwise show a
-            // permanently-blank thread. Pull its newest page from the server on open, once.
-            if (messages.Count == 0 &&
-                await _messagesService.EnsureChatHydratedAsync(_chatId, _chatGuid, PageSize))
+            // permanently-blank thread. Pull each constituent's newest page from the server on open, once.
+            if (messages.Count == 0)
             {
-                messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize);
+                var hydrated = false;
+                for (var i = 0; i < _chatIds.Count; i++)
+                    hydrated |= await _messagesService.EnsureChatHydratedAsync(_chatIds[i], _constituentGuids[i], PageSize);
+                if (hydrated)
+                    messages = await _messagesService.LoadMessagesAsync(_chatIds, PageSize);
             }
 
             if (messages.Count > 0) _oldestMessageDate = messages[0].DateCreated;
@@ -284,12 +316,21 @@ public partial class ChatViewModel : ObservableObject
         IsLoading = true;
         try
         {
-            var messages = await _messagesService.LoadMessagesAsync(_chatId, PageSize, _oldestMessageDate);
+            var messages = await _messagesService.LoadMessagesAsync(_chatIds, PageSize, _oldestMessageDate);
 
             if (messages.Count == 0)
             {
-                messages = await _messagesService.FetchOlderMessagesFromServerAsync(
-                    _chatId, _chatGuid, 25);
+                // Cache exhausted across the union — pull an older page for each constituent from the
+                // server, then re-query the interleaved older window.
+                var fetchedAny = false;
+                for (var i = 0; i < _chatIds.Count; i++)
+                {
+                    var older = await _messagesService.FetchOlderMessagesFromServerAsync(
+                        _chatIds[i], _constituentGuids[i], 25);
+                    fetchedAny |= older.Count > 0;
+                }
+                if (fetchedAny)
+                    messages = await _messagesService.LoadMessagesAsync(_chatIds, PageSize, _oldestMessageDate);
             }
 
             if (messages.Count == 0)
@@ -316,6 +357,28 @@ public partial class ChatViewModel : ObservableObject
         EmitTypingIndicator();
     }
 
+    /// <summary>Picks the outgoing target for a merged conversation: the constituent chat with the most
+    /// recent message (per the merged-thread design). A no-op for a single chat. Recomputed before each
+    /// send and when a new message lands, so replies follow whichever address is currently active.</summary>
+    private void RecomputeSendTarget()
+    {
+        if (_constituentGuids.Count <= 1)
+        {
+            _sendGuid = _chatGuid;
+            return;
+        }
+
+        var chats = _chatsService.Chats;
+        var bestGuid = _chatGuid;
+        var bestDate = long.MinValue;
+        foreach (var guid in _constituentGuids)
+        {
+            var date = chats.FirstOrDefault(c => c.Chat.Guid == guid)?.Chat.LatestMessageDate ?? 0;
+            if (date >= bestDate) { bestDate = date; bestGuid = guid; }
+        }
+        _sendGuid = bestGuid;
+    }
+
     [RelayCommand]
     private void SendMessage()
     {
@@ -333,6 +396,7 @@ public partial class ChatViewModel : ObservableObject
         var hasAttachments = StagedAttachments.Count > 0;
         if (!hasText && !hasAttachments) return;
 
+        RecomputeSendTarget();
         StopTypingIndicator();
 
         string? previewText = null;
@@ -343,7 +407,7 @@ public partial class ChatViewModel : ObservableObject
 
         if (hasText)
         {
-            var tempGuid = _outgoingService.EnqueueText(_chatGuid, text!,
+            var tempGuid = _outgoingService.EnqueueText(_sendGuid, text!,
                 selectedMessageGuid: reply?.MessageGuid, partIndex: reply?.PartIndex);
             InsertOptimisticMessage(tempGuid, text!, reply);
             replyConsumed = reply is not null;
@@ -353,7 +417,7 @@ public partial class ChatViewModel : ObservableObject
         foreach (var attachment in StagedAttachments.ToList())
         {
             var attReply = replyConsumed ? null : reply;
-            var tempGuid = _outgoingService.EnqueueAttachment(_chatGuid, attachment.FilePath,
+            var tempGuid = _outgoingService.EnqueueAttachment(_sendGuid, attachment.FilePath,
                 selectedMessageGuid: attReply?.MessageGuid, partIndex: attReply?.PartIndex);
             InsertOptimisticAttachment(tempGuid, attachment, attReply);
             replyConsumed = replyConsumed || attReply is not null;
@@ -366,7 +430,7 @@ public partial class ChatViewModel : ObservableObject
         CanSend = false;
 
         _ = _chatsService.HandleNewMessageAsync(
-            _chatGuid, previewText,
+            _sendGuid, previewText,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             isFromMe: true);
     }
@@ -396,10 +460,11 @@ public partial class ChatViewModel : ObservableObject
         if (!CanScheduleSend)
             return "This message can't be scheduled.";
 
+        RecomputeSendTarget();
         StopTypingIndicator();
 
         var response = await _scheduledMessages.CreateAsync(
-            _chatGuid, MessageText.Trim(), sendAt.ToUnixTimeMilliseconds());
+            _sendGuid, MessageText.Trim(), sendAt.ToUnixTimeMilliseconds());
         if (response.Status is < 200 or >= 300)
             return response.Error?.ErrorMessage ?? response.Message;
 
@@ -445,7 +510,7 @@ public partial class ChatViewModel : ObservableObject
         if (response.Status is < 200 or >= 300 || response.Data is null) return;
 
         var items = response.Data
-            .Where(m => m.Payload?.ChatGuid == guid &&
+            .Where(m => m.Payload?.ChatGuid is { } g && _chatGuids.Contains(g) &&
                         m.Status is ScheduledMessageStatus.Pending or ScheduledMessageStatus.Error)
             .OrderBy(m => m.ScheduledForLocal ?? DateTimeOffset.MaxValue)
             .Select(ScheduledMessageItem.From)
@@ -466,7 +531,7 @@ public partial class ChatViewModel : ObservableObject
     private void OnScheduledMessagesChanged(ScheduledMessagesEventArgs e)
     {
         if (string.IsNullOrEmpty(_chatGuid)) return;
-        if (!e.Messages.Any(m => m.Payload?.ChatGuid == _chatGuid)) return;
+        if (!e.Messages.Any(m => m.Payload?.ChatGuid is { } g && _chatGuids.Contains(g))) return;
         _ = RefreshScheduledMessagesAsync();
     }
 
@@ -722,7 +787,7 @@ public partial class ChatViewModel : ObservableObject
     private void OnNewMessageReceived(object? sender, MessageEventArgs e)
     {
         var chatGuid = e.Message.Chats?.FirstOrDefault()?.Guid;
-        if (chatGuid is null || chatGuid != _chatGuid) return;
+        if (chatGuid is null || !_chatGuids.Contains(chatGuid)) return;
 
         if (e.Message.AssociatedMessageGuid is not null) return;
 
@@ -798,6 +863,8 @@ public partial class ChatViewModel : ObservableObject
             _ = ResolveReplySnippetsAsync();
 
         SetTypingBubble(false);   // the other party sent — they've stopped typing
+        // The most-recent constituent may have changed, so a reply follows the now-active address.
+        RecomputeSendTarget();
         NewMessageAppended?.Invoke(this, EventArgs.Empty);
     }
 
@@ -865,11 +932,11 @@ public partial class ChatViewModel : ObservableObject
     /// the message.</summary>
     private async Task AppendPersistedMessagesAsync(string chatGuid)
     {
-        if (chatGuid != _chatGuid || IsLoading) return;
+        if (!_chatGuids.Contains(chatGuid) || IsLoading) return;
 
         try
         {
-            await AppendNewerMessagesFromDbAsync(_chatId, chatGuid);
+            await AppendNewerMessagesFromDbAsync(_chatIds, _chatGuid);
         }
         catch (Exception ex)
         {
@@ -882,21 +949,23 @@ public partial class ChatViewModel : ObservableObject
         if (string.IsNullOrEmpty(_chatGuid) || IsLoading) return;
 
         var chatGuid = _chatGuid;
-        var chatId = _chatId;
+        var chatIds = _chatIds;
 
-        // 1. Re-pull the newest page from the server (best-effort) so in-place mutations are reconciled.
-        await _messagesService.RefreshLatestFromServerAsync(chatId, chatGuid, PageSize);
+        // 1. Re-pull the newest page of each constituent from the server (best-effort) so in-place
+        //    mutations are reconciled.
+        for (var i = 0; i < _chatIds.Count; i++)
+            await _messagesService.RefreshLatestFromServerAsync(_chatIds[i], _constituentGuids[i], PageSize);
         if (_chatGuid != chatGuid) return;   // user navigated away while we were fetching
 
         // 2. Append messages now in the DB that are newer than the last visible bubble.
-        await AppendNewerMessagesFromDbAsync(chatId, chatGuid);
+        await AppendNewerMessagesFromDbAsync(chatIds, chatGuid);
         if (_chatGuid != chatGuid) return;
 
         // 3. Reconcile the already-visible bubbles in place.
         await ReconcileVisibleBubblesAsync(chatGuid);
     }
 
-    private async Task AppendNewerMessagesFromDbAsync(int chatId, string chatGuid)
+    private async Task AppendNewerMessagesFromDbAsync(IReadOnlyList<int> chatIds, string chatGuid)
     {
         var newest = Items.OfType<MessageBubbleViewModel>()
             .Select(b => b.DateCreated)
@@ -904,7 +973,7 @@ public partial class ChatViewModel : ObservableObject
             .Max();
         if (newest <= 0) return;   // nothing loaded yet — open/hydrate paths cover the empty case
 
-        var newer = await _messagesService.LoadMessagesAfterAsync(chatId, newest);
+        var newer = await _messagesService.LoadMessagesAfterAsync(chatIds, newest);
         if (newer.Count == 0 || _chatGuid != chatGuid) return;
 
         var shownGuids = Items.OfType<MessageBubbleViewModel>()
@@ -1023,8 +1092,9 @@ public partial class ChatViewModel : ObservableObject
 
     private void OnTypingIndicatorChanged(object? sender, TypingIndicatorPayload e)
     {
-        // The event is for the open chat only; compare defensively (GUID casing can vary).
-        if (string.Equals(e.Guid, _chatGuid, StringComparison.OrdinalIgnoreCase))
+        // The event is for the open chat only; a merged conversation matches any constituent GUID
+        // (the set comparer is case-insensitive, so GUID casing differences are tolerated).
+        if (e.Guid is not null && _chatGuids.Contains(e.Guid))
             SetTypingBubble(e.Display);
     }
 

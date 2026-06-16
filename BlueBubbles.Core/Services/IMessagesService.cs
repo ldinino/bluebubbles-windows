@@ -7,11 +7,19 @@ public interface IMessagesService
 {
     Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null);
 
+    /// <summary>Loads messages across several chats unioned and interleaved by date (newest page first,
+    /// returned ascending). Backs a merged conversation, whose history spans the underlying chats.</summary>
+    Task<List<MessageEntity>> LoadMessagesAsync(IReadOnlyList<int> chatIds, int limit = 50, long? beforeDate = null);
+
     /// <summary>Loads a chat's messages newer than <paramref name="afterDate"/> (ascending). Used to
     /// catch an already-open thread up after a background delta sync persists messages the socket
     /// never pushed (it's silent while the app was asleep/disconnected). Excludes deleted rows and
     /// reactions (associated messages).</summary>
     Task<List<MessageEntity>> LoadMessagesAfterAsync(int chatId, long afterDate);
+
+    /// <summary>Union of <see cref="LoadMessagesAfterAsync(int, long)"/> across several chats, for a
+    /// merged conversation's post-sync catch-up.</summary>
+    Task<List<MessageEntity>> LoadMessagesAfterAsync(IReadOnlyList<int> chatIds, long afterDate);
     Task<List<MessageEntity>> FetchOlderMessagesFromServerAsync(
         int chatId, string chatGuid, int limit = 25, CancellationToken ct = default);
 
@@ -36,6 +44,10 @@ public interface IMessagesService
     /// overwritten by the next sync.</summary>
     Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid);
     Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(int chatId, int limit = 50, int offset = 0);
+
+    /// <summary>Union of <see cref="LoadMediaAttachmentsAsync(int, int, int)"/> across several chats, so
+    /// a merged conversation's details shows media from every underlying chat.</summary>
+    Task<List<AttachmentEntity>> LoadMediaAttachmentsAsync(IReadOnlyList<int> chatIds, int limit = 50, int offset = 0);
 
     /// <summary>Loads all stored reactions (associated messages with a type) targeting any of the
     /// given parent message GUIDs, oldest first. Includes the reacting handle.</summary>
