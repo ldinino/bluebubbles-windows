@@ -42,6 +42,9 @@ public partial class ChatViewModel : ObservableObject
     // Set when a sync finishes while the thread is still opening; LoadChatAsync runs the deferred
     // reconcile once it's done so the sync signal isn't dropped to the IsLoading guard.
     private bool _reconcilePending;
+    // Set when a contact import/reset lands while the thread is still loading; the re-merge is deferred
+    // to the load's completion so it never mutates the message list concurrently.
+    private bool _reapplyMergePending;
     private readonly HashSet<string> _pendingTempGuids = [];
     private Timer? _typingDebounce;   // send-side: throttles our "started/stopped-typing" emits
     private Timer? _typingExpiry;     // receive-side: auto-clears a stuck "… is typing" bubble
@@ -138,7 +141,7 @@ public partial class ChatViewModel : ObservableObject
         _actionHandler.TypingIndicatorChanged += (s, e) => RunOnUI(() => OnTypingIndicatorChanged(s, e));
         _actionHandler.ScheduledMessagesChanged += (s, e) => RunOnUI(() => OnScheduledMessagesChanged(e));
         _outgoingService.MessageStateChanged += (s, e) => RunOnUI(() => OnOutgoingMessageStateChanged(s, e));
-        _contacts.ContactsChanged += (s, e) => RunOnUI(RefreshContactInfo);
+        _contacts.ContactsChanged += (s, e) => RunOnUI(() => _ = OnContactsChangedAsync());
 
         // A background delta sync (after sleep / reconnect) writes missed messages straight to the
         // DB — the socket never pushes them — so an already-open thread wouldn't see them until it
@@ -155,6 +158,61 @@ public partial class ChatViewModel : ObservableObject
         {
             if (_chatGuids.Contains(guid)) RunOnUI(() => _ = AppendPersistedMessagesAsync(guid));
         };
+    }
+
+    /// <summary>Reacts to a contact set change (vCard import/reset) for the open conversation. A contact
+    /// card can newly link this thread with another (sticky bifurcation) or, on reset, split a merged
+    /// conversation apart — so we re-derive the merge. When the underlying thread set actually changed we
+    /// reload to re-interleave the history live; otherwise we only re-resolve the header, preserving the
+    /// scroll position.</summary>
+    private async Task OnContactsChangedAsync()
+    {
+        if (string.IsNullOrEmpty(_chatGuid)) return;
+
+        // Don't mutate the message list while a load is in flight — defer the re-merge to its completion.
+        if (IsLoading)
+        {
+            _reapplyMergePending = true;
+            return;
+        }
+
+        var tile = BuildOpenConversationTile();
+        if (tile is null)
+        {
+            RefreshContactInfo();
+            return;
+        }
+
+        var newGuids = tile.ConstituentGuids;
+        var sameThreadSet = newGuids.Count == _chatGuids.Count && newGuids.All(_chatGuids.Contains);
+        if (sameThreadSet)
+        {
+            RefreshContactInfo();
+            return;
+        }
+
+        // The conversation gained or lost a constituent thread — reload to interleave (or un-interleave)
+        // the full history in place.
+        await LoadConversationAsync(tile);
+    }
+
+    /// <summary>Rebuilds the tile for the currently-open conversation from the latest chats and contacts,
+    /// so a contact change re-runs the merge for this thread. Returns null when the open chat can't be
+    /// found (e.g. it was deleted).</summary>
+    private ConversationTileViewModel? BuildOpenConversationTile()
+    {
+        var m = FindOpenConversation(_chatsService.Chats)
+            ?? FindOpenConversation(_chatsService.ArchivedChats);
+        return m is null ? null : new ConversationTileViewModel(m, _contacts, _settings);
+    }
+
+    private MergedConversation? FindOpenConversation(IReadOnlyList<ChatWithParticipants> source)
+    {
+        var merged = ConversationMerger.Merge(source, _contacts);
+        // Prefer the group still anchored on the current primary GUID; otherwise any group that overlaps
+        // the current constituent set (covers the primary changing when a merge forms).
+        return merged.FirstOrDefault(x => x.ConstituentGuids.Contains(_chatGuid, StringComparer.OrdinalIgnoreCase))
+            ?? merged.FirstOrDefault(x => x.ConstituentGuids.Any(_chatGuids.Contains));
     }
 
     /// <summary>Re-resolves the open chat's header (name, initials, avatars) after the contact set
@@ -197,10 +255,18 @@ public partial class ChatViewModel : ObservableObject
         GroupAvatarBytes2 = group.Bytes2;
     }
 
-    public async Task LoadChatAsync(ConversationTileViewModel tile)
+    public Task LoadChatAsync(ConversationTileViewModel tile)
     {
-        if (_chatGuid == tile.ChatGuid) return;
+        if (_chatGuid == tile.ChatGuid) return Task.CompletedTask;
+        return LoadConversationAsync(tile);
+    }
 
+    /// <summary>Loads (or reloads) the conversation a tile represents — clearing the thread and pulling
+    /// the interleaved message history for all its constituent chats. Unlike <see cref="LoadChatAsync"/>
+    /// it doesn't short-circuit on the same primary GUID, so it also drives a live re-interleave when a
+    /// contact import/reset changes which underlying chats this conversation folds together.</summary>
+    private async Task LoadConversationAsync(ConversationTileViewModel tile)
+    {
         _chatGuid = tile.ChatGuid;
         _isGroup = tile.IsGroup;
         _isMerged = tile.IsMerged;
@@ -239,6 +305,7 @@ public partial class ChatViewModel : ObservableObject
         ScheduledItems.Clear();
         _oldestMessageDate = null;
         _reconcilePending = false;
+        _reapplyMergePending = false;
         _pendingTempGuids.Clear();
         HasMoreMessages = true;
         MessageText = string.Empty;
@@ -282,6 +349,14 @@ public partial class ChatViewModel : ObservableObject
         {
             _reconcilePending = false;
             await RunReconcileAsync();
+        }
+
+        // A contact import/reset that landed mid-load deferred its re-merge; run it now that the load is
+        // done (it re-checks the thread set and only reloads again if it actually changed).
+        if (_reapplyMergePending)
+        {
+            _reapplyMergePending = false;
+            await OnContactsChangedAsync();
         }
     }
 

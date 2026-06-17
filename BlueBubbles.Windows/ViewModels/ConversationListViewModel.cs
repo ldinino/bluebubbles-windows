@@ -133,8 +133,11 @@ public partial class ConversationListViewModel : ObservableObject
 
         ApplyFilter();
 
+        // Re-select by constituent membership, not just primary GUID: a merge that formed/dissolved can
+        // move the open thread under a different tile (or change its primary), and we want it to stay
+        // selected rather than deselect.
         if (previousGuid is not null)
-            SelectedConversation = _allTiles.FirstOrDefault(t => t.ChatGuid == previousGuid);
+            SelectedConversation = _allTiles.FirstOrDefault(t => t.ContainsGuid(previousGuid));
     }
 
     private void ApplyFilter()
