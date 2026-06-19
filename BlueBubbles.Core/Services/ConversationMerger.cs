@@ -102,12 +102,13 @@ public static class ConversationMerger
             : string.Empty;
 
         // Single chats keep their exact participant list (so group chats are untouched). A genuine merge
-        // unions the per-chat participants, phones first then emails, driving the "phone / email" row.
+        // unions the per-chat participants, phones first then emails. Constituents can share an address
+        // (an iMessage and an SMS thread for the same number, or the number stored in different formats),
+        // so dedupe by normalized address — otherwise the details row reads "(number) / (number)".
         var participants = group.Count == 1
             ? group[0].Participants
-            : group.SelectMany(c => c.Participants)
-                .OrderByDescending(h => ContactResolverService.IsPhone(h.Address))
-                .ToList();
+            : DedupeByAddress(group.SelectMany(c => c.Participants)
+                .OrderByDescending(h => ContactResolverService.IsPhone(h.Address)));
 
         return new MergedConversation(
             Constituents: group,
@@ -123,5 +124,19 @@ public static class ConversationMerger
             LastMessageIsFromMe: mostRecent.LastMessageIsFromMe,
             LastMessageDateDelivered: mostRecent.LastMessageDateDelivered,
             LastMessageDateRead: mostRecent.LastMessageDateRead);
+    }
+
+    /// <summary>Keeps the first handle per normalized address, preserving order (so the phones-first
+    /// ordering is retained). Collapses the same number reached over multiple chats/services.</summary>
+    private static List<HandleEntity> DedupeByAddress(IEnumerable<HandleEntity> handles)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<HandleEntity>();
+        foreach (var handle in handles)
+        {
+            if (seen.Add(ContactResolverService.NormalizeAddress(handle.Address)))
+                result.Add(handle);
+        }
+        return result;
     }
 }

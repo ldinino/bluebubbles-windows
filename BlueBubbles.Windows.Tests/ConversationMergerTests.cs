@@ -79,6 +79,39 @@ public class ConversationMergerTests : IDisposable
     }
 
     [Fact]
+    public async Task Merge_SameNumberOverMultipleThreads_DedupesParticipant()
+    {
+        var contacts = await LoadContactsAsync();
+        // An iMessage and an SMS thread for the same number (plus a differently-formatted copy) all merge,
+        // but the participant list must not repeat the number.
+        var imessage = Chat("iMessage;-;+15550001234", 1, "+15550001234", 100);
+        var sms = Chat("SMS;-;+15550001234", 2, "(555) 000-1234", 90);
+        var email = Chat("iMessage;-;alex.rivera@example.com", 3, "alex.rivera@example.com", 80);
+
+        var m = Assert.Single(ConversationMerger.Merge([imessage, sms, email], contacts));
+
+        Assert.True(m.IsMerged);
+        Assert.Equal(3, m.ConstituentGuids.Count);   // all three threads still load
+        Assert.Equal(2, m.Participants.Count);        // but the phone is listed once
+        Assert.Equal("+15550001234", m.Participants[0].Address);
+        Assert.Equal("alex.rivera@example.com", m.Participants[1].Address);
+    }
+
+    [Fact]
+    public async Task Merge_SamePhoneOnlyTwoThreads_ShowsNumberOnce()
+    {
+        var contacts = await LoadContactsAsync();
+        var a = Chat("iMessage;-;+15551234567", 1, "+15551234567", 100);
+        var b = Chat("SMS;-;+15551234567", 2, "+15551234567", 90);
+
+        var m = Assert.Single(ConversationMerger.Merge([a, b], contacts));
+
+        Assert.True(m.IsMerged);
+        Assert.Single(m.Participants);
+        Assert.Equal("+15551234567", m.Participants[0].Address);
+    }
+
+    [Fact]
     public async Task Merge_DifferentContacts_NotMerged()
     {
         var contacts = await LoadContactsAsync();
