@@ -34,7 +34,7 @@
         - Minor (2nd octave): a small new feature -> +1.
         - Major (1st octave): DO NOT touch without explicit permission.
     -->
-    <Version>0.22.0</Version>
+    <Version>0.22.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

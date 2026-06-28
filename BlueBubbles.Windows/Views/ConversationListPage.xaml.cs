@@ -13,6 +13,10 @@ public sealed partial class ConversationListPage : Page
     private readonly ConversationListViewModel _vm;
     private readonly AppSettings _settings;
     private bool _restoredSelection;
+    private ScrollViewer? _listScrollViewer;
+
+    // How close to the top still counts as "at the top" for the keep-pinned behavior (~half a tile).
+    private const double TopSnapThreshold = 32.0;
 
     public event EventHandler<ConversationTileViewModel>? ConversationSelected;
     public event EventHandler? ConversationUnloadRequested;
@@ -54,6 +58,10 @@ public sealed partial class ConversationListPage : Page
                     ? Visibility.Visible : Visibility.Collapsed;
                 UpdatePinnedGridSizing();
             });
+
+        // Wired before OnLoaded sets ItemsSource so this handler runs ahead of the ListView's own
+        // collection handling, letting us read the pre-reorder scroll offset (see the handler).
+        _vm.Conversations.CollectionChanged += OnConversationsCollectionChanged;
 
         Loaded += OnLoaded;
     }
@@ -386,6 +394,48 @@ public sealed partial class ConversationListPage : Page
     {
         if (PinnedGrid.ItemsPanelRoot is ItemsWrapGrid wrap && PinnedGrid.ActualWidth > 0)
             wrap.ItemWidth = Math.Max(72, (PinnedGrid.ActualWidth - 4) / 3);
+    }
+
+    // --- Keep newest conversation pinned at the top ---
+    // When a new message bumps a conversation to index 0, the default ItemsStackPanel
+    // (ItemsUpdatingScrollMode = KeepItemsInView) holds the currently visible rows fixed, so the
+    // bumped tile lands just above the fold and you'd have to scroll up to see it. If the list was
+    // already at the top, snap it back so the newest conversation stays visible; if the user has
+    // scrolled down to browse older threads, leave their position untouched.
+    private void OnConversationsCollectionChanged(object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // A bumped conversation surfaces as a Move to index 0; a brand-new one as an Add at index 0.
+        var bumpedToTop = e.NewStartingIndex == 0 &&
+            e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Move
+                     or System.Collections.Specialized.NotifyCollectionChangedAction.Add;
+        if (!bumpedToTop) return;
+
+        // Read the offset synchronously, before the reorder's layout pass shifts it: this is the
+        // user's pre-bump scroll position.
+        var scroller = GetListScrollViewer();
+        if (scroller is null || scroller.VerticalOffset > TopSnapThreshold) return;
+
+        // Re-assert the top on a low-priority tick, after KeepItemsInView has pushed us down a row.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            () => scroller.ChangeView(null, 0, null, disableAnimation: true));
+    }
+
+    // The ListView's ScrollViewer is a template part, so reach it through the visual tree once the
+    // template is realized. Cached after the first successful lookup.
+    private ScrollViewer? GetListScrollViewer() =>
+        _listScrollViewer ??= FindDescendant<ScrollViewer>(ConversationList);
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T match) return match;
+            if (FindDescendant<T>(child) is { } nested) return nested;
+        }
+        return null;
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e)
