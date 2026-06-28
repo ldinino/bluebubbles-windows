@@ -30,6 +30,8 @@ internal sealed class NotificationSoundService : INotificationSoundService
     private readonly AppSettings _settings;
     private readonly object _playerLock = new();
     private MediaPlayer? _player;
+    private MediaSource? _source;
+    private string? _loadedPath;
 
     public NotificationSoundService(AppSettings settings) => _settings = settings;
 
@@ -67,10 +69,34 @@ internal sealed class NotificationSoundService : INotificationSoundService
         {
             lock (_playerLock)
             {
-                // Reuse one player; assigning a new Source releases the previous one, and a rapid
-                // second notification simply restarts playback instead of layering sounds.
-                _player ??= new MediaPlayer { AudioCategory = MediaPlayerAudioCategory.Alerts };
-                _player.Source = MediaSource.CreateFromUri(new Uri(path));
+                if (_player is null)
+                {
+                    _player = new MediaPlayer { AudioCategory = MediaPlayerAudioCategory.Alerts };
+
+                    // Opt this player out of the System Media Transport Controls. By default a
+                    // MediaPlayer registers as the active media session, which surfaces a tile in
+                    // Control Center / the volume flyout (and lets the OS Play button replay the
+                    // sound, and media keys target us). AudioCategory.Alerts only affects ducking,
+                    // not SMTC participation — disabling the command manager is what removes the tile.
+                    _player.CommandManager.IsEnabled = false;
+                }
+
+                // Reuse one player AND keep the decoded source warm: a burst of notifications then
+                // just rewinds and replays instead of allocating (and leaking) a MediaSource per
+                // fire. A rapid second notification restarts playback rather than layering sounds.
+                if (!string.Equals(_loadedPath, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    var previous = _source;
+                    _source = MediaSource.CreateFromUri(new Uri(path));
+                    _loadedPath = path;
+                    _player.Source = _source;
+                    previous?.Dispose();
+                }
+                else
+                {
+                    _player.PlaybackSession.Position = TimeSpan.Zero;
+                }
+
                 _player.Play();
             }
         }
