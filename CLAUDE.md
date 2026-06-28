@@ -131,6 +131,7 @@ requirements:
 - `docs/PLAN.md` — phase-by-phase implementation record (Philosophy, Distribution, and the
   "Critical Flutter Source Files" table mapping each concern to its Dart source).
 - `docs/PUNCHLIST.md` — the live TODO (open bugs, backlog, release plan).
+- `docs/PUNCHLIST-ARCHIVE.md` — completed punchlist items, archived for the "why" once shipped.
 - `docs/msix-removal.md` — why MSIX was removed and what's load-bearing.
 - `docs/release-notes.md` — required format for every GitHub Release body (disclaimer,
   sections, no emoji).
