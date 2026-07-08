@@ -15,8 +15,8 @@ public sealed partial class ConversationListPage : Page
     private bool _restoredSelection;
     private ScrollViewer? _listScrollViewer;
 
-    // How close to the top still counts as "at the top" for the keep-pinned behavior (~half a tile).
-    private const double TopSnapThreshold = 32.0;
+    // True while a snap-to-top is already queued; coalesces sync bursts into one snap.
+    private bool _topSnapPending;
 
     public event EventHandler<ConversationTileViewModel>? ConversationSelected;
     public event EventHandler? ConversationUnloadRequested;
@@ -396,12 +396,11 @@ public sealed partial class ConversationListPage : Page
             wrap.ItemWidth = Math.Max(72, (PinnedGrid.ActualWidth - 4) / 3);
     }
 
-    // --- Keep newest conversation pinned at the top ---
+    // --- Keep newest conversation visible at the top ---
     // When a new message bumps a conversation to index 0, the default ItemsStackPanel
     // (ItemsUpdatingScrollMode = KeepItemsInView) holds the currently visible rows fixed, so the
-    // bumped tile lands just above the fold and you'd have to scroll up to see it. If the list was
-    // already at the top, snap it back so the newest conversation stays visible; if the user has
-    // scrolled down to browse older threads, leave their position untouched.
+    // bumped tile lands above the fold and the user never learns it arrived. Snap to the top
+    // unconditionally — even if the user has scrolled down — so new activity is always shown.
     private void OnConversationsCollectionChanged(object? sender,
         System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
@@ -409,16 +408,20 @@ public sealed partial class ConversationListPage : Page
         var bumpedToTop = e.NewStartingIndex == 0 &&
             e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Move
                      or System.Collections.Specialized.NotifyCollectionChangedAction.Add;
-        if (!bumpedToTop) return;
+        if (!bumpedToTop || _topSnapPending) return;
 
-        // Read the offset synchronously, before the reorder's layout pass shifts it: this is the
-        // user's pre-bump scroll position.
         var scroller = GetListScrollViewer();
-        if (scroller is null || scroller.VerticalOffset > TopSnapThreshold) return;
+        if (scroller is null) return;
 
-        // Re-assert the top on a low-priority tick, after KeepItemsInView has pushed us down a row.
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-            () => scroller.ChangeView(null, 0, null, disableAnimation: true));
+        // Snap on a low-priority tick, after KeepItemsInView has run its layout pass. A catch-up
+        // sync bumps many conversations in quick succession; the pending flag coalesces the burst
+        // into one snap.
+        _topSnapPending = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _topSnapPending = false;
+            scroller.ChangeView(null, 0, null, disableAnimation: true);
+        });
     }
 
     // The ListView's ScrollViewer is a template part, so reach it through the visual tree once the
