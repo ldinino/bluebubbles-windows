@@ -19,6 +19,7 @@ public sealed partial class AttachmentHolder : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
 
@@ -34,13 +35,33 @@ public sealed partial class AttachmentHolder : UserControl
         }
     }
 
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        // A genuine unload detached us without a DataContext change, so DataContextChanged
+        // won't re-fire when the same container re-enters the tree — re-attach from the
+        // current DataContext or the bubble stays torn down (blank) forever.
+        if (_vm is null && DataContext is AttachmentViewModel vm)
+        {
+            _vm = vm;
+            vm.PropertyChanged += OnVmPropertyChanged;
+            ApplyState(vm);
+        }
+    }
+
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        // Unloaded dispatches asynchronously, so a recycled container can already be back in
+        // the tree — re-bound to a new attachment — when the old removal's Unloaded finally
+        // fires. Tearing down then wipes the fresh image (a blank bubble that never recovers
+        // until the next rebind). Only detach when we are genuinely out of the tree.
+        if (IsLoaded) return;
         Detach();
     }
 
     private void Detach()
     {
+        // Strand any in-flight decode from this binding so it can't land on the next one.
+        Interlocked.Increment(ref _bindGeneration);
         if (_vm is not null)
         {
             _vm.PropertyChanged -= OnVmPropertyChanged;

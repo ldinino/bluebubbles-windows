@@ -61,6 +61,10 @@ public sealed partial class ChatBubble : UserControl
         };
         Unloaded += (_, _) =>
         {
+            // Unloaded dispatches asynchronously: a recycled bubble can already be re-bound and
+            // back in the tree when the old removal's Unloaded fires — unsubscribing then leaves
+            // the fresh bind deaf to VM updates. Only tear down when genuinely out of the tree.
+            if (IsLoaded) return;
             if (_currentVm is not null)
             {
                 _currentVm.PropertyChanged -= OnVmPropertyChanged;
@@ -83,6 +87,13 @@ public sealed partial class ChatBubble : UserControl
             _settings = App.Services.GetService<AppSettings>();
             if (_settings is not null)
                 _settings.PropertyChanged += OnSettingsChanged;
+        }
+        // A genuine unload detached the VM without a DataContext change; re-attach on re-entry
+        // (DataContextChanged won't re-fire for an unchanged DataContext).
+        if (_currentVm is null && DataContext is MessageBubbleViewModel vm)
+        {
+            _currentVm = vm;
+            vm.PropertyChanged += OnVmPropertyChanged;
         }
         if (_currentVm is not null)
             ApplyStyle(_currentVm);

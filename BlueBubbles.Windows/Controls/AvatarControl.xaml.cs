@@ -100,6 +100,10 @@ public sealed partial class AvatarControl : UserControl
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        // Unloaded dispatches asynchronously: a recycled container can already be back in the
+        // tree (OnLoaded re-subscribed) when the old removal's Unloaded fires. Only unsubscribe
+        // when genuinely out of the tree.
+        if (IsLoaded) return;
         if (_settings is not null)
         {
             _settings.PropertyChanged -= OnSettingsChanged;

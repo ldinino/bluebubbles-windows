@@ -26,7 +26,8 @@ public sealed partial class UrlPreview : UserControl
         // The whole card is clickable (a tap opens the link), so show the hand cursor on hover.
         ProtectedCursor = InputSystemCursor.Create(InputSystemCursorShape.Hand);
         DataContextChanged += OnDataContextChanged;
-        Unloaded += (_, _) => DetachVm();
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     private void OnDataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
@@ -38,6 +39,27 @@ public sealed partial class UrlPreview : UserControl
             vm.PropertyChanged += OnVmPropertyChanged;
             Render(vm);
         }
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        // A genuine unload detached us without a DataContext change; re-attach on re-entry
+        // (DataContextChanged won't re-fire for an unchanged DataContext).
+        if (_vm is null && DataContext is UrlPreviewViewModel vm)
+        {
+            _vm = vm;
+            vm.PropertyChanged += OnVmPropertyChanged;
+            Render(vm);
+        }
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        // Unloaded dispatches asynchronously: a recycled card can already be re-bound and back
+        // in the tree when the old removal's Unloaded fires — tearing down then blanks the
+        // fresh hero image. Only detach when we are genuinely out of the tree.
+        if (IsLoaded) return;
+        DetachVm();
     }
 
     private void DetachVm()
