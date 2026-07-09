@@ -45,12 +45,21 @@ public sealed partial class UrlPreview : UserControl
     {
         // A genuine unload detached us without a DataContext change; re-attach on re-entry
         // (DataContextChanged won't re-fire for an unchanged DataContext).
-        if (_vm is null && DataContext is UrlPreviewViewModel vm)
+        //
+        // Deferred one dispatcher tick: Loaded can fire BEFORE a recycled card is re-linked
+        // to its new item, so rendering synchronously here painted the previous thread's
+        // preview into the fresh card. After the deferral a re-link has set _vm (no-op);
+        // only a genuinely unchanged DataContext still needs the re-attach.
+        DispatcherQueue.TryEnqueue(() =>
         {
-            _vm = vm;
-            vm.PropertyChanged += OnVmPropertyChanged;
-            Render(vm);
-        }
+            if (!IsLoaded || _vm is not null) return;
+            if (DataContext is UrlPreviewViewModel vm)
+            {
+                _vm = vm;
+                vm.PropertyChanged += OnVmPropertyChanged;
+                Render(vm);
+            }
+        });
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

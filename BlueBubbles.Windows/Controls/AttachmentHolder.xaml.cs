@@ -40,12 +40,23 @@ public sealed partial class AttachmentHolder : UserControl
         // A genuine unload detached us without a DataContext change, so DataContextChanged
         // won't re-fire when the same container re-enters the tree — re-attach from the
         // current DataContext or the bubble stays torn down (blank) forever.
-        if (_vm is null && DataContext is AttachmentViewModel vm)
+        //
+        // Deferred one dispatcher tick: Loaded can fire BEFORE a recycled container is
+        // re-linked to its new item, so DataContext may still hold the previous thread's
+        // attachment here. Re-attaching synchronously painted that stale image into the
+        // fresh bubble (flicker, and duplicated images when the re-link raced wrong). By the
+        // time this callback runs, a re-link has fired DataContextChanged and set _vm (no-op
+        // below); only a genuinely unchanged DataContext still needs the re-attach.
+        DispatcherQueue.TryEnqueue(() =>
         {
-            _vm = vm;
-            vm.PropertyChanged += OnVmPropertyChanged;
-            ApplyState(vm);
-        }
+            if (!IsLoaded || _vm is not null) return;
+            if (DataContext is AttachmentViewModel vm)
+            {
+                _vm = vm;
+                vm.PropertyChanged += OnVmPropertyChanged;
+                ApplyState(vm);
+            }
+        });
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

@@ -88,15 +88,29 @@ public sealed partial class ChatBubble : UserControl
             if (_settings is not null)
                 _settings.PropertyChanged += OnSettingsChanged;
         }
+        if (_currentVm is not null)
+        {
+            ApplyStyle(_currentVm);
+            return;
+        }
+
         // A genuine unload detached the VM without a DataContext change; re-attach on re-entry
         // (DataContextChanged won't re-fire for an unchanged DataContext).
-        if (_currentVm is null && DataContext is MessageBubbleViewModel vm)
+        //
+        // Deferred one dispatcher tick: Loaded can fire BEFORE a recycled bubble is re-linked
+        // to its new item, so DataContext may still hold the previous thread's message here.
+        // After the deferral a re-link has set _currentVm (no-op); only a genuinely unchanged
+        // DataContext still needs the re-attach.
+        DispatcherQueue.TryEnqueue(() =>
         {
-            _currentVm = vm;
-            vm.PropertyChanged += OnVmPropertyChanged;
-        }
-        if (_currentVm is not null)
-            ApplyStyle(_currentVm);
+            if (!IsLoaded || _currentVm is not null) return;
+            if (DataContext is MessageBubbleViewModel vm)
+            {
+                _currentVm = vm;
+                vm.PropertyChanged += OnVmPropertyChanged;
+                ApplyStyle(vm);
+            }
+        });
     }
 
     private void OnSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
