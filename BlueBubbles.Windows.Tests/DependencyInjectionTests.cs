@@ -42,6 +42,23 @@ public class DependencyInjectionTests
     }
 
     [Fact]
+    public void RealSettingsService_ResolvesFromContainer()
+    {
+        // App.xaml.cs registers the concrete SettingsService, whose constructor takes optional
+        // parameters (file path, credential store). Guards against a signature change that only
+        // fails when the container actually builds it at startup.
+        var services = new ServiceCollection();
+        services.AddSingleton<AppSettings>();
+        services.AddSingleton<ServerConfiguration>();
+        services.AddSingleton<ICredentialService, StubCredentialService>();
+        services.AddSingleton<ISettingsService, SettingsService>();
+
+        var sp = services.BuildServiceProvider();
+
+        Assert.IsType<SettingsService>(sp.GetRequiredService<ISettingsService>());
+    }
+
+    [Fact]
     public void AllServices_ResolveWithoutError()
     {
         var sp = BuildTestServices();

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using BlueBubbles.Core.Configuration;
 
 namespace BlueBubbles.Core.Services;
@@ -7,6 +8,7 @@ public class SettingsService : ISettingsService
 {
     private readonly AppSettings _appSettings;
     private readonly ServerConfiguration _serverConfig;
+    private readonly ICredentialService? _credentials;
     private readonly string _filePath;
 
     private static readonly string DefaultFilePath = Path.Combine(
@@ -20,10 +22,11 @@ public class SettingsService : ISettingsService
     };
 
     public SettingsService(AppSettings appSettings, ServerConfiguration serverConfig,
-        string? filePath = null)
+        string? filePath = null, ICredentialService? credentials = null)
     {
         _appSettings = appSettings;
         _serverConfig = serverConfig;
+        _credentials = credentials;
         _filePath = filePath ?? DefaultFilePath;
     }
 
@@ -38,7 +41,8 @@ public class SettingsService : ISettingsService
             LastIncrementalSync = _appSettings.LastIncrementalSync,
             LastIncrementalSyncRowId = _appSettings.LastIncrementalSyncRowId,
             ServerUrl = _serverConfig.ServerUrl,
-            Password = _serverConfig.Password,
+            // Password is deliberately absent: it lives only in the DPAPI-encrypted credential
+            // store (ICredentialService). See PersistedSettings.Password for the legacy read path.
             ProxyService = _serverConfig.ProxyService,
             CustomHeaders = _serverConfig.CustomHeaders.Count > 0 ? _serverConfig.CustomHeaders : null,
             UseLocalConnection = _appSettings.UseLocalConnection,
@@ -100,11 +104,15 @@ public class SettingsService : ISettingsService
     {
         if (!File.Exists(_filePath)) return;
 
+        string? legacyPassword = null;
+
         try
         {
             var json = File.ReadAllText(_filePath);
             var data = JsonSerializer.Deserialize<PersistedSettings>(json, JsonOpts);
             if (data is null) return;
+
+            legacyPassword = data.Password;
 
             _appSettings.FinishedSetup = data.FinishedSetup;
             _appSettings.ServerAddress = data.ServerAddress ?? string.Empty;
@@ -113,7 +121,10 @@ public class SettingsService : ISettingsService
             _appSettings.LastIncrementalSyncRowId = data.LastIncrementalSyncRowId;
 
             _serverConfig.ServerUrl = data.ServerUrl ?? string.Empty;
-            _serverConfig.Password = data.Password ?? string.Empty;
+            // Seed from the legacy cleartext field only when it is actually present, so a normal
+            // (already migrated) file never blanks a password restored from the credential store.
+            if (!string.IsNullOrEmpty(data.Password))
+                _serverConfig.Password = data.Password;
             _serverConfig.ProxyService = data.ProxyService ?? string.Empty;
             _serverConfig.CustomHeaders = data.CustomHeaders ?? new();
             _appSettings.UseLocalConnection = data.UseLocalConnection;
@@ -179,6 +190,19 @@ public class SettingsService : ISettingsService
             _appSettings.SettingsVersion = AppSettings.CurrentSettingsVersion;
         }
         catch { /* corrupt settings — start fresh */ }
+
+        if (string.IsNullOrEmpty(legacyPassword)) return;
+
+        // Older builds persisted the server password here in cleartext. Hand it to the
+        // DPAPI-encrypted credential store (an existing entry there wins, since it is the
+        // newer of the two) and rewrite the file so the cleartext copy stops existing on disk.
+        try
+        {
+            if (_credentials is not null && string.IsNullOrEmpty(_credentials.GetPassword()))
+                _credentials.SavePassword(legacyPassword);
+            Save();
+        }
+        catch { /* best-effort cleanup — never block startup on it */ }
     }
 
     private sealed record PersistedSettings
@@ -191,6 +215,10 @@ public class SettingsService : ISettingsService
         public long LastIncrementalSync { get; init; }
         public long LastIncrementalSyncRowId { get; init; }
         public string? ServerUrl { get; init; }
+        // Legacy only. Never written any more (it is always null on save, and the attribute keeps
+        // the key out of the file); read so that installs upgrading from a build that stored it in
+        // cleartext can be migrated to the credential store and the field dropped.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? Password { get; init; }
         public string? ProxyService { get; init; }
         public Dictionary<string, string>? CustomHeaders { get; init; }

@@ -159,3 +159,21 @@ server; design kept for a focused pass.
 
 Covered by `SyncServiceTests`/`MessagesServiceTests` (field preservation, window soft-delete,
 updated-since edit, heal-once, foreground reconcile).
+
+## 0.22.5 — security fix (SEC1)
+
+**SEC1 (server password persisted in cleartext):** `SettingsService.Save` wrote
+`ServerConfiguration.Password` straight into `%LOCALAPPDATA%\BlueBubbles\settings.json`, so the
+BlueBubbles server password sat on disk in plain text next to the DPAPI-encrypted
+`credential.bin` that was supposed to be its only home — readable by any process running as the
+user, and easy to leak via a copied settings file or a support screenshot. `Save` no longer emits
+the field at all (`PersistedSettings.Password` is now write-null + `[JsonIgnore(WhenWritingNull)]`,
+kept only as a read path), and `Load` migrates an existing cleartext value into
+`ICredentialService` (an entry already in the store wins, being the newer of the two) before
+rewriting the file to drop it. `Load` also only seeds `ServerConfiguration.Password` from the
+legacy field when it is actually present, so an already-migrated file can't blank the password
+`App.xaml.cs` restored from DPAPI. Covered by `SettingsServiceTests` (round-trip asserts the
+secret never reaches disk; two migration tests) and a `DependencyInjectionTests` case that
+resolves the concrete `SettingsService` from the container, since its new credential parameter is
+optional. Verified against a live install: the cleartext value was gone and `[Socket] Connected`
+still succeeded off the DPAPI copy.

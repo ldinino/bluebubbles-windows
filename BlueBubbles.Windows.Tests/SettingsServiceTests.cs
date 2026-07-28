@@ -27,6 +27,8 @@ public class SettingsServiceTests
             svc.Save();
 
             Assert.True(File.Exists(filePath));
+            // The password belongs in the DPAPI credential store, never on disk in cleartext.
+            Assert.DoesNotContain("test-pass", File.ReadAllText(filePath));
 
             var appSettings2 = new AppSettings();
             var serverConfig2 = new ServerConfiguration();
@@ -36,7 +38,7 @@ public class SettingsServiceTests
             Assert.True(appSettings2.FinishedSetup);
             Assert.Equal("http://10.0.0.1:1234", appSettings2.ServerAddress);
             Assert.Equal("http://10.0.0.1:1234", serverConfig2.ServerUrl);
-            Assert.Equal("test-pass", serverConfig2.Password);
+            Assert.Equal(string.Empty, serverConfig2.Password);
             Assert.Equal("proj-123", serverConfig2.FcmProjectId);
             Assert.Equal("key-abc", serverConfig2.FcmApiKey);
         }
@@ -244,5 +246,65 @@ public class SettingsServiceTests
         {
             File.Delete(tempFile);
         }
+    }
+
+    [Fact]
+    public void Load_LegacyPlaintextPassword_MovesItToCredentialStoreAndStripsItFromDisk()
+    {
+        var tempFile = Path.GetTempFileName();
+        File.WriteAllText(tempFile,
+            "{ \"finishedSetup\": true, \"serverUrl\": \"http://10.0.0.1:1234\", \"password\": \"legacy-pass\" }");
+
+        try
+        {
+            var serverConfig = new ServerConfiguration();
+            var credentials = new FakeCredentialService();
+            var svc = new SettingsService(new AppSettings(), serverConfig, tempFile, credentials);
+
+            svc.Load();
+
+            // The connection still works this launch...
+            Assert.Equal("legacy-pass", serverConfig.Password);
+            // ...because the password moved into the encrypted store...
+            Assert.Equal("legacy-pass", credentials.Stored);
+            // ...and the field is gone from disk entirely, not just blanked.
+            Assert.DoesNotContain("\"password\"", File.ReadAllText(tempFile));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void Load_LegacyPlaintextPassword_DoesNotOverwriteExistingCredential()
+    {
+        // A stale cleartext copy must not clobber the credential store, which is authoritative.
+        var tempFile = Path.GetTempFileName();
+        File.WriteAllText(tempFile, "{ \"password\": \"stale-pass\" }");
+
+        try
+        {
+            var credentials = new FakeCredentialService { Stored = "current-pass" };
+            var svc = new SettingsService(new AppSettings(), new ServerConfiguration(), tempFile, credentials);
+
+            svc.Load();
+
+            Assert.Equal("current-pass", credentials.Stored);
+            Assert.DoesNotContain("stale-pass", File.ReadAllText(tempFile));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    private sealed class FakeCredentialService : ICredentialService
+    {
+        public string? Stored { get; set; }
+
+        public void SavePassword(string password) => Stored = password;
+        public string? GetPassword() => Stored;
+        public void DeletePassword() => Stored = null;
     }
 }
