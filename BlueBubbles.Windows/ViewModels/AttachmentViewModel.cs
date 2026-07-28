@@ -152,6 +152,39 @@ public partial class AttachmentViewModel : ObservableObject
         _downloadCts?.Cancel();
     }
 
+    /// <summary>Reports that the cached file is present but nothing on this machine could decode it
+    /// (a truncated download, or a codec Windows lacks — HEIC without the HEIF extension is the
+    /// common one). Moves the attachment to <see cref="AttachmentState.Error"/> so the UI shows a
+    /// retry affordance instead of a silently blank frame, which is what used to happen.</summary>
+    public void MarkUnreadable(string? reason = null)
+    {
+        // A local (not-yet-sent) attachment has no server copy to refetch, so retrying is pointless.
+        if (_cache is null) return;
+        if (State == AttachmentState.Error) return;
+
+        Interlocked.Increment(ref _generationCounter);
+        State = AttachmentState.Error;
+        ErrorMessage = reason ?? "This file couldn't be displayed.";
+    }
+
+    /// <summary>Re-fetches the attachment from scratch, dropping the cached copy first. Plain
+    /// <see cref="DownloadAsync"/> would short-circuit on the existing (bad) file.</summary>
+    public async Task RetryAsync()
+    {
+        if (_cache is null) return;
+
+        Interlocked.Increment(ref _generationCounter);
+        _downloadCts?.Cancel();
+
+        try { await _cache.InvalidateAsync(_attachmentGuid); }
+        catch { /* best effort — the download below is what matters */ }
+
+        LocalPath = null;
+        ErrorMessage = null;
+        State = AttachmentState.NotDownloaded;
+        await DownloadAsync();
+    }
+
     private static AttachmentCategory CategorizeFromMime(string? mimeType)
     {
         if (string.IsNullOrEmpty(mimeType)) return AttachmentCategory.Other;

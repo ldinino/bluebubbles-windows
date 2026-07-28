@@ -175,6 +175,13 @@ public sealed partial class ChatBubble : UserControl
         // Reply indicator
         UpdateReplyIndicator(vm);
 
+        // The sender label, reply context and bare media all live outside the bubble now, so they
+        // need the same side alignment the bubble gets.
+        var side = vm.IsFromMe ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+        SenderText.HorizontalAlignment = side;
+        ReplyIndicator.HorizontalAlignment = side;
+        MediaPanel.HorizontalAlignment = side;
+
         // Text content. URLs render as clickable links; a pure-URL rich-link message shows only its
         // card, so its redundant raw-URL text is hidden. (Also hidden for attachment-only bubbles.)
         var linkBrush = vm.IsFromMe
@@ -272,11 +279,12 @@ public sealed partial class ChatBubble : UserControl
             BubbleBorder.Background = GetBrush("AccentFillColorDefaultBrush");
             var onAccent = GetBrush("TextOnAccentFillColorPrimaryBrush");
             MessageText.Foreground = onAccent;
-            SenderText.Foreground = onAccent;
             SubjectText.Foreground = onAccent;
             TimeText.Foreground = onAccent;
             StatusText.Foreground = onAccent;
             EditedText.Foreground = onAccent;
+            // SenderText lives outside the bubble now, so it always takes the page palette.
+            SenderText.Foreground = GetBrush("TextFillColorSecondaryBrush");
         }
         else
         {
@@ -300,10 +308,15 @@ public sealed partial class ChatBubble : UserControl
             ? (vm.IsFromMe ? new CornerRadius(18, 18, 4, 18) : new CornerRadius(18, 18, 18, 4))
             : new CornerRadius(18);
 
-        // A rich-link card is its own surface — don't wrap it in the coloured message bubble.
-        // Strip the bubble's fill/padding/corners so the card stands alone, and give the meta row
-        // (time/status) neutral colours since it now sits on the page background, not an accent fill.
-        if (vm.IsUrlPreview)
+        // A rich-link card is its own surface, and so is a bare photo — don't wrap either in the
+        // coloured message bubble. Strip the bubble's fill/padding/corners so the content stands
+        // alone, leaving the border to carry just the meta row, and give that row neutral colours
+        // since it now sits on the page background rather than an accent fill.
+        var bubbleCarriesContent = showText
+            || !string.IsNullOrEmpty(vm.Subject)
+            || AttachmentsPanel.Visibility == Visibility.Visible;
+
+        if (vm.IsUrlPreview || !bubbleCarriesContent)
         {
             BubbleBorder.Background = null;
             BubbleBorder.Padding = new Thickness(0);
@@ -320,36 +333,79 @@ public sealed partial class ChatBubble : UserControl
         }
     }
 
-    // Builds the attachment chips / rich-link card for a bubble. Called once per message VM (guarded
-    // in ApplyStyle) so the AttachmentHolders — and their loaded images — survive style re-applies.
+    // Builds the media / attachment chips / rich-link card for a bubble. Called once per message VM
+    // (guarded in ApplyStyle) so the AttachmentHolders — and their loaded images — survive style
+    // re-applies.
     private void BuildContent(MessageBubbleViewModel vm)
     {
+        MediaPanel.Children.Clear();
         AttachmentsPanel.Children.Clear();
         UrlPreviewPanel.Children.Clear();
+        MediaPanel.Visibility = Visibility.Collapsed;
+        AttachmentsPanel.Visibility = Visibility.Collapsed;
+        UrlPreviewPanel.Visibility = Visibility.Collapsed;
+
         if (vm.IsUrlPreview)
         {
-            AttachmentsPanel.Visibility = Visibility.Collapsed;
             UrlPreviewPanel.Visibility = Visibility.Visible;
             UrlPreviewPanel.Children.Add(new UrlPreview { DataContext = vm.UrlPreview });
+            return;
         }
-        else
+
+        if (!vm.HasAttachments) return;
+
+        // Photos and videos present bare, outside the bubble; audio and documents stay as chips
+        // inside it (which is also what iMessage does).
+        var media = vm.Attachments!
+            .Where(a => a.Category is AttachmentCategory.Image or AttachmentCategory.Video)
+            .ToList();
+        var chips = vm.Attachments!.Except(media).ToList();
+
+        if (media.Count > 0)
         {
-            UrlPreviewPanel.Visibility = Visibility.Collapsed;
-            if (vm.HasAttachments)
-            {
-                AttachmentsPanel.Visibility = Visibility.Visible;
-                foreach (var att in vm.Attachments!)
-                {
-                    var holder = new AttachmentHolder { DataContext = att };
-                    holder.ImageClicked += OnAttachmentImageClicked;
-                    AttachmentsPanel.Children.Add(holder);
-                }
-            }
-            else
-            {
-                AttachmentsPanel.Visibility = Visibility.Collapsed;
-            }
+            MediaPanel.Visibility = Visibility.Visible;
+            if (media.Count == 1) MediaPanel.Children.Add(CreateMediaHolder(media[0], MediaDisplayMode.Natural));
+            else MediaPanel.Children.Add(BuildMediaCollage(media));
         }
+
+        if (chips.Count > 0)
+        {
+            AttachmentsPanel.Visibility = Visibility.Visible;
+            foreach (var att in chips)
+                AttachmentsPanel.Children.Add(new AttachmentHolder { DataContext = att });
+        }
+    }
+
+    private AttachmentHolder CreateMediaHolder(ViewModels.AttachmentViewModel att, MediaDisplayMode mode)
+    {
+        // DisplayMode must be set before DataContext: binding triggers the first render, which is
+        // what reserves the footprint and picks the decode width.
+        var holder = new AttachmentHolder { DisplayMode = mode };
+        holder.ImageClicked += OnAttachmentImageClicked;
+        holder.DataContext = att;
+        return holder;
+    }
+
+    /// <summary>Two-up collage for a multi-image message, iMessage style: square, centre-cropped
+    /// tiles. An odd count simply leaves the last row half-filled.</summary>
+    private Grid BuildMediaCollage(IReadOnlyList<ViewModels.AttachmentViewModel> media)
+    {
+        var grid = new Grid { ColumnSpacing = 4, RowSpacing = 4 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var rows = (media.Count + 1) / 2;
+        for (var r = 0; r < rows; r++) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        for (var i = 0; i < media.Count; i++)
+        {
+            var holder = CreateMediaHolder(media[i], MediaDisplayMode.Tile);
+            Grid.SetRow(holder, i / 2);
+            Grid.SetColumn(holder, i % 2);
+            grid.Children.Add(holder);
+        }
+
+        return grid;
     }
 
     // Builds the message body as inline runs, turning URLs into clickable hyperlinks. The link colour
@@ -390,8 +446,12 @@ public sealed partial class ChatBubble : UserControl
     // its accent colour and shows muted italic text on the sender's side.
     private void RenderUnsent(MessageBubbleViewModel vm)
     {
+        MediaPanel.Children.Clear();
+        MediaPanel.Visibility = Visibility.Collapsed;
         AttachmentsPanel.Children.Clear();
         AttachmentsPanel.Visibility = Visibility.Collapsed;
+        UrlPreviewPanel.Children.Clear();
+        UrlPreviewPanel.Visibility = Visibility.Collapsed;
         ReactionsPanel.Children.Clear();
         ReactionsPanel.Visibility = Visibility.Collapsed;
         ReplyIndicator.Visibility = Visibility.Collapsed;
@@ -400,6 +460,8 @@ public sealed partial class ChatBubble : UserControl
         CancelLink.Visibility = Visibility.Collapsed;
         EditedText.Visibility = Visibility.Collapsed;
 
+        SenderText.HorizontalAlignment = vm.IsFromMe
+            ? HorizontalAlignment.Right : HorizontalAlignment.Left;
         SenderText.Visibility = vm.SenderName is not null ? Visibility.Visible : Visibility.Collapsed;
         if (vm.SenderName is not null) SenderText.Text = vm.SenderName;
 
@@ -443,20 +505,12 @@ public sealed partial class ChatBubble : UserControl
         ReplySnippetText.Text = vm.ReplyPreviewText ?? "..."; // placeholder until resolved
 
         // Match the bubble's palette: on-accent for outgoing, accent cue for incoming.
-        if (vm.IsFromMe)
-        {
-            var onAccent = GetBrush("TextOnAccentFillColorPrimaryBrush");
-            ReplyAccentBar.Fill = onAccent;
-            ReplySenderText.Foreground = onAccent;
-            ReplySnippetText.Foreground = GetBrush("TextOnAccentFillColorSecondaryBrush") ?? onAccent;
-        }
-        else
-        {
-            var accent = GetBrush("AccentFillColorDefaultBrush");
-            ReplyAccentBar.Fill = accent;
-            ReplySenderText.Foreground = GetBrush("AccentTextFillColorPrimaryBrush") ?? accent;
-            ReplySnippetText.Foreground = GetBrush("TextFillColorSecondaryBrush");
-        }
+        // The indicator sits outside the bubble on the page background, so the accent palette
+        // reads correctly regardless of who sent the message.
+        var accent = GetBrush("AccentFillColorDefaultBrush");
+        ReplyAccentBar.Fill = accent;
+        ReplySenderText.Foreground = GetBrush("AccentTextFillColorPrimaryBrush") ?? accent;
+        ReplySnippetText.Foreground = GetBrush("TextFillColorSecondaryBrush");
     }
 
     private void OnReplyIndicatorTapped(object sender, TappedRoutedEventArgs e)

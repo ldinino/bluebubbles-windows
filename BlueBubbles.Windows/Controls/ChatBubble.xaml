@@ -6,40 +6,54 @@
 
     <Grid x:Name="RootGrid" Padding="0,1" HorizontalAlignment="Stretch">
         <StackPanel HorizontalAlignment="Stretch">
+
+        <!-- Sender name (group incoming) sits above the content and outside any bubble, the way
+             iMessage does it — and so it still reads correctly above a bare photo. -->
+        <TextBlock x:Name="SenderText"
+                   FontWeight="SemiBold"
+                   FontSize="12"
+                   Margin="12,0,12,2"
+                   Visibility="Collapsed" />
+
+        <!-- Reply context: accent left bar + quoted snippet of the original message. Also outside
+             the bubble, so it stays above whatever it refers to (bubble or photo). -->
+        <Grid x:Name="ReplyIndicator"
+              Visibility="Collapsed"
+              Margin="4,0,4,4"
+              MaxWidth="500"
+              ColumnSpacing="8"
+              Tapped="OnReplyIndicatorTapped">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Rectangle x:Name="ReplyAccentBar" Grid.Column="0" Width="3" RadiusX="1.5" RadiusY="1.5" />
+            <StackPanel Grid.Column="1">
+                <TextBlock x:Name="ReplySenderText" FontSize="11" FontWeight="SemiBold" />
+                <TextBlock x:Name="ReplySnippetText"
+                           FontSize="12"
+                           Opacity="0.85"
+                           MaxLines="2"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Bare media (photos / video posters). No fill, no padding, no bubble: the picture is
+             the bubble, as in iMessage. Populated by BuildContent. -->
+        <StackPanel x:Name="MediaPanel"
+                    Spacing="4"
+                    Margin="0,0,0,2"
+                    Visibility="Collapsed" />
+
         <Border x:Name="BubbleBorder" Padding="12,8" CornerRadius="18" MaxWidth="500">
             <StackPanel x:Name="ContentPanel">
-                <!-- Reply indicator: accent left bar + quoted snippet of the original message -->
-                <Grid x:Name="ReplyIndicator"
-                      Visibility="Collapsed"
-                      Margin="0,0,0,6"
-                      ColumnSpacing="8"
-                      Tapped="OnReplyIndicatorTapped">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="3" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Rectangle x:Name="ReplyAccentBar" Grid.Column="0" Width="3" RadiusX="1.5" RadiusY="1.5" />
-                    <StackPanel Grid.Column="1">
-                        <TextBlock x:Name="ReplySenderText" FontSize="11" FontWeight="SemiBold" />
-                        <TextBlock x:Name="ReplySnippetText"
-                                   FontSize="12"
-                                   Opacity="0.85"
-                                   MaxLines="2"
-                                   TextTrimming="CharacterEllipsis"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-                </Grid>
-                <TextBlock x:Name="SenderText"
-                           FontWeight="SemiBold"
-                           FontSize="12"
-                           Margin="0,0,0,2"
-                           Visibility="Collapsed" />
                 <TextBlock x:Name="SubjectText"
                            FontWeight="Bold"
                            Margin="0,0,0,4"
                            TextWrapping="Wrap"
                            Visibility="Collapsed" />
-                <!-- Attachment display area -->
+                <!-- Non-media attachments (audio, documents) keep their chip inside the bubble -->
                 <StackPanel x:Name="AttachmentsPanel"
                             Spacing="4"
                             Margin="0,0,0,0"

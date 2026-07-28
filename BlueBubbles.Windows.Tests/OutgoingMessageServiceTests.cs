@@ -276,6 +276,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Func<string, Task<ApiResponse<Chat>>>? GetChatFunc { get; set; }
     public Func<string, Task<ApiResponse<JsonElement>>>? DeleteChatFunc { get; set; }
     public Func<string, string, Task<ApiResponse<JsonElement>>>? DeleteMessageFunc { get; set; }
+    public Func<string, Task<byte[]>>? DownloadAttachmentFunc { get; set; }
+    public int DownloadAttachmentCalls;
 
     internal static Message MockMessage(string guid, string? text = null) =>
         new(null, guid, null, null, text, null, null, 0,
@@ -320,7 +322,13 @@ internal class MockApiService : IBlueBubblesApiService
     public Task<ApiResponse<JsonElement>> AddFcmDeviceAsync(string name, string identifier, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetFcmClientAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Attachment>> GetAttachmentInfoAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<byte[]> DownloadAttachmentAsync(string guid, bool original = false, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> DownloadAttachmentAsync(string guid, bool original = false, IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref DownloadAttachmentCalls);
+        return DownloadAttachmentFunc is not null
+            ? DownloadAttachmentFunc(guid)
+            : throw new NotImplementedException();
+    }
     public Task<byte[]> DownloadLivePhotoAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetAttachmentBlurhashAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetAttachmentCountAsync(CancellationToken ct = default) => throw new NotImplementedException();

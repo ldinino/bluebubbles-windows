@@ -49,12 +49,19 @@ public static class ImageLoader
     // ── Decoded-bitmap LRU ──────────────────────────────────────────────────────────────────
     // A BitmapImage can back several Image.Source slots and survive across container recycles,
     // so caching the decoded instance lets a recycled chat bubble re-show its image synchronously
-    // (no async disk decode, no blank frame). Bounded so a long photo thread can't grow unbounded.
-    // Touched only from the UI thread (callers await on the dispatcher), but locked to stay safe.
-    private const int MaxCacheEntries = 80;
+    // (no async disk decode, no blank frame).
+    //
+    // Bounded by decoded BYTES, not entry count: a fixed 80-entry cap sounds small but each entry
+    // is PixelWidth * PixelHeight * 4 bytes, so a thread of large photos on a high-DPI display
+    // could pin well over a hundred megabytes. Touched only from the UI thread (callers await on
+    // the dispatcher), but locked to stay safe.
+    private const long MaxCacheBytes = 64L * 1024 * 1024;
     private static readonly object _cacheLock = new();
-    private static readonly Dictionary<string, LinkedListNode<KeyValuePair<string, BitmapImage>>> _cache = new();
-    private static readonly LinkedList<KeyValuePair<string, BitmapImage>> _lru = new();
+    private static readonly Dictionary<string, LinkedListNode<CacheEntry>> _cache = new();
+    private static readonly LinkedList<CacheEntry> _lru = new();
+    private static long _cacheBytes;
+
+    private sealed record CacheEntry(string Key, BitmapImage Bitmap, long Bytes);
 
     private static string CacheKey(string path, int decodePixelWidth) => $"{path}|{decodePixelWidth}";
 
@@ -69,24 +76,48 @@ public static class ImageLoader
             {
                 _lru.Remove(node);
                 _lru.AddFirst(node);   // most-recently-used
-                return node.Value.Value;
+                return node.Value.Bitmap;
             }
         }
         return null;
     }
 
-    private static void Store(string key, BitmapImage bitmap)
+    /// <summary>Drops every cached decode of <paramref name="path"/> (any decode width). Called
+    /// when a file turns out to be unreadable, so a retry can't be served the poisoned entry.</summary>
+    public static void Invalidate(string path)
     {
         lock (_cacheLock)
         {
+            var prefix = path + "|";
+            var stale = _cache.Where(kv => kv.Key.StartsWith(prefix, StringComparison.Ordinal))
+                              .Select(kv => kv.Value).ToList();
+            foreach (var node in stale)
+            {
+                _lru.Remove(node);
+                _cache.Remove(node.Value.Key);
+                _cacheBytes -= node.Value.Bytes;
+            }
+        }
+    }
+
+    private static void Store(string key, BitmapImage bitmap)
+    {
+        // PixelWidth/PixelHeight are populated once the decode completes; 4 bytes per pixel (BGRA).
+        long bytes = (long)Math.Max(bitmap.PixelWidth, 1) * Math.Max(bitmap.PixelHeight, 1) * 4;
+
+        lock (_cacheLock)
+        {
             if (_cache.ContainsKey(key)) return;
-            var node = new LinkedListNode<KeyValuePair<string, BitmapImage>>(new(key, bitmap));
+            var node = new LinkedListNode<CacheEntry>(new CacheEntry(key, bitmap, bytes));
             _lru.AddFirst(node);
             _cache[key] = node;
-            while (_cache.Count > MaxCacheEntries && _lru.Last is { } oldest)
+            _cacheBytes += bytes;
+
+            while (_cacheBytes > MaxCacheBytes && _lru.Last is { } oldest && _lru.Count > 1)
             {
                 _lru.RemoveLast();
                 _cache.Remove(oldest.Value.Key);
+                _cacheBytes -= oldest.Value.Bytes;
             }
         }
     }

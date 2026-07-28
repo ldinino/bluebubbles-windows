@@ -299,6 +299,7 @@ public class DependencyInjectionTests
         public Task<string?> SeedFromLocalFileAsync(string attachmentGuid, string sourceFilePath,
             CancellationToken ct = default)
             => Task.FromResult<string?>(null);
+        public Task InvalidateAsync(string attachmentGuid, CancellationToken ct = default) => Task.CompletedTask;
         public Task PurgeCacheAsync(CancellationToken ct = default) => Task.CompletedTask;
         public long GetCacheSizeBytes() => 0;
     }
