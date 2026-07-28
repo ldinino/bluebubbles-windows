@@ -18,7 +18,12 @@ public sealed partial class MainWindow : Window
     private const int DefaultWidth = 1024;
     private const int DefaultHeight = 768;
     private const int MinWidth = 640;
-    private const int MinHeight = 480;
+
+    // Deliberately low: a 10" tablet is only ~800 DIPs tall, and the docked touch keyboard eats
+    // ~320 of them. The old 480 floor left the window taller than the space above the keyboard,
+    // which clipped the composer. 360 still fits the title bar, chat header, composer, and a
+    // readable slice of the thread. (Tunable.)
+    private const int MinHeight = 360;
 
     private const int WM_GETMINMAXINFO = 0x0024;
     private const int WM_SIZE = 0x0005;
@@ -29,6 +34,7 @@ public sealed partial class MainWindow : Window
     private const int GWLP_WNDPROC = -4;
     private const int SW_HIDE = 0;
     private const int SW_RESTORE = 9;
+    private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
 
     private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     private readonly WndProcDelegate _wndProcDelegate;
@@ -57,8 +63,26 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MINMAXINFO
@@ -175,8 +199,24 @@ public sealed partial class MainWindow : Window
             var dpi = GetDpiForWindow(hWnd);
             var scale = dpi / 96.0;
             var info = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-            info.ptMinTrackSize.X = (int)(MinWidth * scale);
-            info.ptMinTrackSize.Y = (int)(MinHeight * scale);
+
+            var minWidth = (int)(MinWidth * scale);
+            var minHeight = (int)(MinHeight * scale);
+
+            // Never demand more room than the display actually offers. The docked touch keyboard
+            // reserves screen space, so the work area shrinks while it's up and Windows resizes the
+            // window to fit above it. On a small high-DPI tablet (Surface Go: 1800x1200 @150%, i.e.
+            // 1200x800 DIPs) our nominal 480-DIP minimum is taller than what's left, so the clamp
+            // blocked the shrink and the bottom of the app -- the composer -- stayed under the
+            // keyboard. Clamping to the work area lets the window get out of the keyboard's way.
+            if (TryGetWorkAreaSize(hWnd, out var workWidth, out var workHeight))
+            {
+                minWidth = Math.Min(minWidth, workWidth);
+                minHeight = Math.Min(minHeight, workHeight);
+            }
+
+            info.ptMinTrackSize.X = minWidth;
+            info.ptMinTrackSize.Y = minHeight;
             Marshal.StructureToPtr(info, lParam, true);
             return IntPtr.Zero;
         }
@@ -212,13 +252,39 @@ public sealed partial class MainWindow : Window
         return CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
     }
 
+    /// <summary>Work area of the monitor the window sits on, in physical pixels. Shrinks while the
+    /// docked touch keyboard is up. Raw P/Invoke rather than <see cref="DisplayArea"/> because this
+    /// is also called from WM_GETMINMAXINFO, which arrives before AppWindow exists.</summary>
+    private static bool TryGetWorkAreaSize(IntPtr hWnd, out int width, out int height)
+    {
+        width = height = 0;
+
+        var monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero) return false;
+
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref info)) return false;
+
+        width = info.rcWork.Right - info.rcWork.Left;
+        height = info.rcWork.Bottom - info.rcWork.Top;
+        return width > 0 && height > 0;
+    }
+
+    /// <summary>Caps a requested window size to the current work area so we never open larger than
+    /// the screen. The 1024x768 default is 1536x1152 physical at 150% scale, which overflows a
+    /// 1800x1200 tablet display vertically.</summary>
+    private SizeInt32 ClampToWorkArea(int width, int height) =>
+        TryGetWorkAreaSize(_hWnd, out var workWidth, out var workHeight)
+            ? new SizeInt32(Math.Min(width, workWidth), Math.Min(height, workHeight))
+            : new SizeInt32(width, height);
+
     private void RestoreOrSetDefaultPlacement()
     {
         var appSettings = App.Services.GetRequiredService<AppSettings>();
 
         if (appSettings.WindowWidth > 0 && appSettings.WindowHeight > 0)
         {
-            AppWindow.Resize(new SizeInt32(appSettings.WindowWidth, appSettings.WindowHeight));
+            AppWindow.Resize(ClampToWorkArea(appSettings.WindowWidth, appSettings.WindowHeight));
 
             var checkPoint = new PointInt32(appSettings.WindowX + 50, appSettings.WindowY + 50);
             var display = DisplayArea.GetFromPoint(checkPoint, DisplayAreaFallback.None);
@@ -231,7 +297,7 @@ public sealed partial class MainWindow : Window
         {
             var dpi = GetDpiForWindow(_hWnd);
             var scale = dpi / 96.0;
-            AppWindow.Resize(new SizeInt32((int)(DefaultWidth * scale), (int)(DefaultHeight * scale)));
+            AppWindow.Resize(ClampToWorkArea((int)(DefaultWidth * scale), (int)(DefaultHeight * scale)));
         }
     }
 
