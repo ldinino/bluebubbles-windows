@@ -25,96 +25,6 @@
 - [ ] Scheduling a reply (`selectedMessageGuid` is plumbed through `ScheduledMessageService`, no
       UI yet).
 
-#### F5. FaceTime calls — non-modal toast + breakout call window
-Research done (server + Flutter reference read); **not started**. Do not begin until the open
-bug list is clear.
-
-**Reality check first (read before designing anything):**
-- This is **FaceTime only** — audio or video. The server has no cellular/SMS-call bridge, so
-  "phone calls" means FaceTime Audio.
-- **We never carry the media.** `POST /facetime/answer/{uuid}` makes the *Mac* answer, generates
-  a **FaceTime web link** (`facetime.apple.com/join#...`), admits us, then the Mac leaves the
-  call. The actual A/V session runs in a **browser** (WebRTC). Our "call window" is a
-  companion/control surface, not a call client. Upstream just `launchUrl`s the link.
-- **There is no decline endpoint.** The API is answer + leave, nothing else. Upstream's "Ignore"
-  button is a purely local dismiss. So the desired behavior — X just silences and the call rings
-  out on its own — is not a compromise, it's literally the only thing the API supports. Do not
-  wire the X to `leave`; leaving an unanswered call is untested and could kill the ring.
-
-**What the server actually exposes** (`bluebubbles-server`, all FaceTime routes sit behind
-`PrivateApiMiddleware`, and `FaceTimeInterface` hard-requires **macOS Monterey+**):
-
-| Method | HTTP | Path | Returns |
-|--------|------|------|---------|
-| Answer | POST | `/facetime/answer/{call_uuid}` | `{ data: { link } }` |
-| Leave | POST | `/facetime/leave/{call_uuid}` | no data |
-| New session (outgoing) | POST | `/facetime/session` | `{ data: { link } }` |
-| Availability | GET | `/handle/availability/facetime?address=` | `{ data: { available } }` |
-
-Socket events — **two mutually exclusive modes**, selected by the server-side `facetime_calling`
-config toggle (labeled "Experimental" in the server UI):
-- **Off (default / legacy):** `incoming-facetime` only. Payload is a **stringified JSON**
-  `{ caller, timestamp }` — no call UUID, therefore **not answerable**. Notify-only.
-- **On ("FaceTime Calling"):** `ft-call-status-changed`, a real object:
-  `{ uuid, status_id, status, ended_error, ended_reason, address, handle, image_url,
-  is_outgoing, is_audio, is_video, url? }`. Status IDs: `0` unknown, `1` answered, `3` outgoing,
-  `4` incoming, `6` disconnected. The server suppresses `1`/`3` and de-dupes `4` per session, so
-  in practice we receive **`4` (ring) and `6` (call ended)** — `6` is the signal to tear down the
-  toast/window.
-
-**What we already have** (do not rebuild):
-- `SocketEvents.IncomingFacetime` / `FtCallStatusChanged` registered in
-  [SocketService.cs](BlueBubbles.Core/Services/SocketService.cs#L104) — including the
-  string-then-deserialize dance the legacy event requires.
-- `ActionHandler.IncomingFaceTime` / `FaceTimeStatusChanged` events raised, but **nothing
-  subscribes** — the events currently dead-end.
-- `AnswerFaceTimeAsync` / `LeaveFaceTimeAsync` / `GetFaceTimeAvailabilityAsync` on
-  [BlueBubblesApiService.cs](BlueBubbles.Core/Services/BlueBubblesApiService.cs#L619).
-- `IFaceTimeService` exists as an **interface only** — no implementation, no DI registration.
-
-**Proposed shape (keep it simple for v1):**
-- [ ] `FaceTimeService` (Core) implementing `IFaceTimeService` — owns active-call state keyed by
-      call UUID, subscribes to the two `ActionHandler` events, normalizes both payload shapes
-      into one `FaceTimeCall` model, resolves the caller through `ContactResolverService`, and
-      raises ring / ended. Register in DI.
-- [ ] **Non-modal incoming toast** via the existing unpackaged `AppNotificationManager` path.
-      Use `AppNotificationScenario.IncomingCall` so it persists and rings instead of
-      auto-dismissing. Buttons: **Answer** / **Decline**; dismissing (X) is silence-only and
-      sends nothing to the server. Green/red button styling needs `useButtonStyle="true"` on the
-      root `<toast>`, which the builder does not expose — construct raw XML and pass it to
-      `AppNotification(string)`.
-      *Explicit non-goal: never block or steal focus from the main window. That is the whole
-      point of this item.*
-- [ ] **Toast activation routing.** Reuse the existing unpackaged redirect path, but add a
-      **separate** argument namespace from chat deep links — the current route is
-      `ShellPage.OpenChat` -> `ConversationListPage.SelectChatByGuid`, which is wrong for a call.
-      Watch the `Program.cs` `static _keyInstance` gotcha (dropping the reference silently kills
-      toast clicks).
-- [ ] **Breakout call window** — a second WinUI 3 `Window` (the app is currently single-window;
-      verify nothing assumes `MainWindow` is the only one, and that closing it doesn't tear down
-      the app). Opens **immediately in a "connecting" state**: answering is slow server-side
-      (waits for the answered event with a 30s timeout, +4s settle, then link generation), so
-      call `AnswerFaceTimeAsync` with `LongTimeout` and never block the UI on it.
-      v1 contents: caller name/avatar, audio-vs-video, elapsed timer, live status from
-      `ft-call-status-changed`, **Open in browser** (the returned link), **Copy link**, and
-      **Leave** (`POST /facetime/leave/{uuid}`). Auto-close on `status_id == 6`.
-- [ ] **Capability gating + honest messaging.** Requires Private API, macOS Monterey+, *and* the
-      server's `facetime_calling` toggle. If we only ever see legacy `incoming-facetime`, the
-      call is not answerable — show a notify-only toast and say why, rather than an Answer button
-      that fails. `ServerPrivateAPI` / server version are already stored for capability warnings.
-- [ ] Settings: master on/off for call toasts, plus honoring Do Not Disturb / the existing
-      notification policy.
-
-**Decisions to make before coding:**
-- **Browser hand-off vs. embedded WebView2 for the actual call.** Recommend **hand-off for v1**
-  (launch the default browser). WebView2 would mean a new Evergreen-runtime dependency in the
-  Inno Setup installer plus camera/mic permission prompts inside our process — real work, and it
-  buys us nothing the browser doesn't already do.
-- Outgoing calls (`POST /facetime/session` + `GET /handle/availability/facetime`) — worth a
-  "FaceTime" button in conversation details, but treat as a follow-up, not part of v1.
-- Ring sound: rely on the toast's looping call audio, or play our own via the existing
-  `NotificationSoundResolver`?
-
 ---
 
 ## U — Client updater  *(feature → future minor)*
@@ -151,12 +61,18 @@ AttachmentCacheService, LinkPreviewService, ScheduledMessageService, …). Mostl
 network/UI-thread code; add targeted seams opportunistically when one of them next regresses.
 
 > **Not doing:** code-signing (Azure Trusted Signing / SmartScreen prompt). Explicitly out of scope.
+>
+> **Not doing:** FaceTime / incoming-call support. Answering never yields media (the server hands
+> back a `facetime.apple.com` browser link), and because the server's helper hooks the *system-wide*
+> `TUCallCenter`, relayed cellular calls are indistinguishable from FaceTime Audio on the wire — so
+> "Answer" can silently pick a call up on the Mac and then fail. Revisit only if upstream forwards
+> the `is_conversation` flag their helper already computes but the server drops.
 
 ---
 
 ## Release plan
 
-**Future minor** — audio message support (F2), scheduled-send enhancements (F4), FaceTime calls
-(F5), client updater (U1).
+**Future minor** — audio message support (F2), scheduled-send enhancements (F4), client updater
+(U1).
 
 No version bump: repo hygiene (H2). Stretch goal (no schedule): arm64 (S1).
