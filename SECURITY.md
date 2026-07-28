@@ -53,7 +53,8 @@ already running as *you*. Nothing on a desktop OS can protect a stored secret fr
 ## Past advisories
 
 - **[GHSA-7r7p-r4ph-w8m5](https://github.com/ldinino/bluebubbles-windows/security/advisories/GHSA-7r7p-r4ph-w8m5)**
-  — *Server password stored in cleartext in `settings.json`* (Medium, CVSS 5.5). Affects 0.19.4
-  through 0.22.4; **fixed in 0.22.5**. Those installers have been removed from the Releases page.
-  Updating to 0.22.5 or later migrates the password into the encrypted store and deletes the
-  plaintext copy automatically.
+  — *Server password stored in cleartext in `settings.json`*. Affects 0.19.4 through 0.22.4;
+  **fixed in 0.22.5**, which removes the plaintext copy automatically. No users were affected:
+  this repository and its releases were private for the entire lifetime of the affected versions
+  and were made public only after the fix shipped. The old installers were taken down anyway, and
+  the advisory published, so the record is complete.
