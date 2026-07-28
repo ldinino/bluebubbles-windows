@@ -61,6 +61,24 @@ Download the latest **`BlueBubbles-Setup-<version>-x64.exe`** from the
 
 There is no Microsoft Store / MSIX version — just a plain, free installer.
 
+> [!IMPORTANT]
+> **Update to 0.22.5 or later.** Versions **0.19.4 – 0.22.4** stored your BlueBubbles server
+> password in plain text in `%LOCALAPPDATA%\BlueBubbles\settings.json`, where any program running
+> as your Windows user could read it. Those installers have been removed from the Releases page.
+> Installing 0.22.5+ moves the password into the encrypted store and deletes the plaintext copy
+> for you — but if you reused that password anywhere else, change it. Details:
+> [GHSA-7r7p-r4ph-w8m5](https://github.com/ldinino/bluebubbles-windows/security/advisories/GHSA-7r7p-r4ph-w8m5).
+
+## Security
+
+Your server password is encrypted with **Windows DPAPI** and stored in
+`%LOCALAPPDATA%\BlueBubbles\credential.bin`, readable only by your Windows account on that PC. It
+is never written to `settings.json` or to the logs.
+
+Found a vulnerability? Please **don't** open a public issue —
+[report it privately](https://github.com/ldinino/bluebubbles-windows/security/advisories/new).
+See [SECURITY.md](SECURITY.md).
+
 ## Build from source
 
 Requires the **.NET 8 SDK** and the **Windows App SDK** components (Visual Studio 2022 with the
