@@ -5,6 +5,7 @@ using BlueBubbles.Windows.Services;
 using BlueBubbles.Windows.Views;
 using BlueBubbles.Windows.Views.Setup;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -43,6 +44,11 @@ public sealed partial class MainWindow : Window
 
     private SystemTrayService? _trayService;
     private bool _isClosingForReal;
+
+    // Last known non-minimized maximized state, so closing from the taskbar while minimized still
+    // remembers that the window was maximized.
+    private bool _wasMaximized;
+    private DispatcherQueueTimer? _placementSaveTimer;
 
     /// <summary>Raised when the machine wakes from sleep/hibernate (WM_POWERBROADCAST resume). Used to
     /// kick connection-health + delta-sync recovery, since a socket can sit half-open after sleep.</summary>
@@ -178,7 +184,11 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Hides the window to the system tray (used for launch-at-startup-minimized).</summary>
-    public void HideToTray() => ShowWindow(_hWnd, SW_HIDE);
+    public void HideToTray()
+    {
+        SavePlacement();
+        ShowWindow(_hWnd, SW_HIDE);
+    }
 
     public void QuitApplication()
     {
@@ -190,7 +200,12 @@ public sealed partial class MainWindow : Window
     /// <summary>Removes the tray icon without closing the window. Used before
     /// <c>AppInstance.Restart</c>, which terminates the process without running Closed handlers
     /// and would otherwise leave a ghost icon beside the restarted instance's.</summary>
-    internal void RemoveTrayIcon() => _trayService?.Dispose();
+    internal void RemoveTrayIcon()
+    {
+        // Same reason: no Closed handler runs, so persist placement before we lose the chance.
+        SavePlacement();
+        _trayService?.Dispose();
+    }
 
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -299,6 +314,88 @@ public sealed partial class MainWindow : Window
             var scale = dpi / 96.0;
             AppWindow.Resize(ClampToWorkArea((int)(DefaultWidth * scale), (int)(DefaultHeight * scale)));
         }
+
+        // Restore bounds are applied first so un-maximizing returns to the right size and place.
+        if (appSettings.WindowMaximized && AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+            _wasMaximized = true;
+        }
+
+        // Placement is now known-good; from here on, changes are what we persist.
+        AppWindow.Changed += OnAppWindowChanged;
+    }
+
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) return;
+
+        CapturePlacement();
+
+        // Persist shortly after things settle rather than only on close. A tablet can have the app
+        // terminated without a clean shutdown, and everything since the last save would be lost —
+        // which is how the window "forgot" its size. Debounced so a drag-resize writes once.
+        _placementSaveTimer ??= CreatePlacementSaveTimer();
+        _placementSaveTimer.Stop();
+        _placementSaveTimer.Start();
+    }
+
+    private DispatcherQueueTimer CreatePlacementSaveTimer()
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(1);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            _placementSaveTimer?.Stop();
+            App.Services.GetRequiredService<ISettingsService>().Save();
+        };
+        return timer;
+    }
+
+    /// <summary>Copies the window's placement into settings, in memory.
+    /// <para>Only records bounds while the window is in its normal state: <see cref="AppWindow.Size"/>
+    /// reports the MAXIMIZED bounds when maximized, and saving those as the restore bounds is what
+    /// made a maximized-then-closed window reopen as a normal window sized to look maximized. A
+    /// maximized window keeps whatever restore bounds it had, which is what it will return to.</para></summary>
+    private void CapturePlacement()
+    {
+        var appSettings = App.Services.GetRequiredService<AppSettings>();
+
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            switch (presenter.State)
+            {
+                // Nothing reliable to read while minimized, and it says nothing about what the
+                // window will restore to — keep the last known state.
+                case OverlappedPresenterState.Minimized:
+                    appSettings.WindowMaximized = _wasMaximized;
+                    return;
+                case OverlappedPresenterState.Maximized:
+                    _wasMaximized = true;
+                    appSettings.WindowMaximized = true;
+                    return;
+                default:
+                    _wasMaximized = false;
+                    break;
+            }
+        }
+
+        appSettings.WindowMaximized = false;
+
+        var size = AppWindow.Size;
+        if (size.Width <= 0 || size.Height <= 0) return;
+        appSettings.WindowX = AppWindow.Position.X;
+        appSettings.WindowY = AppWindow.Position.Y;
+        appSettings.WindowWidth = size.Width;
+        appSettings.WindowHeight = size.Height;
+    }
+
+    private void SavePlacement()
+    {
+        CapturePlacement();
+        _placementSaveTimer?.Stop();
+        App.Services.GetRequiredService<ISettingsService>().Save();
     }
 
     private void OnClosed(object sender, WindowEventArgs args)
@@ -308,22 +405,14 @@ public sealed partial class MainWindow : Window
         if (appSettings.CloseToTray && _trayService is not null && !_isClosingForReal)
         {
             args.Handled = true;
-            appSettings.WindowX = AppWindow.Position.X;
-            appSettings.WindowY = AppWindow.Position.Y;
-            appSettings.WindowWidth = AppWindow.Size.Width;
-            appSettings.WindowHeight = AppWindow.Size.Height;
+            // Save here too: closing to the tray previously only updated settings in memory, so a
+            // process that never got a clean shutdown lost its placement entirely.
+            SavePlacement();
             ShowWindow(_hWnd, SW_HIDE);
             return;
         }
 
-        appSettings.WindowX = AppWindow.Position.X;
-        appSettings.WindowY = AppWindow.Position.Y;
-        appSettings.WindowWidth = AppWindow.Size.Width;
-        appSettings.WindowHeight = AppWindow.Size.Height;
-
-        var settingsService = App.Services.GetRequiredService<ISettingsService>();
-        settingsService.Save();
-
+        SavePlacement();
         _trayService?.Dispose();
     }
 }

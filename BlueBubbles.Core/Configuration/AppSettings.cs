@@ -71,11 +71,15 @@ public partial class AppSettings : ObservableObject
     [ObservableProperty] public partial bool MinimizeToTray { get; set; }
     [ObservableProperty] public partial bool CloseToTray { get; set; }
 
-    // Window placement (physical pixels, persisted across sessions)
+    // Window placement (physical pixels, persisted across sessions). X/Y/Width/Height are the
+    // RESTORE bounds — the size the window returns to when un-maximized — never the maximized
+    // bounds, or reopening a maximized window would produce a normal window that merely looks
+    // maximized.
     [ObservableProperty] public partial int WindowX { get; set; }
     [ObservableProperty] public partial int WindowY { get; set; }
     [ObservableProperty] public partial int WindowWidth { get; set; }
     [ObservableProperty] public partial int WindowHeight { get; set; }
+    [ObservableProperty] public partial bool WindowMaximized { get; set; }
 
     // Session restore — the conversation that was open when the app last closed.
     [ObservableProperty] public partial string LastSelectedChatGuid { get; set; }

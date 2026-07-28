@@ -55,6 +55,7 @@ public class SettingsService : ISettingsService
             WindowY = _appSettings.WindowY,
             WindowWidth = _appSettings.WindowWidth,
             WindowHeight = _appSettings.WindowHeight,
+            WindowMaximized = _appSettings.WindowMaximized,
             LastSelectedChatGuid = _appSettings.LastSelectedChatGuid,
             // Appearance
             Theme = _appSettings.Theme,
@@ -130,6 +131,7 @@ public class SettingsService : ISettingsService
             _appSettings.WindowY = data.WindowY;
             _appSettings.WindowWidth = data.WindowWidth;
             _appSettings.WindowHeight = data.WindowHeight;
+            _appSettings.WindowMaximized = data.WindowMaximized;
             _appSettings.LastSelectedChatGuid = data.LastSelectedChatGuid ?? string.Empty;
             // Appearance
             _appSettings.Theme = data.Theme;
@@ -206,6 +208,7 @@ public class SettingsService : ISettingsService
         public int WindowY { get; init; }
         public int WindowWidth { get; init; }
         public int WindowHeight { get; init; }
+        public bool WindowMaximized { get; init; }
         public string? LastSelectedChatGuid { get; init; }
         // Appearance
         public int Theme { get; init; }
