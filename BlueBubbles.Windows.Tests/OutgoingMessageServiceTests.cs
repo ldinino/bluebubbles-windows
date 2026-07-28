@@ -278,6 +278,8 @@ internal class MockApiService : IBlueBubblesApiService
     public Func<string, string, Task<ApiResponse<JsonElement>>>? DeleteMessageFunc { get; set; }
     public Func<string, Task<byte[]>>? DownloadAttachmentFunc { get; set; }
     public int DownloadAttachmentCalls;
+    public Func<string, Task<byte[]>>? ForceDownloadAttachmentFunc { get; set; }
+    public int ForceDownloadAttachmentCalls;
 
     internal static Message MockMessage(string guid, string? text = null) =>
         new(null, guid, null, null, text, null, null, 0,
@@ -327,6 +329,14 @@ internal class MockApiService : IBlueBubblesApiService
         Interlocked.Increment(ref DownloadAttachmentCalls);
         return DownloadAttachmentFunc is not null
             ? DownloadAttachmentFunc(guid)
+            : throw new NotImplementedException();
+    }
+
+    public Task<byte[]> ForceDownloadAttachmentAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref ForceDownloadAttachmentCalls);
+        return ForceDownloadAttachmentFunc is not null
+            ? ForceDownloadAttachmentFunc(guid)
             : throw new NotImplementedException();
     }
     public Task<byte[]> DownloadLivePhotoAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();

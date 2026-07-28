@@ -26,10 +26,11 @@ public enum MediaDisplayMode
 /// </summary>
 public sealed partial class AttachmentHolder : UserControl
 {
-    // Bounds for a lone photo. Portrait-friendly: phone photos are usually 3:4, so a taller box
-    // keeps them from being shrunk to a stamp by the width limit. (Tunable.)
-    public const double MaxMediaWidth = 340;
-    public const double MaxMediaHeight = 440;
+    // Bounds for a lone photo, sized to sit alongside text bubbles (which cap at 500 wide) rather
+    // than dominate the thread. Portrait-friendly: phone photos are usually 3:4, so the height cap
+    // is what governs them. (Tunable.)
+    public const double MaxMediaWidth = 300;
+    public const double MaxMediaHeight = 360;
 
     // Collage tile: two per row across MaxMediaWidth, with the 4px gap ChatBubble uses.
     public const double TileSize = (MaxMediaWidth - 4) / 2;
@@ -168,13 +169,22 @@ public sealed partial class AttachmentHolder : UserControl
     {
         if (DisplayMode == MediaDisplayMode.Tile)
         {
-            MediaSurface.Width = TileSize;
-            MediaSurface.Height = TileSize;
+            MediaSurface.MaxWidth = MediaSurface.Width = TileSize;
+            MediaSurface.MaxHeight = MediaSurface.Height = TileSize;
             MediaImage.Stretch = Stretch.UniformToFill;
             return;
         }
 
         MediaImage.Stretch = Stretch.Uniform;
+
+        // The cap is what actually bounds the picture, and it is set unconditionally on purpose.
+        // When the server reports no dimensions we leave Width/Height as NaN so the bitmap sizes
+        // itself — but an unconstrained Image sizes to PixelWidth interpreted as DIPs, and a
+        // LOGICAL-pixel decode produces scale x more pixels than that. Without these caps every
+        // dimensionless photo rendered at double size on a 200% display.
+        MediaSurface.MaxWidth = MaxMediaWidth;
+        MediaSurface.MaxHeight = MaxMediaHeight;
+
         var (width, height) = FitDisplaySize(vm.Width, vm.Height, vm.State == AttachmentState.Cached);
         MediaSurface.Width = width;
         MediaSurface.Height = height;

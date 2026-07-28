@@ -46,17 +46,17 @@ public class AttachmentCacheService : IAttachmentCacheService
     }
 
     public Task<string> DownloadAsync(string attachmentGuid, string? transferName,
-        IProgress<double>? progress = null, CancellationToken ct = default)
+        IProgress<double>? progress = null, bool force = false, CancellationToken ct = default)
     {
         var existing = GetCachedPath(attachmentGuid);
         if (existing is not null) return Task.FromResult(existing);
-        return AwaitSharedDownloadAsync(attachmentGuid, transferName, progress, ct);
+        return AwaitSharedDownloadAsync(attachmentGuid, transferName, progress, force, ct);
     }
 
     private async Task<string> AwaitSharedDownloadAsync(string attachmentGuid, string? transferName,
-        IProgress<double>? progress, CancellationToken ct)
+        IProgress<double>? progress, bool force, CancellationToken ct)
     {
-        var shared = GetOrStartDownload(attachmentGuid, transferName, progress);
+        var shared = GetOrStartDownload(attachmentGuid, transferName, progress, force);
 
         // WaitAsync gives each caller its own cancellation without tearing down a download other
         // bubbles are still waiting on (a merged conversation can show the same attachment twice).
@@ -64,22 +64,25 @@ public class AttachmentCacheService : IAttachmentCacheService
     }
 
     private Task<string> GetOrStartDownload(string attachmentGuid, string? transferName,
-        IProgress<double>? progress)
+        IProgress<double>? progress, bool force)
     {
-        if (_inFlight.TryGetValue(attachmentGuid, out var running)) return running;
+        // A forced retry must not be answered by an ordinary download already in flight — that one
+        // is the request that just failed.
+        var key = force ? attachmentGuid + "|force" : attachmentGuid;
+        if (_inFlight.TryGetValue(key, out var running)) return running;
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var shared = _inFlight.GetOrAdd(attachmentGuid, tcs.Task);
+        var shared = _inFlight.GetOrAdd(key, tcs.Task);
 
         // Lost the race — someone else owns this download; just await theirs.
         if (!ReferenceEquals(shared, tcs.Task)) return shared;
 
-        _ = RunOwnedDownloadAsync(attachmentGuid, transferName, progress, tcs);
+        _ = RunOwnedDownloadAsync(key, attachmentGuid, transferName, progress, force, tcs);
         return tcs.Task;
     }
 
-    private async Task RunOwnedDownloadAsync(string attachmentGuid, string? transferName,
-        IProgress<double>? progress, TaskCompletionSource<string> tcs)
+    private async Task RunOwnedDownloadAsync(string key, string attachmentGuid, string? transferName,
+        IProgress<double>? progress, bool force, TaskCompletionSource<string> tcs)
     {
         // Every waiter may have walked away (each awaits through WaitAsync with its own token), so
         // make sure a failure is always observed rather than surfacing as an unobserved exception.
@@ -88,7 +91,7 @@ public class AttachmentCacheService : IAttachmentCacheService
 
         try
         {
-            tcs.SetResult(await DownloadCoreAsync(attachmentGuid, transferName, progress));
+            tcs.SetResult(await DownloadCoreAsync(attachmentGuid, transferName, progress, force));
         }
         catch (Exception ex)
         {
@@ -96,12 +99,12 @@ public class AttachmentCacheService : IAttachmentCacheService
         }
         finally
         {
-            _inFlight.TryRemove(attachmentGuid, out _);
+            _inFlight.TryRemove(key, out _);
         }
     }
 
     private async Task<string> DownloadCoreAsync(string attachmentGuid, string? transferName,
-        IProgress<double>? progress)
+        IProgress<double>? progress, bool force)
     {
         var existing = GetCachedPath(attachmentGuid);
         if (existing is not null) return existing;
@@ -109,7 +112,9 @@ public class AttachmentCacheService : IAttachmentCacheService
         await _downloadGate.WaitAsync();
         try
         {
-            var bytes = await _api.DownloadAttachmentAsync(attachmentGuid, progress: progress);
+            var bytes = force
+                ? await _api.ForceDownloadAttachmentAsync(attachmentGuid, progress)
+                : await _api.DownloadAttachmentAsync(attachmentGuid, progress: progress);
 
             // An empty body is a server-side failure, not a zero-length attachment. Failing loudly
             // keeps it out of the cache so a retry can actually succeed.

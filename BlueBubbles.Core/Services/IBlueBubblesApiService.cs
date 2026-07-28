@@ -31,6 +31,11 @@ public interface IBlueBubblesApiService
     Task<ApiResponse<Attachment>> GetAttachmentInfoAsync(string guid, CancellationToken ct = default);
     Task<byte[]> DownloadAttachmentAsync(string guid, bool original = false,
         IProgress<double>? progress = null, CancellationToken ct = default);
+    /// <summary>Downloads an attachment the Mac hasn't got on disk (iCloud-purged). Asks the server
+    /// to pull it down via the Private API first, then serves it. Plain download returns a 500
+    /// ("Attachment does not exist in disk!") for these, so this is the recovery path.</summary>
+    Task<byte[]> ForceDownloadAttachmentAsync(string guid,
+        IProgress<double>? progress = null, CancellationToken ct = default);
     Task<byte[]> DownloadLivePhotoAsync(string guid,
         IProgress<double>? progress = null, CancellationToken ct = default);
     Task<byte[]> GetAttachmentBlurhashAsync(string guid, CancellationToken ct = default);

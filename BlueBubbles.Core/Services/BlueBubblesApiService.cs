@@ -239,6 +239,10 @@ public class BlueBubblesApiService : IBlueBubblesApiService
             new Dictionary<string, string?> { ["original"] = original.ToString().ToLowerInvariant() },
             progress, ct);
 
+    public Task<byte[]> ForceDownloadAttachmentAsync(
+        string guid, IProgress<double>? progress = null, CancellationToken ct = default)
+        => DownloadBytesAsync($"attachment/{guid}/download/force", progress: progress, ct: ct);
+
     public Task<byte[]> DownloadLivePhotoAsync(
         string guid, IProgress<double>? progress = null,
         CancellationToken ct = default)

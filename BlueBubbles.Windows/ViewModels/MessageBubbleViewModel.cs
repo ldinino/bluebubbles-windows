@@ -60,6 +60,10 @@ public partial class MessageBubbleViewModel : ObservableObject
     public partial bool IsDelayed { get; set; }
 
     [ObservableProperty] public partial bool ShowTail { get; set; }
+
+    /// <summary>False on the leading half of a split text+attachment message, so one message shows
+    /// one timestamp instead of stamping both of its bubbles.</summary>
+    public bool ShowMeta { get; private set; } = true;
     [ObservableProperty] public partial string? ErrorMessage { get; set; }
 
     public Action? CancelAction { get; set; }
@@ -278,7 +282,10 @@ public partial class MessageBubbleViewModel : ObservableObject
             var attachBubble = new MessageBubbleViewModel(message, contacts, isGroup, attachmentCache,
                 includeText: false, includeAttachments: true, includeReply: !textFirst, displayText: null);
 
-            return textFirst ? [textBubble, attachBubble] : [attachBubble, textBubble];
+            var ordered = textFirst ? new[] { textBubble, attachBubble } : [attachBubble, textBubble];
+            // One message, one timestamp: only the trailing bubble carries the meta row.
+            ordered[0].ShowMeta = false;
+            return [.. ordered];
         }
 
         return [new(message, contacts, isGroup, attachmentCache,
@@ -292,11 +299,18 @@ public partial class MessageBubbleViewModel : ObservableObject
         return stripped.Length > 0 ? stripped : null;
     }
 
+    /// <summary>True when the text precedes the attachment in the message.
+    /// <para>iMessage marks an attachment's position in the body with U+FFFC, but that marker lives
+    /// in the attributed body — the plain <c>text</c> the server hands us has it stripped, so in
+    /// practice it is never present (verified: 0 of 274 mixed messages in a real cache carried it).
+    /// When there is no marker we default to <b>attachment first</b>, which is how iMessage itself
+    /// lays out a photo with a caption. The marker branch is kept for the case where one does
+    /// arrive.</para></summary>
     private static bool AttachmentComesAfterText(string? text)
     {
-        if (string.IsNullOrEmpty(text)) return true;
+        if (string.IsNullOrEmpty(text)) return false;
         var idx = text.IndexOf(ObjectReplacementChar);
-        if (idx < 0) return true;
+        if (idx < 0) return false;
         // If there's any real text before the first ￼, text came first.
         var before = text[..idx];
         return !string.IsNullOrWhiteSpace(before);

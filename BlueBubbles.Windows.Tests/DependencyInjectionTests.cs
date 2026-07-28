@@ -294,7 +294,7 @@ public class DependencyInjectionTests
         public bool IsCached(string attachmentGuid) => false;
         public string? GetCachedPath(string attachmentGuid) => null;
         public Task<string> DownloadAsync(string attachmentGuid, string? transferName,
-            IProgress<double>? progress = null, CancellationToken ct = default)
+            IProgress<double>? progress = null, bool force = false, CancellationToken ct = default)
             => Task.FromResult(string.Empty);
         public Task<string?> SeedFromLocalFileAsync(string attachmentGuid, string sourceFilePath,
             CancellationToken ct = default)

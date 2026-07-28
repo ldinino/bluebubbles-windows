@@ -53,6 +53,61 @@ public class MessagesServiceTests
         Assert.True(messages[0].DateCreated < messages[^1].DateCreated);
     }
 
+    // Sending a photo with a caption from iOS produces two messages carrying the SAME timestamp.
+    // Date alone leaves their order to chance, which showed the caption above the photo.
+    [Fact]
+    public async Task LoadMessages_SameTimestamp_OrdersByServerRowId()
+    {
+        var (svc, factory, _) = CreateService();
+        var chat = SeedChat(factory);
+
+        using (var db = factory.CreateDbContext())
+        {
+            // Inserted caption-first so a naive sort would keep the wrong order.
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "caption", ChatId = chat.Id, Text = "look at this one",
+                DateCreated = 1700000000000, OriginalRowId = 502, IsFromMe = true
+            });
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "photo", ChatId = chat.Id,
+                DateCreated = 1700000000000, OriginalRowId = 501, IsFromMe = true
+            });
+            db.SaveChanges();
+        }
+
+        var messages = await svc.LoadMessagesAsync(chat.Id);
+
+        Assert.Equal(["photo", "caption"], messages.Select(m => m.Guid));
+    }
+
+    [Fact]
+    public async Task LoadMessages_LocalMessageWithNoRowId_SortsAfterServerMessagesAtSameTime()
+    {
+        var (svc, factory, _) = CreateService();
+        var chat = SeedChat(factory);
+
+        using (var db = factory.CreateDbContext())
+        {
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "pending", ChatId = chat.Id, Text = "just sent",
+                DateCreated = 1700000000000, OriginalRowId = null, IsFromMe = true
+            });
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "acked", ChatId = chat.Id, Text = "already on the server",
+                DateCreated = 1700000000000, OriginalRowId = 900, IsFromMe = true
+            });
+            db.SaveChanges();
+        }
+
+        var messages = await svc.LoadMessagesAsync(chat.Id);
+
+        Assert.Equal(["acked", "pending"], messages.Select(m => m.Guid));
+    }
+
     [Fact]
     public async Task LoadMessages_RespectsLimit()
     {

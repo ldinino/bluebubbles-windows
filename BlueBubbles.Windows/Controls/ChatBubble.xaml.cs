@@ -192,6 +192,8 @@ public sealed partial class ChatBubble : UserControl
         MessageText.Visibility = showText ? Visibility.Visible : Visibility.Collapsed;
         SetMessageInlines(showText ? vm.Text : null, linkBrush);
         MessageText.FontStyle = global::Windows.UI.Text.FontStyle.Normal;
+        // A split text+attachment message stamps only its trailing bubble.
+        MetaPanel.Visibility = vm.ShowMeta ? Visibility.Visible : Visibility.Collapsed;
         TimeText.Text = vm.FormattedTime;
         TimeText.Visibility = (_settings?.ShowDeliveryTimestamps ?? true)
             ? Visibility.Visible : Visibility.Collapsed;

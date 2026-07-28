@@ -1,3 +1,4 @@
+using System.Net;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -108,7 +109,11 @@ public partial class AttachmentViewModel : ObservableObject
     public async Task DownloadAsync()
     {
         if (State is AttachmentState.Downloading or AttachmentState.Cached) return;
+        await DownloadInternalAsync(force: false);
+    }
 
+    private async Task DownloadInternalAsync(bool force)
+    {
         State = AttachmentState.Downloading;
         Progress = 0;
         ErrorMessage = null;
@@ -125,7 +130,7 @@ public partial class AttachmentViewModel : ObservableObject
             });
 
             var path = await _cache.DownloadAsync(
-                _attachmentGuid, TransferName, progressReporter, _downloadCts.Token);
+                _attachmentGuid, TransferName, progressReporter, force, _downloadCts.Token);
 
             if (Interlocked.Read(ref _generationCounter) != generation) return;
 
@@ -142,10 +147,27 @@ public partial class AttachmentViewModel : ObservableObject
             if (Interlocked.Read(ref _generationCounter) == generation)
             {
                 State = AttachmentState.Error;
-                ErrorMessage = ex.Message;
+                ErrorMessage = Describe(ex, force);
             }
         }
     }
+
+    /// <summary>Turns a download failure into something a person can act on. The raw text
+    /// ("Response status code does not indicate success: 500") says nothing useful, and a 500 from
+    /// this endpoint almost always means the Mac hasn't got the file on disk.</summary>
+    private static string Describe(Exception ex, bool wasForced) => ex switch
+    {
+        HttpRequestException { StatusCode: HttpStatusCode.InternalServerError } => wasForced
+            ? "The Mac still couldn't produce this attachment. It may no longer be in iCloud."
+            : "This attachment isn't on the Mac yet. Retry to pull it down from iCloud.",
+        HttpRequestException { StatusCode: HttpStatusCode.NotFound } =>
+            "The server no longer has this attachment.",
+        HttpRequestException { StatusCode: { } code } =>
+            $"The server refused the download ({(int)code}).",
+        HttpRequestException => "Couldn't reach the server.",
+        TaskCanceledException => "The download timed out.",
+        _ => "Couldn't download this attachment."
+    };
 
     public void CancelDownload()
     {
@@ -168,7 +190,9 @@ public partial class AttachmentViewModel : ObservableObject
     }
 
     /// <summary>Re-fetches the attachment from scratch, dropping the cached copy first. Plain
-    /// <see cref="DownloadAsync"/> would short-circuit on the existing (bad) file.</summary>
+    /// <see cref="DownloadAsync"/> would short-circuit on the existing (bad) file. Goes through the
+    /// server's force endpoint so an iCloud-purged file is pulled onto the Mac first — that is the
+    /// case a plain download reports as a 500.</summary>
     public async Task RetryAsync()
     {
         if (_cache is null) return;
@@ -181,8 +205,7 @@ public partial class AttachmentViewModel : ObservableObject
 
         LocalPath = null;
         ErrorMessage = null;
-        State = AttachmentState.NotDownloaded;
-        await DownloadAsync();
+        await DownloadInternalAsync(force: true);
     }
 
     private static AttachmentCategory CategorizeFromMime(string? mimeType)

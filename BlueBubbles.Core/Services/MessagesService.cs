@@ -39,6 +39,11 @@ public class MessagesService : IMessagesService
 
         var messages = await query
             .OrderByDescending(m => m.DateCreated)
+            // Sending a photo with a caption produces two messages stamped with the SAME time, so
+            // date alone leaves their order to chance and the caption could land above the photo.
+            // ROWID is the iMessage database's insertion order, i.e. the real send order. Locally
+            // created messages have no ROWID yet and sort newest, which is where they belong.
+            .ThenByDescending(m => m.OriginalRowId ?? int.MaxValue)
             .Take(limit)
             .ToListAsync();
 
@@ -59,6 +64,7 @@ public class MessagesService : IMessagesService
             .Where(m => chatIds.Contains(m.ChatId) && m.DateDeleted == null
                 && m.AssociatedMessageGuid == null && m.DateCreated > afterDate)
             .OrderBy(m => m.DateCreated)
+            .ThenBy(m => m.OriginalRowId ?? int.MaxValue)
             .ToListAsync();
     }
 

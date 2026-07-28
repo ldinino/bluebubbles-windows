@@ -137,6 +137,40 @@ public class AttachmentCacheServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAsync_Force_UsesTheForceEndpoint()
+    {
+        var (cache, api) = Create();
+        api.DownloadAttachmentFunc = _ => throw new HttpRequestException(
+            "500", null, System.Net.HttpStatusCode.InternalServerError);
+        api.ForceDownloadAttachmentFunc = _ => Task.FromResult(new byte[] { 8, 8 });
+
+        var path = await cache.DownloadAsync("guid-purged", "shot.png", force: true);
+
+        Assert.Equal(0, api.DownloadAttachmentCalls);
+        Assert.Equal(1, api.ForceDownloadAttachmentCalls);
+        Assert.Equal(new byte[] { 8, 8 }, await File.ReadAllBytesAsync(path));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_ForcedRetry_IsNotAnsweredByAnInFlightPlainDownload()
+    {
+        var (cache, api) = Create();
+        var stuck = new TaskCompletionSource<byte[]>();
+        api.DownloadAttachmentFunc = _ => stuck.Task;
+        api.ForceDownloadAttachmentFunc = _ => Task.FromResult(new byte[] { 3 });
+
+        // A plain download is already in flight (this is the one that is failing).
+        var plain = cache.DownloadAsync("guid-both", "shot.png");
+        var forced = await cache.DownloadAsync("guid-both", "shot.png", force: true);
+
+        Assert.True(File.Exists(forced));
+        Assert.Equal(1, api.ForceDownloadAttachmentCalls);
+
+        stuck.SetException(new HttpRequestException("500"));
+        await Assert.ThrowsAsync<HttpRequestException>(() => plain);
+    }
+
+    [Fact]
     public async Task InvalidateAsync_RemovesCachedFileSoTheNextDownloadRefetches()
     {
         var (cache, api) = Create();

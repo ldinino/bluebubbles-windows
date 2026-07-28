@@ -811,6 +811,7 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<JsonElement>> GetFcmClientAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Attachment>> GetAttachmentInfoAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> DownloadAttachmentAsync(string guid, bool original = false, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<byte[]> ForceDownloadAttachmentAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> DownloadLivePhotoAsync(string guid, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<byte[]> GetAttachmentBlurhashAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetAttachmentCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
