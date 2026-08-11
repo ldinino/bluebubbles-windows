@@ -7,6 +7,24 @@
 
 ## Open bugs
 
+#### A1. Remove four Appearance settings (maintainer decision, 2026-08-11)
+- [ ] Remove **Colorful bubbles**, **Dense chat tiles**, **Hide dividers** and **Avatar size** from
+  Settings > Appearance. Kept: Theme, Colorful avatars, 24-hour time.
+- **They are not dead code** — all four are wired and have real effects
+  (`ChatBubble.xaml.cs` bubble tint, `ConversationTileViewModel` `TilePadding`/`DividerThickness`,
+  `AvatarControl` `Size * AvatarScale`). This is a deliberate feature removal for being clutter, not
+  a cleanup, so the surviving behaviour has to be chosen rather than fallen into.
+- **Surviving behaviour = today's defaults**, so a user on defaults sees no visual change: bubbles
+  take `ControlFillColorDefaultBrush`, tiles use `Thickness(8,10,8,10)`, the 1px divider stays,
+  avatars render unscaled.
+- **Measured, and the reason this is safe:** `SettingsService.JsonOpts` sets only `WriteIndented`
+  and `CamelCase` — no `UnmappedMemberHandling.Disallow` — so System.Text.Json skips unknown
+  properties and an existing `settings.json` still loads once the keys are gone. **No migration or
+  cleanup shim is needed or wanted.** (Had that option been `Disallow`, this removal would have
+  reset every setting for every existing user on upgrade.)
+- [ ] Docs to follow the code: `README.md`, `docs/BlueBubbles-WinUI3-Design-Spec.md` (the Appearance
+  list), `docs/PLAN.md` phase entry.
+
 #### B1. New/updated messages don't reach the conversation list until a restart or "fetch latest"
 - [x] Messages persisted fine; the *event contract* was broken. Six causes fixed: silent bare catch in
   `IncomingMessageProcessor.ProcessAsync`; `ChatsService.HandleNewMessageAsync` no-opping on an unknown
