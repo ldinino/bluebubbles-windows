@@ -35,38 +35,65 @@
 - [x] B2a keepers confirmed intact: `AppLog.MinLevel` in `App.xaml.cs` and the "Verbose logging"
   card in `AboutSettingsPage.xaml`. The pre-existing `Avatar[...]` traces were not touched.
 
-#### B2f. Every attachment image is decoded twice, and the first decode is always discarded
-- [ ] Measured in the 2026-08-11 log, **7 of 7** attachments bound through the normal path (3 at
-  startup, 4 inbound): `decode start ... gen=2`, then `decode start ... gen=3`, then
-  `decode STRANDED ... gen=2`, then `decode done ... gen=3`. The first decode is always wasted —
-  double file I/O and double bitmap work per image. Avatars show the same shape at startup
-  (`gen=1` MISS -> decode, `gen=2` MISS -> decode, `gen=1 ... STALE -> drop`), so the trigger is a
-  systemic double-bind, not attachment-specific.
-- [ ] The one exception was an outgoing `at_0_`-prefixed (optimistic-send) attachment, which decoded
-  once. That asymmetry is the lead.
-- [ ] Performance only — the generation guard is doing its job and the correct image wins every time.
-- [ ] **Correction to an earlier note in this entry:** "the holder is bound twice before any decode
-  starts" was wrong. `gen=2` on the *first* decode is expected — `OnDataContextChanged` increments
-  once and `LoadMedia` increments again. The double-decode is the jump to `gen=3`, i.e. a **second**
-  `LoadMedia` call, not a second bind.
-- [ ] Leading hypothesis, from a source read and **not yet measured**: `LoadMedia`'s early-out is
-  `if (vm.LocalPath == _renderedMediaPath && MediaImage.Source is not null) return;`. While the first
-  decode is still in flight `_renderedMediaPath` is already set but `MediaImage.Source` is still
-  null, so the guard cannot short-circuit and a second call decodes again. That also fits the
-  `at_0_` exception, which took the synchronous cache-hit path and had `Source` assigned before any
-  second call could arrive. Find the second caller before changing the guard.
+#### B2f. Every attachment image is decoded twice — **FIXED**
+- [x] Fixed in `91d99a2`, merged `5d3a7d1`. Confirmed: images render (maintainer, 2026-08-11), and the
+  before/after on the same scenario is **10 decode starts / 5 stranded -> 4 decode starts / 0
+  stranded, 4 short-circuits**.
+- **Root cause, as hypothesised and then confirmed by instrumentation:** `LoadMedia`'s early-out was
+  `vm.LocalPath == _renderedMediaPath && MediaImage.Source is not null`. While the first decode was
+  in flight `_renderedMediaPath` was set but `Source` was still null, so a second call could not
+  short-circuit. A new `_loadingMediaPath` field closes that window; it is cleared on rebind, retry,
+  error, cache hit, and in a `finally` guarded so a stranded decode cannot clear its successor's.
+  The generation guard was left untouched.
+- **The two second callers, measured:** `Loaded` firing after `DataContextChanged` (~46 ms later),
+  and `AttachmentViewModel.DownloadInternalAsync` raising `PropertyChanged` twice as a download
+  completes — once for `LocalPath`, once for `State` (~3 ms apart). Both are legitimate.
+- **Struck as refuted, do not re-investigate:**
+  - ~~the `at_0_` optimistic-send lead~~ — `at_0_`/`at_1_` is just the attachment index within a
+    message. 19 such attachments all double-decoded, and the same GUID double-decodes in one run and
+    single-decodes in another. The asymmetry was cache state, not the prefix.
+  - ~~"the trigger is a systemic double-bind"~~ — it is a second `LoadMedia` call, not a second bind.
+  - ~~"the list may not be virtualizing"~~ — `ItemsStackPanel` in `ChatPage.xaml` virtualizes fine.
+    Off-screen attachments were downloading because the download was fired from view-model
+    construction, not from container realization. That is B2g.
 
-#### B2g. Images decode oldest-first, so the ones you are looking at arrive last
-- [ ] Opening a thread scrolls to the newest message, but decoding appears to start at the oldest
-  bubble and work forward, so the images actually on screen are the last to appear. Reads as the app
-  being slow even though total work is unchanged. Perceived performance only.
-- [ ] Dispatched with B2f (same file, same pass) but it is a **separate defect** — B2f is wasted work,
-  this is work in the wrong order. Fixing one does not fix the other.
-- [ ] The target is **visible-first**, not merely reversed: reversing is only a proxy that holds while
-  the user is at the bottom, and breaks the moment they scroll up. Worth checking whether off-screen
-  bubbles are decoding at all — if they are, the message list may not be virtualizing, which would be
-  the more valuable finding.
+#### B2g. Images decode oldest-first — mechanism fixed, **effect not yet measured**
+- [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
+  container is realized (`AttachmentHolder`, `NotDownloaded` case), so it follows what is on or near
+  screen instead of walking the loaded window oldest-first. The new-message append path still
+  triggers directly. `bbd899c`, merged `5d3a7d1`.
+- **Measured before the fix:** `BuildMessageList` fired 19 auto-downloads within 20 ms in strictly
+  ascending `DateCreated` order, and decodes then arrived in download-completion order — so the
+  on-screen newest images sat behind the whole page.
+- [ ] **The improvement itself is unverified.** Every post-fix run had all attachments already
+  cached, so no auto-download fired and there is no after-order list and no time-to-first-visible
+  number. To settle it: open a thread containing undownloaded images with verbose logging on.
+- [ ] **Behaviour changes to watch for in use:** attachments in messages never scrolled to are no
+  longer prefetched (intended), and scroll-back pages now auto-download where they never did before
+  (`PrependMessages` never called `TriggerAutoDownload`). If fast scrolling now feels worse, this is
+  the trade to revisit.
 
+#### B2h. Avatars decode twice too — same defect class, ~half the work wasted
+- [ ] **Measured on the 2026-08-11 16:48 launch (post-B2f build): 40 avatar decodes started, 19
+  stranded, 21 landed.** Nearly half the avatar decode work at startup is thrown away. The signature
+  is identical to B2f — `RefreshLayout gen=1` then `gen=2` 1-3 ms later, first decode dropped as
+  `STALE`.
+- [ ] Deliberately out of scope for the B2f pass and still unproven to share a cause. `AvatarControl`
+  has its own generation machinery and its own history (archive cluster A / AT1), so confirm the
+  mechanism before assuming `_loadingMediaPath` transplants.
+- [ ] Performance only. Avatars render correctly today.
+
+#### B2i. `build-common.ps1` crashes when exactly one app instance is running
+- [ ] `Stop-BlueBubbles` does `$procs.Count`, and with `Set-StrictMode -Version Latest`
+  (`build-common.ps1:27`) a single `Process` object has no `Count` in PowerShell 5.1. Reproduced:
+  `The property 'Count' cannot be found on this object.` Zero or two-plus instances work; exactly
+  one — the case where the script most needs to release the file lock — kills it at "Cleaning
+  obj/bin".
+- [ ] Affects `build-and-run.ps1` and `publish.ps1`, both of which set StrictMode too. Fix is
+  `@($procs).Count`. **Release machinery — needs maintainer authorisation before it is touched.**
+
+
+#### B2b. No UI-layer logic in this codebase is testable
 - [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,
   `MessageBubbleViewModel`, `AttachmentHolder` and `ImageLoader` are unreachable from any test. This
   is what turned B2 from a fix into a research task, and it will do the same to the next UI bug.
