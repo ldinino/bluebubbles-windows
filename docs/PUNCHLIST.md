@@ -21,51 +21,29 @@
   macOS server running. Symptom fix is inferred, not observed.
 - Deliberately unchanged: reactions still raise no persist event (nothing list-visible changes).
 
-#### B2. Attachment images render wrong / not at all
-- [x] **Research pass merged** (`f973010`). Five suspects measured against source; four struck:
-  - ~~Bubble double-append~~ **refuted** — `ReconcileVisibleBubblesAsync` never calls `Items.Add`, and
-    both `AppendMessageBubbles` call sites dedupe by message GUID first.
-  - ~~`AttachmentHolder` bypasses `_bindGeneration`~~ **refuted** — the generation is bumped and
-    `MediaImage.Source` nulled *before* the cache probe, and `ChatBubble.BuildContent` discards holders
-    and `new`s them rather than reusing one with a different VM. The CLAUDE.md rule is satisfied here.
-  - ~~`ImageLoader` LRU key collision~~ **refuted** — key is `$"{path}|{decodePixelWidth}"`.
-  - ~~`TriggerAutoDownload` swallows errors~~ **benign** — `DownloadInternalAsync` converts every
-    failure to `State = Error` + `ErrorMessage`, which the error overlay surfaces.
-- [ ] **ROOT CAUSE FOUND (2026-08-11), from the first live measurement.** The live socket path never
-  writes attachment rows. `MessagePersistenceHelper.cs:137` (`db.Attachments.Add(new AttachmentEntity`)
-  is the **only** place in the codebase that persists them, and `SaveIncomingMessageAsync` →
-  `SaveMessageCoreAsync` does not go through it — it writes `HasAttachments = true` and zero rows. So
-  the cache holds a message flagged as having an attachment with nothing attached. This exactly
-  produces the reported ritual: "fetch latest" runs `RefreshLatestFromServerAsync` →
-  `MessagePersistenceHelper.SaveMessagesAsync`, which finally writes the rows; switching threads away
-  and back rebuilds `Items` via `LoadMessagesAsync`, which `.Include`s attachments and now finds them.
-- [x] **FIXED** (PR 4, `852aac3` + `2a6578f`, merged `e318fe1`). The attachment loop was extracted as
-  `MessagePersistenceHelper.SaveAttachmentsAsync` — one writer, dedupe unchanged — and
-  `SaveMessageCoreAsync` now calls it after the message row saves. `FirstAsync` became
-  `FirstOrDefaultAsync` + skip because the socket path can run for a message that lost a
-  concurrent-insert race, and the `DbUpdateException` catch now returns (the winner owns the write).
-  Rejected alternative: routing `SaveMessageCoreAsync` wholesale through `SaveMessagesAsync` — it
-  upserts where this path skips on an existing GUID, and `SaveReactionAsync` shares the method.
-- [x] **Contradiction resolved — no second defect.** The diag lines were silent because the affected
-  chat was not open at the toast, so no `ChatViewModel` existed to build a bubble
-  (`ChatViewModel` early-returns on `!_chatGuids.Contains(chatGuid)`). The 13:48:01 pair of
-  auto-downloads is the thread being opened and picking up both pending images at once.
-- [ ] **Not verified end-to-end.** No one has watched an inbound image render on arrival, with the
-  thread both open and closed. Core-only change, so no app launch was part of its evidence.
-- [ ] **Superseded but still open:** hypothesis (d) (bubbles never rebuild their attachments) is real
-  but off the critical path — `ChatViewModel` copies `e.Message.Attachments` into the in-memory
-  entity, so an on-screen bubble gets attachments from the socket payload. That the payload actually
-  carries them is a source read, **not** measured live. If images still fail with the thread open,
-  (d) is the next suspect.
-- [ ] **Remove or gate the `[attach-diag]` instrumentation once B2 closes.** In particular
-  `AppendMessageBubbles` now runs an O(items) LINQ scan per appended message, unconditionally.
-- Note: `AttachmentEntity.Guid` carries a unique index, so the dedupe protects against a thrown
-  exception, not against a duplicate row.
+#### B2. Attachment images render wrong / not at all — **CLOSED**, see `docs/PUNCHLIST-ARCHIVE.md`
+- [x] Fixed and confirmed live on 2026-08-11: four inbound images, each toast -> auto-download ->
+  decode -> done, including an adversarial run against a deleted-and-recreated thread. No
+  `HasAttachments=true but 0 attachment rows` and no re-append Warn in the whole session.
 
-#### B2a. Verbose logging was dead code
-- [x] `AppLog.MinLevel` never read `AppSettings.VerboseLogging` at startup and the About toggle was
-  `Visibility="Collapsed"`, so every `AppLog.Debug` in the app — including the existing avatar
-  tracing — was dropped unconditionally. Restored in `f973010`; off by default.
+#### B2e. Remove or gate the `[attach-diag]` instrumentation
+- [ ] B2 is closed, so the diagnostics have served their purpose. `AppendMessageBubbles` still runs
+  an O(items) LINQ scan per appended message, unconditionally, purely to feed a Warn.
+- [ ] Keep the `VerboseLogging -> AppLog.MinLevel` restore and the About toggle (B2a) — those are the
+  reason B2 was diagnosable at all. Only the `[attach-diag]` lines are in scope.
+
+#### B2f. Every attachment image is decoded twice, and the first decode is always discarded
+- [ ] Measured in the 2026-08-11 log, **7 of 7** attachments bound through the normal path (3 at
+  startup, 4 inbound): `decode start ... gen=2`, then `decode start ... gen=3`, then
+  `decode STRANDED ... gen=2`, then `decode done ... gen=3`. The first decode is always wasted —
+  double file I/O and double bitmap work per image. Avatars show the same shape at startup
+  (`gen=1` MISS -> decode, `gen=2` MISS -> decode, `gen=1 ... STALE -> drop`), so the trigger is a
+  systemic double-bind, not attachment-specific.
+- [ ] The one exception was an outgoing `at_0_`-prefixed (optimistic-send) attachment, which decoded
+  once. That asymmetry is the lead.
+- [ ] Performance only — the generation guard is doing its job and the correct image wins every time.
+  Note the first bind already reports `gen=2`, i.e. the holder is bound twice before any decode
+  starts; find who binds it and why, before changing anything.
 
 #### B2b. No UI-layer logic in this codebase is testable
 - [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,

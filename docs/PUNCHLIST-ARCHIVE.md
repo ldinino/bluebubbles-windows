@@ -177,3 +177,48 @@ secret never reaches disk; two migration tests) and a `DependencyInjectionTests`
 resolves the concrete `SettingsService` from the container, since its new credential parameter is
 optional. Verified against a live install: the cleartext value was gone and `[Socket] Connected`
 still succeeded off the DPAPI copy.
+
+## 0.22.x Debug Session 3 — B2: inbound attachment images never rendered
+
+Symptom: an inbound image showed as a bare bubble with only a timestamp. It appeared only after
+clicking "fetch latest" AND switching to another thread and back.
+
+Six suspects were audited against source first; four were refuted and are recorded so they are not
+re-investigated: bubble double-append (`ReconcileVisibleBubblesAsync` never calls `Items.Add`, and
+both `AppendMessageBubbles` call sites dedupe by GUID); `AttachmentHolder` bypassing
+`_bindGeneration` (the generation is bumped and `MediaImage.Source` nulled before the cache probe,
+and `ChatBubble.BuildContent` discards holders rather than reusing them); `ImageLoader` LRU key
+collision (key is `$"{path}|{decodePixelWidth}"`); `TriggerAutoDownload` swallowing errors
+(`DownloadInternalAsync` converts every failure to `State = Error` + `ErrorMessage`).
+
+**Root cause:** `MessagePersistenceHelper` was the only place in the codebase that wrote attachment
+rows, and the live socket save path did not go through it. `SaveMessageCoreAsync` stored
+`HasAttachments = true` with zero rows, so the cache held a message flagged as having an attachment
+with nothing attached. "Fetch latest" fixed the data (it runs `RefreshLatestFromServerAsync` ->
+`MessagePersistenceHelper.SaveMessagesAsync`); the thread switch was needed separately because that
+is what rebuilds `Items` via `LoadMessagesAsync`, which `.Include`s attachments.
+
+**Fix** (PR 4, merged `e318fe1`): the attachment loop was extracted as
+`MessagePersistenceHelper.SaveAttachmentsAsync` — one writer, dedupe unchanged — and
+`SaveMessageCoreAsync` calls it after the message row saves. `FirstAsync` became
+`FirstOrDefaultAsync` + skip (the socket path can run for a message that lost a concurrent-insert
+race) and the `DbUpdateException` catch returns, since the winner owns the attachment write.
+Rejected: routing `SaveMessageCoreAsync` wholesale through `SaveMessagesAsync` — it upserts where
+this path skips on an existing GUID, and `SaveReactionAsync` shares the method.
+
+Notes worth keeping: `AttachmentEntity.Guid` carries a unique index, so the dedupe protects against
+a thrown exception rather than against a duplicate row. Hypothesis (d) — `MessageBubbleViewModel`
+captures attachments at construction and never rebuilds them — is real but off the critical path,
+because `ChatViewModel` copies `e.Message.Attachments` into the in-memory entity for the on-screen
+bubble.
+
+**Confirmed live 2026-08-11**: four inbound images each went toast -> auto-download -> decode ->
+done, including an adversarial run against a deleted-and-recreated thread. No
+`HasAttachments=true but 0 attachment rows` and no re-append warning in the whole session.
+
+### B2a. Verbose logging was dead code
+
+`AppLog.MinLevel` never read `AppSettings.VerboseLogging` at startup and the About > Diagnostics
+toggle was `Visibility="Collapsed"`, so every `AppLog.Debug` in the app — including the pre-existing
+avatar tracing — was dropped unconditionally. Restored in `f973010`; off by default. This is what
+made B2 diagnosable at all, and it is why the toggle should stay.
