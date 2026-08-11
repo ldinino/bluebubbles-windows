@@ -230,11 +230,15 @@ public sealed partial class AttachmentHolder : UserControl
             var cached = Helpers.ImageLoader.TryGetCached(vm.LocalPath, decodeWidth);
             if (cached is not null)
             {
+                BlueBubbles.Core.Services.AppLog.Debug(BlueBubbles.Core.Services.LogCategory.Ui,
+                    $"[attach-diag] cache hit {vm.AttachmentGuid} w={decodeWidth} gen={generation} path={vm.LocalPath}");
                 MediaImage.Source = cached;
                 return;
             }
         }
 
+        BlueBubbles.Core.Services.AppLog.Debug(BlueBubbles.Core.Services.LogCategory.Ui,
+            $"[attach-diag] decode start {vm.AttachmentGuid} w={decodeWidth} gen={generation} path={vm.LocalPath}");
         _ = LoadMediaAsync(vm, vm.LocalPath, decodeWidth, generation);
     }
 
@@ -247,7 +251,12 @@ public sealed partial class AttachmentHolder : UserControl
               ?? await Helpers.ImageLoader.ThumbnailAsync(path, (uint)decodeWidth, imageOnly: true)
             : await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true, cache: true);
 
-        if (Interlocked.Read(ref _bindGeneration) != generation) return;
+        if (Interlocked.Read(ref _bindGeneration) != generation)
+        {
+            BlueBubbles.Core.Services.AppLog.Debug(BlueBubbles.Core.Services.LogCategory.Ui,
+                $"[attach-diag] decode STRANDED {vm.AttachmentGuid} gen={generation} now={Interlocked.Read(ref _bindGeneration)}");
+            return;
+        }
 
         if (bitmap is null)
         {
@@ -255,6 +264,8 @@ public sealed partial class AttachmentHolder : UserControl
             return;
         }
 
+        BlueBubbles.Core.Services.AppLog.Debug(BlueBubbles.Core.Services.LogCategory.Ui,
+            $"[attach-diag] decode done {vm.AttachmentGuid} gen={generation} px={bitmap.PixelWidth}x{bitmap.PixelHeight}");
         MediaImage.Source = bitmap;
     }
 
