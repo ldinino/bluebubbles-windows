@@ -39,15 +39,28 @@
   produces the reported ritual: "fetch latest" runs `RefreshLatestFromServerAsync` →
   `MessagePersistenceHelper.SaveMessagesAsync`, which finally writes the rows; switching threads away
   and back rebuilds `Items` via `LoadMessagesAsync`, which `.Include`s attachments and now finds them.
-- [ ] **Superseded:** hypothesis (d) (bubbles never rebuild their attachments) is real but is *not*
-  the trigger — the bubble has nothing to rebuild *from*, because the rows were never written.
-  Re-evaluate whether (d) still needs its own fix once the write is in place.
-- [ ] **Unexplained and must not be hand-waved:** the `HasAttachments=true but 0 attachment rows` Warn
-  did **not** fire, and no `auto-download start` / `decode start` line appeared at the toast
-  (13:47:20). Either `OnNewMessageReceived` never built a bubble for that message, or the socket
-  payload's `hasAttachments` was false. Resolve by measurement before writing the fix.
+- [x] **FIXED** (PR 4, `852aac3` + `2a6578f`, merged `e318fe1`). The attachment loop was extracted as
+  `MessagePersistenceHelper.SaveAttachmentsAsync` — one writer, dedupe unchanged — and
+  `SaveMessageCoreAsync` now calls it after the message row saves. `FirstAsync` became
+  `FirstOrDefaultAsync` + skip because the socket path can run for a message that lost a
+  concurrent-insert race, and the `DbUpdateException` catch now returns (the winner owns the write).
+  Rejected alternative: routing `SaveMessageCoreAsync` wholesale through `SaveMessagesAsync` — it
+  upserts where this path skips on an existing GUID, and `SaveReactionAsync` shares the method.
+- [x] **Contradiction resolved — no second defect.** The diag lines were silent because the affected
+  chat was not open at the toast, so no `ChatViewModel` existed to build a bubble
+  (`ChatViewModel` early-returns on `!_chatGuids.Contains(chatGuid)`). The 13:48:01 pair of
+  auto-downloads is the thread being opened and picking up both pending images at once.
+- [ ] **Not verified end-to-end.** No one has watched an inbound image render on arrival, with the
+  thread both open and closed. Core-only change, so no app launch was part of its evidence.
+- [ ] **Superseded but still open:** hypothesis (d) (bubbles never rebuild their attachments) is real
+  but off the critical path — `ChatViewModel` copies `e.Message.Attachments` into the in-memory
+  entity, so an on-screen bubble gets attachments from the socket payload. That the payload actually
+  carries them is a source read, **not** measured live. If images still fail with the thread open,
+  (d) is the next suspect.
 - [ ] **Remove or gate the `[attach-diag]` instrumentation once B2 closes.** In particular
   `AppendMessageBubbles` now runs an O(items) LINQ scan per appended message, unconditionally.
+- Note: `AttachmentEntity.Guid` carries a unique index, so the dedupe protects against a thrown
+  exception, not against a duplicate row.
 
 #### B2a. Verbose logging was dead code
 - [x] `AppLog.MinLevel` never read `AppSettings.VerboseLogging` at startup and the About toggle was
