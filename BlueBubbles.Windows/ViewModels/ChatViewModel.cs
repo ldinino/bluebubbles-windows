@@ -739,7 +739,6 @@ public partial class ChatViewModel : ObservableObject
             foreach (var bubble in CreateBubbles(msg, _attachmentCache))
             {
                 Items.Add(bubble);
-                TriggerAutoDownload(bubble);
             }
         }
 
@@ -1511,6 +1510,9 @@ public partial class ChatViewModel : ObservableObject
         }
     }
 
+    /// <summary>Auto-downloads a newly arrived message's attachments. The initial page does NOT go
+    /// through here: those download when their bubble is realized (see <see cref="Controls.AttachmentHolder"/>),
+    /// so the images the user is actually looking at aren't queued behind the whole loaded window.</summary>
     private void TriggerAutoDownload(MessageBubbleViewModel bubble)
     {
         if (!_settings.AutoDownload || !bubble.HasAttachments) return;

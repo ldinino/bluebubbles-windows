@@ -1,4 +1,5 @@
 using BlueBubbles.Windows.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -133,6 +134,10 @@ public sealed partial class AttachmentHolder : UserControl
         {
             case AttachmentState.NotDownloaded:
                 DownloadSizeText.Text = vm.FormattedSize;
+                // Realization-driven auto-download: the list virtualizes, so this fires for what is
+                // on (or near) screen first instead of walking the loaded window oldest-first.
+                if (App.Services.GetService<BlueBubbles.Core.Configuration.AppSettings>()?.AutoDownload == true)
+                    _ = vm.DownloadAsync();
                 break;
             case AttachmentState.Downloading:
                 ProgressText.Text = $"{vm.Progress:F0}%";
