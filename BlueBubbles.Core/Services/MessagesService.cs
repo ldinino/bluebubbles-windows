@@ -322,7 +322,12 @@ public class MessagesService : IMessagesService
         catch (DbUpdateException)
         {
             // Duplicate GUID — another concurrent save won the race
+            return;
         }
+
+        // Without this the live socket path stored HasAttachments = true and zero rows, so an
+        // image only appeared after a sync re-fetched the window (PUNCHLIST B2).
+        await MessagePersistenceHelper.SaveAttachmentsAsync(db, [message], CancellationToken.None);
     }
 
     public async Task<string?> UpdateMessageAsync(Message message)
