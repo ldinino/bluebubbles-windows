@@ -273,6 +273,11 @@ public class ChatsService : IChatsService
             await LinkParticipantsAsync(db, entity, newParticipants);
             await db.SaveChangesAsync();
         }
+
+        // The in-memory list is what the conversation list renders, so a row that exists only in the
+        // DB is invisible. Reload (outside any lock) so the new chat is present, with its participants,
+        // before the caller applies the message that created it.
+        await LoadChatsAsync();
     }
 
     /// <summary>Returns the chat's participants, preferring those already on the payload. The live
@@ -289,8 +294,10 @@ public class ChatsService : IChatsService
             var response = await _api.GetChatAsync(chatData.Guid, withQuery: "participants");
             return response.Data?.Participants ?? [];
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Warn(LogCategory.Api,
+                $"Could not fetch participants for chat {chatData.Guid}: {ex.Message}");
             return [];
         }
     }
@@ -318,11 +325,24 @@ public class ChatsService : IChatsService
         }
     }
 
+    /// <summary>Applies a just-persisted message to the chat's list-visible state (preview,
+    /// timestamp, unread, ordering). Invariant: every exit path raises <see cref="ChatsChanged"/> —
+    /// a silent return here is indistinguishable from "nothing happened" to the conversation list,
+    /// which is what forced users to restart or hit "fetch latest" to see new messages.</summary>
     public async Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         var chat = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chatGuid);
-        if (chat is null) return;
+        if (chat is null)
+        {
+            // The row should have been created by EnsureChatExistsAsync; if it isn't here, either that
+            // failed or another writer is mid-flight. Reload from the DB rather than no-op: it picks up
+            // a concurrently-created row and always raises ChatsChanged so the list re-reads.
+            AppLog.Warn(LogCategory.Socket,
+                $"New message for unknown chat {chatGuid} — reloading chats from the database");
+            await LoadChatsAsync();
+            return;
+        }
 
         // A message arriving for a soft-deleted chat (e.g. one pruned as empty during a prior
         // sync) means it's live again — undo the delete so it resurfaces.

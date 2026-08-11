@@ -247,8 +247,8 @@ public class DependencyInjectionTests
             => Task.FromResult(false);
         public Task SaveIncomingMessageAsync(string chatGuid, BlueBubbles.Core.Models.Message message)
             => Task.CompletedTask;
-        public Task UpdateMessageAsync(BlueBubbles.Core.Models.Message message)
-            => Task.CompletedTask;
+        public Task<string?> UpdateMessageAsync(BlueBubbles.Core.Models.Message message)
+            => Task.FromResult<string?>(null);
         public Task<bool> DeleteMessageAsync(string chatGuid, string messageGuid)
             => Task.FromResult(true);
         public Task<List<BlueBubbles.Core.Data.Entities.AttachmentEntity>> LoadMediaAttachmentsAsync(

@@ -166,6 +166,24 @@ public class MessagesServiceEditTests
     }
 
     [Fact]
+    public async Task UpdateMessage_ReturnsOwningChatGuid_NotJustTheFirstChat()
+    {
+        // The returned GUID is what IncomingMessageProcessor announces to the conversation list, so a
+        // wrong-but-plausible chat (the first row, an off-by-one) is silently as bad as returning null.
+        var factory = TestDbContextFactory.Create();
+        var svc = CreateService(factory);
+        SeedChat(factory, "chat;+decoy");
+        var owner = SeedChat(factory, "chat;+owner");
+
+        await svc.SaveIncomingMessageAsync(owner.Guid, BaseMessage("m4", "hi", false, 1000));
+
+        var guid = await svc.UpdateMessageAsync(BaseMessage("m4", null, false, 1000) with { DateRead = 9000 });
+
+        Assert.Equal("chat;+owner", guid);
+        Assert.Null(await svc.UpdateMessageAsync(BaseMessage("not-cached", "x", false, 1000)));
+    }
+
+    [Fact]
     public async Task Delete_CallsServer_SetsDateDeleted_AndHidesFromLoad()
     {
         var factory = TestDbContextFactory.Create();

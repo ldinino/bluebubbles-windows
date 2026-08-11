@@ -7,7 +7,39 @@
 
 ## Open bugs
 
-*(none)*
+#### B1. New/updated messages don't reach the conversation list until a restart or "fetch latest"
+- [x] Messages persisted fine; the *event contract* was broken. Six causes fixed: silent bare catch in
+  `IncomingMessageProcessor.ProcessAsync`; `ChatsService.HandleNewMessageAsync` no-opping on an unknown
+  chat; `ProcessUpdatedMessageAsync` raising no event; `ConversationListViewModel` never subscribing to
+  `MessagesPersisted`; `EnsureChatExistsAsync` not refreshing the in-memory list; silent participant-fetch
+  failure. `UpdateMessageAsync` now returns the owning chat GUID.
+- Branch `fix/sync-ui-propagation`, PR 3. Verified: clean `build-and-run.ps1` (build 0 errors, 396/396
+  tests, app launched and responding, PID 12256). Negative controls run by me — all four new tests fail
+  on unmutated-away fixes. A mutation of the owning-chat lookup (`ChatId ± 1`) originally **survived**;
+  covered by `UpdateMessage_ReturnsOwningChatGuid_NotJustTheFirstChat` (commit `4fa277d`).
+- [ ] **Not verified end-to-end** — nobody has watched a live inbound message land in the list with the
+  macOS server running. Symptom fix is inferred, not observed.
+- Deliberately unchanged: reactions still raise no persist event (nothing list-visible changes).
+
+#### B2. Attachment images render wrong / not at all
+- [ ] Audit done, not implemented. Suspects: bubble double-append (`AppendMessageBubbles` +
+  `ReconcileVisibleBubblesAsync`; only `AppendNewerMessagesFromDbAsync` dedupes by GUID);
+  `AttachmentHolder`'s sync `TryGetCached` path skipping `_bindGeneration`; `ImageLoader` LRU keyed
+  `(path, width)` colliding; `MessageBubbleViewModel` capturing attachments at creation and never
+  rebuilding; fire-and-forget `TriggerAutoDownload` swallowing errors. `AttachmentCacheService` is
+  correct — leave it alone. Must land after B1 (both touch `ChatViewModel.cs`).
+
+#### B3. OTP toast sometimes has no "Copy code" button
+- [ ] We already emit 5 buttons (Send + 4 reactions) = the Windows maximum, so Windows has no room to
+  inject its own "Copy 123456". Independent of B1/B2. Not implemented.
+
+#### B4. `ConversationListViewModel.OnChatUpdated` is `async void` with an unthrottled full reload
+- [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
+  exception in it is unobserved. Found while reviewing B1; deliberately left out of that PR's scope.
+
+#### B5. Tests write to the real `%LOCALAPPDATA%\BlueBubbles\logs`
+- [ ] Pre-existing: `AppLog` is a static singleton, so the suite pollutes production logs. Harmless,
+  untidy.
 
 ---
 

@@ -325,14 +325,14 @@ public class MessagesService : IMessagesService
         }
     }
 
-    public async Task UpdateMessageAsync(Message message)
+    public async Task<string?> UpdateMessageAsync(Message message)
     {
         await _saveLock.WaitAsync();
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
             var entity = await db.Messages.FirstOrDefaultAsync(m => m.Guid == message.Guid);
-            if (entity is null) return;
+            if (entity is null) return null;
 
             entity.DateRead = message.DateRead;
             entity.DateDelivered = message.DateDelivered;
@@ -352,6 +352,11 @@ public class MessagesService : IMessagesService
                 entity.MessageSummaryInfoJson = Serialize(message.MessageSummaryInfo);
 
             await db.SaveChangesAsync();
+
+            return await db.Chats
+                .Where(c => c.Id == entity.ChatId)
+                .Select(c => c.Guid)
+                .FirstOrDefaultAsync();
         }
         finally
         {

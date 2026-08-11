@@ -427,4 +427,37 @@ public class ChatsServiceTests
         var chat = db.Chats.Single(c => c.Guid == "SMS;+;chat-has-parts");
         Assert.Single(db.ChatParticipants.Where(cp => cp.ChatId == chat.Id));
     }
+
+    [Fact]
+    public async Task EnsureChatExistsAsync_NewChat_AppearsInInMemoryList()
+    {
+        // The conversation list renders the in-memory list, so a chat that exists only in the DB is
+        // invisible until something else forces a reload.
+        var (svc, _, api) = CreateServiceWithApi();
+        api.GetChatFunc = guid => Task.FromResult(new ApiResponse<Chat>(200, "OK",
+            MockChat(guid, [MockHandle("+15551234567")]), null));
+
+        await svc.EnsureChatExistsAsync(MockChat("SMS;+;chat-brand-new", participants: null));
+
+        Assert.Contains(svc.Chats, c => c.Chat.Guid == "SMS;+;chat-brand-new");
+    }
+
+    [Fact]
+    public async Task HandleNewMessageAsync_UnknownChat_StillRaisesChatsChanged()
+    {
+        // Losing the race with the chat's creation must not leave the list un-notified — that is the
+        // "message saved but nothing on screen changed" failure.
+        var (svc, factory) = CreateService();
+        await svc.LoadChatsAsync();
+
+        var raised = 0;
+        svc.ChatsChanged += (_, _) => raised++;
+
+        // The row lands after the in-memory list was loaded, mimicking a concurrent writer.
+        await SeedChat(factory, "chat-late", latestDate: 1000);
+        await svc.HandleNewMessageAsync("chat-missing", "orphan", 2000, false);
+
+        Assert.True(raised > 0, "ChatsChanged was not raised for a message on an unknown chat");
+        Assert.Contains(svc.Chats, c => c.Chat.Guid == "chat-late");
+    }
 }

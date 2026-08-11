@@ -21,6 +21,9 @@ public partial class ConversationListViewModel : ObservableObject
     private List<ConversationTileViewModel> _allTiles = [];
     private List<ConversationTileViewModel> _archivedTiles = [];
 
+    private const int ReloadDebounceMs = 250;
+    private readonly Timer _reloadDebounce;
+
     public ObservableCollection<ConversationTileViewModel> Conversations { get; } = [];
     public ObservableCollection<ConversationTileViewModel> PinnedConversations { get; } = [];
 
@@ -51,11 +54,15 @@ public partial class ConversationListViewModel : ObservableObject
         _appSettings = appSettings;
         SearchQuery = string.Empty;
 
+        _reloadDebounce = new Timer(
+            _ => RunOnUI(() => _ = ReloadFromDatabaseAsync()), null, Timeout.Infinite, Timeout.Infinite);
+
         _appSettings.PropertyChanged += OnAppearanceSettingChanged;
 
         _chatsService.ChatsChanged += (_, _) => RunOnUI(RebuildList);
         _chatsService.ChatUpdated += (_, guid) => RunOnUI(() => RefreshTile(guid));
         _chatsService.ArchivedChatsChanged += (_, _) => RunOnUI(RebuildArchivedList);
+        _chatsService.MessagesPersisted += (_, _) => ScheduleReloadFromDatabase();
         _contacts.ContactsChanged += (_, _) => RunOnUI(RebuildList);
 
         _incomingProcessor.MessageProcessed += OnIncomingMessageProcessed;
@@ -75,6 +82,24 @@ public partial class ConversationListViewModel : ObservableObject
 
         _syncService.SyncStateChanged += (_, syncing) =>
             RunOnUI(() => IsSyncing = syncing);
+    }
+
+    /// <summary>Coalesced reload triggered by <see cref="IChatsService.MessagesPersisted"/>. That event
+    /// is the only one raised by *every* path that writes messages (live socket, delta sync, in-place
+    /// update), but those paths write straight to the database, so the cached list is stale until it is
+    /// re-read. Reloading is what refreshes preview, timestamp, unread badge and ordering in one step;
+    /// it also makes this idempotent with the ChatsChanged the socket path already raises. Debounced
+    /// because a sync batch fires this per chat. Fires on a timer thread, so hop to the UI thread.</summary>
+    private void ScheduleReloadFromDatabase() =>
+        _reloadDebounce.Change(ReloadDebounceMs, Timeout.Infinite);
+
+    private async Task ReloadFromDatabaseAsync()
+    {
+        try { await _chatsService.LoadChatsAsync(); }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Ui, $"Conversation list reload after persist failed: {ex.Message}");
+        }
     }
 
     [RelayCommand]

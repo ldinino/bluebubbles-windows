@@ -43,6 +43,12 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
         _ = Task.Run(ProcessAsync);
     }
 
+    /// <summary>Drains the queue. Invariant: every branch that persists a message must also announce
+    /// it (<see cref="IChatsService.NotifyMessagesPersisted"/> and/or <see cref="MessageProcessed"/>)
+    /// so the conversation list and the open thread refresh without a manual sync. Failures are
+    /// contained per-event to keep the queue alive, but never silently: a swallowed exception here
+    /// means half-persisted data with no UI event, which is exactly the bug class we cannot see
+    /// without a log line.</summary>
     private async Task ProcessAsync()
     {
         await foreach (var evt in _queue.Reader.ReadAllAsync())
@@ -62,9 +68,14 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
                         break;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Swallow to keep the queue processing
+                // Keep draining the queue, but leave a trail: chat + message GUID are what make this
+                // diagnosable after the fact.
+                AppLog.Error(LogCategory.Socket,
+                    $"Failed to process {evt.Type} event " +
+                    $"(chat={evt.Args.Message.Chats?.FirstOrDefault()?.Guid ?? "?"}, " +
+                    $"message={evt.Args.Message.Guid}): {ex}");
             }
         }
     }
@@ -106,7 +117,12 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
 
     private async Task ProcessUpdatedMessageAsync(MessageEventArgs e)
     {
-        await _messagesService.UpdateMessageAsync(e.Message);
+        // An edit / unsend / delivery receipt mutates a row in place, so nothing else announces it.
+        // The update payload usually carries no chat, so take the owning chat from the cached row.
+        var chatGuid = await _messagesService.UpdateMessageAsync(e.Message)
+            ?? e.Message.Chats?.FirstOrDefault()?.Guid;
+        if (chatGuid is not null)
+            _chatsService.NotifyMessagesPersisted(chatGuid);
     }
 
     private async Task ProcessReactionAsync(MessageEventArgs e)
