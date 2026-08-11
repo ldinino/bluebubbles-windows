@@ -64,29 +64,51 @@
 - [ ] The two fields are meant to move together; no misrender case was constructed. Low confidence
   that this is real, recorded so it isn't rediscovered.
 
-#### B3. OTP toast has no "Copy code" button
-- **Still open. Reproduced 2026-08-11** (screenshot): a Google Voice SMS reading
-  `Enter Advanced Access code 123456 online to verify your identity.` produced a toast with the
-  reply box, Send and four tapbacks, and **no copy affordance of any kind**.
-- [x] ~~Cause is the button budget~~ **REFUTED.** A toast allows 5 actions *and* 5 inputs
-  independently, and the OS copy affordance renders in its own row outside both. A harness variant
-  with the exact pre-B3 layout (all five slots full) still showed the pill.
-- [ ] **The "Windows already covers this" conclusion does not follow, and B3 was nearly closed on
-  it.** That conclusion came from a sweep of **ten invented, textbook-shaped** strings
-  (`"...verification code is N"`, `"G-682931 is your Google verification code"`) which showed 9/10
-  agreement. None resembled the real message above, and a sweep of canonical strings systematically
-  *overestimates* a pattern matcher's coverage. We have exactly one real-world observation and it is
-  a Windows **miss**.
-- [x] **Measured**: `OtpDetector.Find("Enter Advanced Access code 123456 online to verify your
-  identity.")` returns `"123456"`. On the one message we have hard evidence for, Windows gives
-  nothing and our detector is correct. (Detector lives on `experiment/otp-toast-windows-affordance`,
-  `98ef65a` — NOT FOR MERGE, kept as the record of these measurements.)
-- [ ] **Next measurement, before any code ships:** stop inventing texts. Run `OtpDetector` across the
-  real local cache (`%LOCALAPPDATA%\BlueBubbles\bluebubbles.db`), extract the texts it flags, and
-  re-run the toast sweep with **those**. That converts "does Windows cover it?" into a real number.
-  A sample of one is not enough to ship a duplicate button on, and not enough to close this either.
-- [ ] Open design question once the number exists: only add our button when Windows would miss it
-  (not detectable at runtime), always add it and accept occasional duplicates, or drop a tapback.
+#### B3. OTP toast has no "Copy code" button — **CLOSED: won't fix, upstream gap**
+- **Decision (2026-08-11, maintainer):** do not ship a client-side OTP detector. Detecting one-time
+  passcodes in notification text is the platform's job; carrying our own heuristic means owning it
+  forever — every phrasing drift and every future false positive — to patch an OS gap that currently
+  affects one sender's phrasing, where the workaround is reading six digits off the toast. Report it
+  to Microsoft instead. **Do not re-litigate this by pointing at the detector's accuracy; the
+  objection is to permanent ownership, not to the code's quality.**
+- **Reproduced** 2026-08-11: a Google Voice SMS reading `Enter Advanced Access code 123456 online to
+  verify your identity.` produced a toast with the reply box, Send and four tapbacks and no copy
+  affordance of any kind.
+- **The measurement, kept because it is the expensive part.** `OtpDetector` was run over the real
+  local cache: **5,639 messages, 5,282 with text, 16 flagged (15 distinct) in 6 shape clusters.**
+  Six representative toasts were then shown and the OS affordance observed by eye:
+
+  | Cluster | Shape | Msgs | Windows affordance |
+  |---|---|---|---|
+  | C1 | sender prefix, `code is N` | 6 | yes |
+  | C2 | warning preamble + `Enter <adj> code N online to ...` | 4 | **no** |
+  | C3 | `Enter <adj> code N online to ...`, no preamble | 2 | **no** |
+  | C4 | scam-warning preamble, terminal `Code is: N` | 1 | yes |
+  | C5 | bracketed sender, code first (`[Walmart] N is your ... code`) | 1 | yes |
+  | C6 | bare canonical (`Your verification code is: N`) | 1 | yes |
+
+  **Windows: 9/15 messages, 4/6 clusters.** The gap is exactly the shape `Enter <adjective> code N`
+  — `code` as the object of an imperative verb with a modifier wedged in. The preamble is
+  irrelevant (C2 and C3 differ only by it and both failed). Both misses are **one sender**
+  (Wells Fargo), so the 40% figure is fragile: one bank rewording its template moves it to 0%.
+- **Refuted along the way, recorded so it is not re-investigated:**
+  - ~~The missing pill is caused by our button budget~~ — a toast allows 5 actions *and* 5 inputs
+    independently, and the OS affordance renders in its own row outside both. A harness variant with
+    all five slots full still showed the pill.
+  - ~~Windows covers this anyway~~ — that came from a sweep of ten *invented*, textbook-shaped
+    strings showing 9/10. Real coverage is 9/15. **Never validate this class of question with
+    invented test data**; canonical strings systematically overestimate a pattern matcher.
+- **Design note for whoever revisits this.** The tempting option — "only add our button when Windows
+  would miss it" — is undeliverable: you cannot ask Windows at runtime whether it will show its
+  pill, so it can only be implemented by modelling the OS heuristic in our code. Its failure mode is
+  the bad one: if the model drifts we suppress our button, Windows shows nothing, and B3 returns
+  silently. Also note the shipping toast already uses 5 of 5 buttons (`Send` + 4 tapbacks), so a
+  Copy button could not simply be added — it would have to replace the tapbacks.
+- **Reopen only if** the gap widens beyond one sender's phrasing (a second, unrelated sender's shape
+  starts failing), or Microsoft declines the report and the affected traffic is materially higher
+  than 9/15.
+- Research branches are the only record of the harness and detector and are **NOT FOR MERGE**:
+  `experiment/otp-toast-windows-affordance` (`98ef65a`), `research/otp-real-corpus` (`b6c8cce`).
 
 #### B4. `ConversationListViewModel.OnChatUpdated` is `async void` with an unthrottled full reload
 - [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
