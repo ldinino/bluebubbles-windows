@@ -38,6 +38,11 @@ public sealed partial class AttachmentHolder : UserControl
     private AttachmentViewModel? _vm;
     private long _bindGeneration;
     private string? _renderedMediaPath;
+    // The path of a decode that has been started but hasn't assigned MediaImage.Source yet. Without
+    // it the early-out below can't see an in-flight decode (Source is still null) and a second
+    // Render -- Loaded arriving after DataContextChanged, or State following LocalPath as a download
+    // completes -- starts a duplicate decode that the generation guard then throws away.
+    private string? _loadingMediaPath;
     private bool _subscribed;
 
     public event EventHandler<AttachmentViewModel>? ImageClicked;
@@ -66,6 +71,7 @@ public sealed partial class AttachmentHolder : UserControl
         // Strand any in-flight decode from the previous binding so it can't land on this one.
         Interlocked.Increment(ref _bindGeneration);
         _renderedMediaPath = null;
+        _loadingMediaPath = null;
         MediaImage.Source = null;
 
         _vm = next;
@@ -136,6 +142,7 @@ public sealed partial class AttachmentHolder : UserControl
                 // Whatever was showing is meaningless now and would sit behind the overlay.
                 MediaImage.Source = null;
                 _renderedMediaPath = null;
+                _loadingMediaPath = null;
                 break;
             case AttachmentState.Cached when isMedia:
                 LoadMedia(vm);
@@ -210,8 +217,9 @@ public sealed partial class AttachmentHolder : UserControl
     {
         if (vm.LocalPath is null) return;
 
-        // Already showing this exact file — don't re-decode (and don't blink it).
-        if (vm.LocalPath == _renderedMediaPath && MediaImage.Source is not null) return;
+        // Already showing this exact file, or already decoding it -- don't re-decode (and don't blink it).
+        if (vm.LocalPath == _renderedMediaPath
+            && (MediaImage.Source is not null || _loadingMediaPath == vm.LocalPath)) return;
 
         var generation = Interlocked.Increment(ref _bindGeneration);
         _renderedMediaPath = vm.LocalPath;
@@ -231,21 +239,32 @@ public sealed partial class AttachmentHolder : UserControl
             if (cached is not null)
             {
                 MediaImage.Source = cached;
+                _loadingMediaPath = null;
                 return;
             }
         }
 
+        _loadingMediaPath = vm.LocalPath;
         _ = LoadMediaAsync(vm, vm.LocalPath, decodeWidth, generation);
     }
 
     private async Task LoadMediaAsync(AttachmentViewModel vm, string path, int decodeWidth, long generation)
     {
-        var bitmap = vm.Category == AttachmentCategory.Video
-            // Decode a real frame through Windows' media pipeline so a video shows its actual
-            // first frame, falling back to the shell thumbnail (never its generic file glyph).
-            ? await Helpers.ImageLoader.VideoFrameAsync(path, (uint)decodeWidth)
-              ?? await Helpers.ImageLoader.ThumbnailAsync(path, (uint)decodeWidth, imageOnly: true)
-            : await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true, cache: true);
+        Microsoft.UI.Xaml.Media.Imaging.BitmapImage? bitmap = null;
+        try
+        {
+            bitmap = vm.Category == AttachmentCategory.Video
+                // Decode a real frame through Windows' media pipeline so a video shows its actual
+                // first frame, falling back to the shell thumbnail (never its generic file glyph).
+                ? await Helpers.ImageLoader.VideoFrameAsync(path, (uint)decodeWidth)
+                  ?? await Helpers.ImageLoader.ThumbnailAsync(path, (uint)decodeWidth, imageOnly: true)
+                : await Helpers.ImageLoader.FromFileAsync(path, decodeWidth, decodeLogical: true, cache: true);
+        }
+        finally
+        {
+            // Only the newest decode owns the field; a stranded one must not clear its successor's.
+            if (Interlocked.Read(ref _bindGeneration) == generation) _loadingMediaPath = null;
+        }
 
         if (Interlocked.Read(ref _bindGeneration) != generation)
             return;
@@ -272,6 +291,7 @@ public sealed partial class AttachmentHolder : UserControl
     {
         Helpers.ImageLoader.Invalidate(path);
         _renderedMediaPath = null;
+        _loadingMediaPath = null;
         vm.MarkUnreadable("Couldn't display this file. It may have downloaded incompletely, "
                           + "or be in a format Windows can't open.");
     }
@@ -288,6 +308,7 @@ public sealed partial class AttachmentHolder : UserControl
         if (_vm is null) return;
         Interlocked.Increment(ref _bindGeneration);
         _renderedMediaPath = null;
+        _loadingMediaPath = null;
         MediaImage.Source = null;
         _ = _vm.RetryAsync();
     }
