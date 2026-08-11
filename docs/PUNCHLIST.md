@@ -22,12 +22,48 @@
 - Deliberately unchanged: reactions still raise no persist event (nothing list-visible changes).
 
 #### B2. Attachment images render wrong / not at all
-- [ ] Audit done, not implemented. Suspects: bubble double-append (`AppendMessageBubbles` +
-  `ReconcileVisibleBubblesAsync`; only `AppendNewerMessagesFromDbAsync` dedupes by GUID);
-  `AttachmentHolder`'s sync `TryGetCached` path skipping `_bindGeneration`; `ImageLoader` LRU keyed
-  `(path, width)` colliding; `MessageBubbleViewModel` capturing attachments at creation and never
-  rebuilding; fire-and-forget `TriggerAutoDownload` swallowing errors. `AttachmentCacheService` is
-  correct — leave it alone. Must land after B1 (both touch `ChatViewModel.cs`).
+- [x] **Research pass merged** (`f973010`). Five suspects measured against source; four struck:
+  - ~~Bubble double-append~~ **refuted** — `ReconcileVisibleBubblesAsync` never calls `Items.Add`, and
+    both `AppendMessageBubbles` call sites dedupe by message GUID first.
+  - ~~`AttachmentHolder` bypasses `_bindGeneration`~~ **refuted** — the generation is bumped and
+    `MediaImage.Source` nulled *before* the cache probe, and `ChatBubble.BuildContent` discards holders
+    and `new`s them rather than reusing one with a different VM. The CLAUDE.md rule is satisfied here.
+  - ~~`ImageLoader` LRU key collision~~ **refuted** — key is `$"{path}|{decodePixelWidth}"`.
+  - ~~`TriggerAutoDownload` swallows errors~~ **benign** — `DownloadInternalAsync` converts every
+    failure to `State = Error` + `ErrorMessage`, which the error overlay surfaces.
+- [ ] **Sole surviving hypothesis:** `MessageBubbleViewModel.Attachments` is `{ get; }`, set once at
+  construction and never rebuilt, while both catch-up paths dedupe on `MessageGuid` — so attachment
+  rows arriving after the bubble exists can never reach the UI. B1 made the traffic worse without
+  making the outcome better. **Not yet observed happening**: it is unconfirmed that the server ever
+  sends `hasAttachments: true` with an empty `attachments` array.
+- [ ] **Human measurement, outstanding.** Launch the current build, About > Diagnostics > Verbose
+  logging on, open a photo chat, scroll, receive a photo; export the log and grep `[attach-diag]`.
+  The `HasAttachments=true but 0 attachment rows` Warn is the direct test of the hypothesis.
+- [ ] The fix, if confirmed, is a rebuild-attachments path on the existing bubble — a third option
+  neither of the two directions I originally posed. Adding a second GUID-dedupe layer is dead weight.
+- [ ] **Remove or gate the `[attach-diag]` instrumentation once B2 closes.** In particular
+  `AppendMessageBubbles` now runs an O(items) LINQ scan per appended message, unconditionally.
+
+#### B2a. Verbose logging was dead code
+- [x] `AppLog.MinLevel` never read `AppSettings.VerboseLogging` at startup and the About toggle was
+  `Visibility="Collapsed"`, so every `AppLog.Debug` in the app — including the existing avatar
+  tracing — was dropped unconditionally. Restored in `f973010`; off by default.
+
+#### B2b. No UI-layer logic in this codebase is testable
+- [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,
+  `MessageBubbleViewModel`, `AttachmentHolder` and `ImageLoader` are unreachable from any test. This
+  is what turned B2 from a fix into a research task, and it will do the same to the next UI bug.
+  Decide whether to add a `net8.0-windows` test project or accept human-only verification for the
+  view layer.
+
+#### B2c. `GetMessagesByGuidsAsync` omits `.Include(m => m.Attachments)`
+- [ ] `LoadMessagesAsync` and `LoadMessagesAfterAsync` include it; this one doesn't. Harmless today
+  (reconcile and reply snippets don't read attachments) but it is exactly the query a B2 fix would
+  reuse, and it would silently return zero attachments.
+
+#### B2d. `ChatBubble.Unloaded` nulls `_currentVm` but not `_renderedContentForVm`
+- [ ] The two fields are meant to move together; no misrender case was constructed. Low confidence
+  that this is real, recorded so it isn't rediscovered.
 
 #### B3. OTP toast sometimes has no "Copy code" button
 - [ ] We already emit 5 buttons (Send + 4 reactions) = the Windows maximum, so Windows has no room to
