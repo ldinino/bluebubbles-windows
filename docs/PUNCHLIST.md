@@ -45,8 +45,16 @@
 - [ ] The one exception was an outgoing `at_0_`-prefixed (optimistic-send) attachment, which decoded
   once. That asymmetry is the lead.
 - [ ] Performance only — the generation guard is doing its job and the correct image wins every time.
-  Note the first bind already reports `gen=2`, i.e. the holder is bound twice before any decode
-  starts; find who binds it and why, before changing anything.
+- [ ] **Correction to an earlier note in this entry:** "the holder is bound twice before any decode
+  starts" was wrong. `gen=2` on the *first* decode is expected — `OnDataContextChanged` increments
+  once and `LoadMedia` increments again. The double-decode is the jump to `gen=3`, i.e. a **second**
+  `LoadMedia` call, not a second bind.
+- [ ] Leading hypothesis, from a source read and **not yet measured**: `LoadMedia`'s early-out is
+  `if (vm.LocalPath == _renderedMediaPath && MediaImage.Source is not null) return;`. While the first
+  decode is still in flight `_renderedMediaPath` is already set but `MediaImage.Source` is still
+  null, so the guard cannot short-circuit and a second call decodes again. That also fits the
+  `at_0_` exception, which took the synchronous cache-hit path and had `Source` assigned before any
+  second call could arrive. Find the second caller before changing the guard.
 
 #### B2b. No UI-layer logic in this codebase is testable
 - [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,
