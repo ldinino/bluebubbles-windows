@@ -178,7 +178,7 @@ resolves the concrete `SettingsService` from the container, since its new creden
 optional. Verified against a live install: the cleartext value was gone and `[Socket] Connected`
 still succeeded off the DPAPI copy.
 
-## 0.22.x Debug Session 3 — B2: inbound attachment images never rendered
+## 0.22.x Debug Session 3 â€” B2: inbound attachment images never rendered
 
 Symptom: an inbound image showed as a bare bubble with only a timestamp. It appeared only after
 clicking "fetch latest" AND switching to another thread and back.
@@ -199,16 +199,16 @@ with nothing attached. "Fetch latest" fixed the data (it runs `RefreshLatestFrom
 is what rebuilds `Items` via `LoadMessagesAsync`, which `.Include`s attachments.
 
 **Fix** (PR 4, merged `e318fe1`): the attachment loop was extracted as
-`MessagePersistenceHelper.SaveAttachmentsAsync` — one writer, dedupe unchanged — and
+`MessagePersistenceHelper.SaveAttachmentsAsync` â€” one writer, dedupe unchanged â€” and
 `SaveMessageCoreAsync` calls it after the message row saves. `FirstAsync` became
 `FirstOrDefaultAsync` + skip (the socket path can run for a message that lost a concurrent-insert
 race) and the `DbUpdateException` catch returns, since the winner owns the attachment write.
-Rejected: routing `SaveMessageCoreAsync` wholesale through `SaveMessagesAsync` — it upserts where
+Rejected: routing `SaveMessageCoreAsync` wholesale through `SaveMessagesAsync` â€” it upserts where
 this path skips on an existing GUID, and `SaveReactionAsync` shares the method.
 
 Notes worth keeping: `AttachmentEntity.Guid` carries a unique index, so the dedupe protects against
-a thrown exception rather than against a duplicate row. Hypothesis (d) — `MessageBubbleViewModel`
-captures attachments at construction and never rebuilds them — is real but off the critical path,
+a thrown exception rather than against a duplicate row. Hypothesis (d) â€” `MessageBubbleViewModel`
+captures attachments at construction and never rebuilds them â€” is real but off the critical path,
 because `ChatViewModel` copies `e.Message.Attachments` into the in-memory entity for the on-screen
 bubble.
 
@@ -219,6 +219,6 @@ done, including an adversarial run against a deleted-and-recreated thread. No
 ### B2a. Verbose logging was dead code
 
 `AppLog.MinLevel` never read `AppSettings.VerboseLogging` at startup and the About > Diagnostics
-toggle was `Visibility="Collapsed"`, so every `AppLog.Debug` in the app — including the pre-existing
-avatar tracing — was dropped unconditionally. Restored in `f973010`; off by default. This is what
+toggle was `Visibility="Collapsed"`, so every `AppLog.Debug` in the app â€” including the pre-existing
+avatar tracing â€” was dropped unconditionally. Restored in `f973010`; off by default. This is what
 made B2 diagnosable at all, and it is why the toggle should stay.
