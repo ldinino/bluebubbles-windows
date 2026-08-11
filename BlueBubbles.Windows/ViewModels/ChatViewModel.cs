@@ -948,11 +948,6 @@ public partial class ChatViewModel : ObservableObject
     /// callers own typing-bubble / reply-resolution / scroll side effects.</summary>
     private List<MessageBubbleViewModel> AppendMessageBubbles(MessageEntity entity)
     {
-        // B2 diagnostic: appending a GUID that is already on screen IS the double-append symptom.
-        if (Items.OfType<MessageBubbleViewModel>().Any(b => b.MessageGuid == entity.Guid))
-            AppLog.Warn(LogCategory.Ui,
-                $"[attach-diag] AppendMessageBubbles re-appending already-shown GUID {entity.Guid}");
-
         var msgDate = entity.DateCreated.HasValue
             ? DateTimeOffset.FromUnixTimeMilliseconds(entity.DateCreated.Value).LocalDateTime.Date
             : (DateTime?)null;
@@ -1060,16 +1055,14 @@ public partial class ChatViewModel : ObservableObject
             .Select(b => b.MessageGuid)
             .ToHashSet();
 
-        var appended = 0;
+        var appended = false;
         foreach (var msg in newer)
         {
             if (shownGuids.Contains(msg.Guid)) continue;
             AppendMessageBubbles(msg);
-            appended++;
+            appended = true;
         }
-        AppLog.Debug(LogCategory.Ui,
-            $"[attach-diag] AppendNewerMessagesFromDb: {newer.Count} candidates, {appended} appended, {newer.Count - appended} deduped");
-        if (appended == 0) return;
+        if (!appended) return;
 
         await ResolveReplySnippetsAsync();
         NewMessageAppended?.Invoke(this, EventArgs.Empty);
@@ -1089,9 +1082,6 @@ public partial class ChatViewModel : ObservableObject
         var entities = await _messagesService.GetMessagesByGuidsAsync(guids);
         var reactions = await _messagesService.LoadReactionsAsync(guids);
         if (_chatGuid != chatGuid) return;
-
-        AppLog.Debug(LogCategory.Ui,
-            $"[attach-diag] ReconcileVisibleBubbles: {guids.Count} visible GUIDs, {entities.Count} rows fetched");
 
         var byGuid = entities.ToDictionary(m => m.Guid);
 
@@ -1527,8 +1517,6 @@ public partial class ChatViewModel : ObservableObject
         foreach (var att in bubble.Attachments!)
         {
             if (att.State != AttachmentState.NotDownloaded) continue;
-            AppLog.Debug(LogCategory.Ui,
-                $"[attach-diag] auto-download start {att.AttachmentGuid} on {bubble.MessageGuid}");
             _ = att.DownloadAsync();
         }
     }

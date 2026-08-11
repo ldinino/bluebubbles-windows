@@ -257,13 +257,6 @@ public partial class MessageBubbleViewModel : ObservableObject
         MessageEntity message, IContactResolverService contacts,
         bool isGroup, IAttachmentCacheService? attachmentCache = null)
     {
-        // B2 diagnostic: a message the server flagged as having attachments but whose attachment
-        // rows are absent produces a bubble that can never gain them (bubbles capture attachments at
-        // construction and are never rebuilt). Logged at Warn so it shows without raising verbosity.
-        if (message.HasAttachments && message.Attachments.Count == 0)
-            AppLog.Warn(LogCategory.Ui,
-                $"[attach-diag] bubble built for {message.Guid} with HasAttachments=true but 0 attachment rows");
-
         var rawText = message.Text;
         var cleanText = StripReplacementChars(rawText);
 
