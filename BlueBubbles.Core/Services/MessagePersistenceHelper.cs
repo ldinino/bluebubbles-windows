@@ -122,11 +122,35 @@ internal static class MessagePersistenceHelper
 
         await db.SaveChangesAsync(ct);
 
+        await SaveAttachmentsAsync(db, messages, ct);
+
+        if (latestDate.HasValue)
+        {
+            var chatEntity = await db.Chats.FindAsync([chatId], ct);
+            if (chatEntity is not null &&
+                (chatEntity.LatestMessageDate is null || latestDate > chatEntity.LatestMessageDate))
+            {
+                chatEntity.LatestMessageDate = latestDate;
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        return (oldestDate, latestDate, maxRowId);
+    }
+
+    /// <summary>The single writer of attachment rows. Every persist path (bulk sync, window
+    /// reconcile, live socket save) must go through here so the GUID dedupe below stays the one
+    /// rule that keeps a re-fetched window from duplicating rows. Requires the owning message rows
+    /// to already be saved.</summary>
+    public static async Task SaveAttachmentsAsync(
+        BlueBubblesDbContext db, IEnumerable<Message> messages, CancellationToken ct)
+    {
         foreach (var msg in messages)
         {
             if (msg.Attachments is null or { Count: 0 }) continue;
 
-            var msgEntity = await db.Messages.FirstAsync(m => m.Guid == msg.Guid, ct);
+            var msgEntity = await db.Messages.FirstOrDefaultAsync(m => m.Guid == msg.Guid, ct);
+            if (msgEntity is null) continue;
 
             foreach (var att in msg.Attachments)
             {
@@ -153,19 +177,6 @@ internal static class MessagePersistenceHelper
         }
 
         await db.SaveChangesAsync(ct);
-
-        if (latestDate.HasValue)
-        {
-            var chatEntity = await db.Chats.FindAsync([chatId], ct);
-            if (chatEntity is not null &&
-                (chatEntity.LatestMessageDate is null || latestDate > chatEntity.LatestMessageDate))
-            {
-                chatEntity.LatestMessageDate = latestDate;
-                await db.SaveChangesAsync(ct);
-            }
-        }
-
-        return (oldestDate, latestDate, maxRowId);
     }
 
     private static string? Serialize<T>(T? value) where T : class =>

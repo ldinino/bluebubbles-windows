@@ -291,6 +291,89 @@ public class MessagesServiceTests
         }
     }
 
+    private static Attachment MakeAttachment(string guid, string? mime = "image/jpeg") =>
+        new(42, guid, "public.jpeg", mime, false, "IMG_0001.JPEG", 1234, 1155, 662, false, null);
+
+    // PUNCHLIST B2: the live socket path stored HasAttachments = true and zero attachment rows, so
+    // an inbound image only appeared once a sync re-fetched the window.
+    [Fact]
+    public async Task SaveIncoming_WithAttachment_PersistsAttachmentRowOnTheMessage()
+    {
+        var (svc, factory, _) = CreateService();
+        var chat = SeedChat(factory);
+
+        var message = MakeMessage("msg-att", "look at this") with
+        {
+            HasAttachments = true,
+            Attachments = [MakeAttachment("att-1")]
+        };
+
+        await svc.SaveIncomingMessageAsync(chat.Guid, message);
+
+        using var db = factory.CreateDbContext();
+        var saved = db.Messages.Single(m => m.Guid == "msg-att");
+        var att = Assert.Single(db.Attachments.Where(a => a.Guid == "att-1").ToList());
+        Assert.Equal(saved.Id, att.MessageId);
+        Assert.Equal("image/jpeg", att.MimeType);
+        Assert.Equal("IMG_0001.JPEG", att.TransferName);
+        Assert.Equal(662, att.Width);
+        Assert.Equal(1155, att.Height);
+    }
+
+    // The server is truth and a re-fetched window is authoritative for its range, so the socket save
+    // must reuse the helper's GUID dedupe rather than adding a duplicate row for the same attachment.
+    [Fact]
+    public async Task SaveIncoming_AttachmentAlreadyStored_DoesNotDuplicateTheRow()
+    {
+        var (svc, factory, _) = CreateService();
+        var chat = SeedChat(factory);
+
+        using (var db = factory.CreateDbContext())
+        {
+            var existing = new MessageEntity { Guid = "msg-other", ChatId = chat.Id, DateCreated = 1000 };
+            db.Messages.Add(existing);
+            db.SaveChanges();
+            db.Attachments.Add(new AttachmentEntity { Guid = "att-1", MessageId = existing.Id });
+            db.SaveChanges();
+        }
+
+        var message = MakeMessage("msg-att", "look at this") with
+        {
+            HasAttachments = true,
+            Attachments = [MakeAttachment("att-1")]
+        };
+
+        await svc.SaveIncomingMessageAsync(chat.Guid, message);
+
+        using var db2 = factory.CreateDbContext();
+        Assert.Single(db2.Attachments.Where(a => a.Guid == "att-1").ToList());
+    }
+
+    // The socket save and the server re-fetch share one attachment writer, so the bulk path needs a
+    // guard of its own — otherwise a change made for the socket path can silently gut sync.
+    [Fact]
+    public async Task RefreshLatest_PersistsAttachmentRowsFromTheServerWindow()
+    {
+        var serverMsg = MakeMessage("msg-sync-att", "photo", null, 1000) with
+        {
+            HasAttachments = true,
+            Attachments = [MakeAttachment("att-sync")]
+        };
+        var api = new SyncMockApiService([], new Dictionary<string, List<Message>>
+        {
+            ["chat-sa"] = [serverMsg]
+        });
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-sa");
+
+        await svc.RefreshLatestFromServerAsync(chat.Id, "chat-sa");
+
+        using var db = factory.CreateDbContext();
+        var msg = db.Messages.Single(m => m.Guid == "msg-sync-att");
+        var att = Assert.Single(db.Attachments.Where(a => a.Guid == "att-sync").ToList());
+        Assert.Equal(msg.Id, att.MessageId);
+    }
+
     [Fact]
     public async Task RefreshLatest_PreservesLocalBookmark_StillAppliesServerText()
     {
