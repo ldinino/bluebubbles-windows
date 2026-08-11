@@ -35,7 +35,11 @@ public interface IMessagesService
     /// can be made fully correct after an offline window. Returns true if the server returned messages.</summary>
     Task<bool> RefreshLatestFromServerAsync(int chatId, string chatGuid, int limit = 50, CancellationToken ct = default);
     Task SaveIncomingMessageAsync(string chatGuid, Message message);
-    Task UpdateMessageAsync(Message message);
+
+    /// <summary>Applies an in-place server update (edit, unsend, delivery/read receipt) to the cached
+    /// row. Returns the GUID of the chat that owns the message, or null when the message isn't cached,
+    /// so the caller can announce the persist for that chat.</summary>
+    Task<string?> UpdateMessageAsync(Message message);
 
     /// <summary>Deletes the message on the server (which removes it from Messages on the Mac — note
     /// this is a delete, not an unsend; the recipient's copy is unaffected), then soft-deletes it

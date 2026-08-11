@@ -351,6 +351,102 @@ public class IncomingMessageProcessorTests
         Assert.Single(msgSvc.SavedReactions);
         Assert.Empty(notifSvc.Notifications);
     }
+
+    [Fact]
+    public async Task UpdatedMessage_AnnouncesPersistForOwningChat()
+    {
+        var (processor, handler, msgSvc, chatsSvc) = CreateProcessor();
+        msgSvc.UpdatedMessageChatGuid = "iMessage;-;+11234567890";
+        processor.Start();
+
+        var persisted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chatsSvc.MessagesPersisted += (_, _) => persisted.TrySetResult();
+
+        handler.HandleEvent(SocketEvents.UpdatedMessage, JsonSerializer.Deserialize<JsonElement>("""
+        {
+            "data": {
+                "originalROWID": 7,
+                "guid": "msg-edited",
+                "text": "Edited text",
+                "isFromMe": true,
+                "error": 0,
+                "isDelivered": true,
+                "hasDdResults": false,
+                "itemType": 0,
+                "groupActionType": 0,
+                "hasAttachments": false,
+                "hasReactions": false,
+                "hasApplePayloadData": false,
+                "wasDeliveredQuietly": false,
+                "didNotifyRecipient": false,
+                "isBookmarked": false
+            }
+        }
+        """), "Test");
+
+        await Task.WhenAny(persisted.Task, Task.Delay(3000));
+        Assert.True(persisted.Task.IsCompleted, "MessagesPersisted was not raised for an update");
+        Assert.Equal("iMessage;-;+11234567890", Assert.Single(chatsSvc.PersistedNotifications));
+    }
+
+    [Fact]
+    public async Task FailedEvent_IsLoggedAndQueueKeepsDraining()
+    {
+        var (processor, handler, msgSvc, _) = CreateProcessor();
+        msgSvc.ThrowOnNextSave = true;
+
+        // Capture live rather than reading AppLog.Entries: that ring buffer is shared with every
+        // other test running in parallel and can evict our line before we look.
+        var logged = new List<string>();
+        void OnEntry(string entry) { lock (logged) logged.Add(entry); }
+        AppLog.EntryAdded += OnEntry;
+        try
+        {
+            processor.Start();
+
+            handler.HandleEvent(SocketEvents.NewMessage, NewMessageJson("msg-boom"), "Test");
+            handler.HandleEvent(SocketEvents.NewMessage, NewMessageJson("msg-after-boom"), "Test");
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (msgSvc.SavedMessages.Count == 0 && DateTime.UtcNow < deadline)
+                await Task.Delay(50);
+
+            // The failing event must not kill the reader loop.
+            Assert.Equal("msg-after-boom", Assert.Single(msgSvc.SavedMessages).Message.Guid);
+
+            // ...and the failure must not be silent.
+            lock (logged)
+                Assert.Contains(logged, e => e.Contains("Failed to process") && e.Contains("msg-boom"));
+        }
+        finally
+        {
+            AppLog.EntryAdded -= OnEntry;
+        }
+    }
+
+    private static JsonElement NewMessageJson(string guid)
+        => JsonSerializer.Deserialize<JsonElement>($$"""
+        {
+            "data": {
+                "guid": "{{guid}}",
+                "text": "Body",
+                "isFromMe": false,
+                "error": 0,
+                "isDelivered": true,
+                "hasDdResults": false,
+                "itemType": 0,
+                "groupActionType": 0,
+                "hasAttachments": false,
+                "hasReactions": false,
+                "hasApplePayloadData": false,
+                "wasDeliveredQuietly": false,
+                "didNotifyRecipient": false,
+                "isBookmarked": false,
+                "handle": { "originalROWID": 1, "address": "+11234567890", "service": "iMessage" },
+                "chats": [{ "guid": "iMessage;-;+11234567890", "isArchived": false, "isPinned": false, "hasUnreadMessage": false, "lockChatName": false, "lockChatIcon": false }]
+            }
+        }
+        """);
 }
 
 internal class NoOpNotificationService : INotificationService
@@ -390,16 +486,30 @@ internal class RecordingMessagesService : IMessagesService
         int chatId, string chatGuid, int limit = 50, CancellationToken ct = default)
         => Task.FromResult(false);
 
+    /// <summary>When set, the next call to <see cref="SaveIncomingMessageAsync"/> throws — used to prove
+    /// the processor logs the failure and keeps draining the queue.</summary>
+    public bool ThrowOnNextSave { get; set; }
+
     public Task SaveIncomingMessageAsync(string chatGuid, Message message)
     {
+        if (ThrowOnNextSave)
+        {
+            ThrowOnNextSave = false;
+            throw new InvalidOperationException("injected save failure");
+        }
+
         SavedMessages.Add((chatGuid, message));
         return Task.CompletedTask;
     }
 
-    public Task UpdateMessageAsync(Message message)
+    /// <summary>Chat GUID handed back by <see cref="UpdateMessageAsync"/>, standing in for the owning
+    /// chat the real service looks up from the cached row.</summary>
+    public string? UpdatedMessageChatGuid { get; set; }
+
+    public Task<string?> UpdateMessageAsync(Message message)
     {
         UpdatedMessages.Add(message);
-        return Task.CompletedTask;
+        return Task.FromResult(UpdatedMessageChatGuid);
     }
 
     public List<string> DeletedGuids { get; } = [];
