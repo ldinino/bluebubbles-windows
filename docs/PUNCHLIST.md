@@ -31,16 +31,21 @@
   - ~~`ImageLoader` LRU key collision~~ **refuted** — key is `$"{path}|{decodePixelWidth}"`.
   - ~~`TriggerAutoDownload` swallows errors~~ **benign** — `DownloadInternalAsync` converts every
     failure to `State = Error` + `ErrorMessage`, which the error overlay surfaces.
-- [ ] **Sole surviving hypothesis:** `MessageBubbleViewModel.Attachments` is `{ get; }`, set once at
-  construction and never rebuilt, while both catch-up paths dedupe on `MessageGuid` — so attachment
-  rows arriving after the bubble exists can never reach the UI. B1 made the traffic worse without
-  making the outcome better. **Not yet observed happening**: it is unconfirmed that the server ever
-  sends `hasAttachments: true` with an empty `attachments` array.
-- [ ] **Human measurement, outstanding.** Launch the current build, About > Diagnostics > Verbose
-  logging on, open a photo chat, scroll, receive a photo; export the log and grep `[attach-diag]`.
-  The `HasAttachments=true but 0 attachment rows` Warn is the direct test of the hypothesis.
-- [ ] The fix, if confirmed, is a rebuild-attachments path on the existing bubble — a third option
-  neither of the two directions I originally posed. Adding a second GUID-dedupe layer is dead weight.
+- [ ] **ROOT CAUSE FOUND (2026-08-11), from the first live measurement.** The live socket path never
+  writes attachment rows. `MessagePersistenceHelper.cs:137` (`db.Attachments.Add(new AttachmentEntity`)
+  is the **only** place in the codebase that persists them, and `SaveIncomingMessageAsync` →
+  `SaveMessageCoreAsync` does not go through it — it writes `HasAttachments = true` and zero rows. So
+  the cache holds a message flagged as having an attachment with nothing attached. This exactly
+  produces the reported ritual: "fetch latest" runs `RefreshLatestFromServerAsync` →
+  `MessagePersistenceHelper.SaveMessagesAsync`, which finally writes the rows; switching threads away
+  and back rebuilds `Items` via `LoadMessagesAsync`, which `.Include`s attachments and now finds them.
+- [ ] **Superseded:** hypothesis (d) (bubbles never rebuild their attachments) is real but is *not*
+  the trigger — the bubble has nothing to rebuild *from*, because the rows were never written.
+  Re-evaluate whether (d) still needs its own fix once the write is in place.
+- [ ] **Unexplained and must not be hand-waved:** the `HasAttachments=true but 0 attachment rows` Warn
+  did **not** fire, and no `auto-download start` / `decode start` line appeared at the toast
+  (13:47:20). Either `OnNewMessageReceived` never built a bubble for that message, or the socket
+  payload's `hasAttachments` was false. Resolve by measurement before writing the fix.
 - [ ] **Remove or gate the `[attach-diag]` instrumentation once B2 closes.** In particular
   `AppendMessageBubbles` now runs an O(items) LINQ scan per appended message, unconditionally.
 
