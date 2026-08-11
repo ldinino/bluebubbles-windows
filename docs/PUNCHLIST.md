@@ -26,11 +26,14 @@
   decode -> done, including an adversarial run against a deleted-and-recreated thread. No
   `HasAttachments=true but 0 attachment rows` and no re-append Warn in the whole session.
 
-#### B2e. Remove or gate the `[attach-diag]` instrumentation
-- [ ] B2 is closed, so the diagnostics have served their purpose. `AppendMessageBubbles` still runs
-  an O(items) LINQ scan per appended message, unconditionally, purely to feed a Warn.
-- [ ] Keep the `VerboseLogging -> AppLog.MinLevel` restore and the About toggle (B2a) — those are the
-  reason B2 was diagnosable at all. Only the `[attach-diag]` lines are in scope.
+#### B2e. Remove the `[attach-diag]` instrumentation — **DONE**
+- [x] Removed in `b609d4a`, merged `2cdd29e`. Deletion-only: 3 files, 3 insertions / 32 deletions;
+  `MessageBubbleViewModel.cs` resolves back to its pre-instrumentation blob `b635787`. The O(items)
+  `Any(...)` scan in `AppendMessageBubbles` was deleted wholesale, not just its log line, and
+  `int appended` reverted to `bool` with control flow unchanged. Verified: 0 `attach-diag` matches
+  left in source, clean `build-and-run.ps1`, 399/399, app launched.
+- [x] B2a keepers confirmed intact: `AppLog.MinLevel` in `App.xaml.cs` and the "Verbose logging"
+  card in `AboutSettingsPage.xaml`. The pre-existing `Avatar[...]` traces were not touched.
 
 #### B2f. Every attachment image is decoded twice, and the first decode is always discarded
 - [ ] Measured in the 2026-08-11 log, **7 of 7** attachments bound through the normal path (3 at
@@ -61,9 +64,29 @@
 - [ ] The two fields are meant to move together; no misrender case was constructed. Low confidence
   that this is real, recorded so it isn't rediscovered.
 
-#### B3. OTP toast sometimes has no "Copy code" button
-- [ ] We already emit 5 buttons (Send + 4 reactions) = the Windows maximum, so Windows has no room to
-  inject its own "Copy 123456". Independent of B1/B2. Not implemented.
+#### B3. OTP toast has no "Copy code" button
+- **Still open. Reproduced 2026-08-11** (screenshot): a Google Voice SMS reading
+  `Enter Advanced Access code 123456 online to verify your identity.` produced a toast with the
+  reply box, Send and four tapbacks, and **no copy affordance of any kind**.
+- [x] ~~Cause is the button budget~~ **REFUTED.** A toast allows 5 actions *and* 5 inputs
+  independently, and the OS copy affordance renders in its own row outside both. A harness variant
+  with the exact pre-B3 layout (all five slots full) still showed the pill.
+- [ ] **The "Windows already covers this" conclusion does not follow, and B3 was nearly closed on
+  it.** That conclusion came from a sweep of **ten invented, textbook-shaped** strings
+  (`"...verification code is N"`, `"G-682931 is your Google verification code"`) which showed 9/10
+  agreement. None resembled the real message above, and a sweep of canonical strings systematically
+  *overestimates* a pattern matcher's coverage. We have exactly one real-world observation and it is
+  a Windows **miss**.
+- [x] **Measured**: `OtpDetector.Find("Enter Advanced Access code 123456 online to verify your
+  identity.")` returns `"123456"`. On the one message we have hard evidence for, Windows gives
+  nothing and our detector is correct. (Detector lives on `experiment/otp-toast-windows-affordance`,
+  `98ef65a` — NOT FOR MERGE, kept as the record of these measurements.)
+- [ ] **Next measurement, before any code ships:** stop inventing texts. Run `OtpDetector` across the
+  real local cache (`%LOCALAPPDATA%\BlueBubbles\bluebubbles.db`), extract the texts it flags, and
+  re-run the toast sweep with **those**. That converts "does Windows cover it?" into a real number.
+  A sample of one is not enough to ship a duplicate button on, and not enough to close this either.
+- [ ] Open design question once the number exists: only add our button when Windows would miss it
+  (not detectable at runtime), always add it and accept occasional duplicates, or drop a tapback.
 
 #### B4. `ConversationListViewModel.OnChatUpdated` is `async void` with an unthrottled full reload
 - [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
