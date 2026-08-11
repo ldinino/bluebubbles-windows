@@ -56,7 +56,17 @@
   `at_0_` exception, which took the synchronous cache-hit path and had `Source` assigned before any
   second call could arrive. Find the second caller before changing the guard.
 
-#### B2b. No UI-layer logic in this codebase is testable
+#### B2g. Images decode oldest-first, so the ones you are looking at arrive last
+- [ ] Opening a thread scrolls to the newest message, but decoding appears to start at the oldest
+  bubble and work forward, so the images actually on screen are the last to appear. Reads as the app
+  being slow even though total work is unchanged. Perceived performance only.
+- [ ] Dispatched with B2f (same file, same pass) but it is a **separate defect** — B2f is wasted work,
+  this is work in the wrong order. Fixing one does not fix the other.
+- [ ] The target is **visible-first**, not merely reversed: reversing is only a proxy that holds while
+  the user is at the bottom, and breaks the moment they scroll up. Worth checking whether off-screen
+  bubbles are decoding at all — if they are, the message list may not be virtualizing, which would be
+  the more valuable finding.
+
 - [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,
   `MessageBubbleViewModel`, `AttachmentHolder` and `ImageLoader` are unreachable from any test. This
   is what turned B2 from a fix into a research task, and it will do the same to the next UI bug.
