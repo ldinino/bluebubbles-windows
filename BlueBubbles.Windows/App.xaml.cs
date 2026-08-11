@@ -52,12 +52,8 @@ public partial class App : Application
         var settingsService = Services.GetRequiredService<ISettingsService>();
         settingsService.Load();
 
-        // Verbose ("Debug") logging is dormant: the About > Diagnostics toggle is hidden and the log
-        // stays at its Info default, so the avatar flicker tracing stays off. To re-light it while
-        // debugging, un-hide VerboseLoggingToggle in AboutSettingsPage.xaml (flipping it sets
-        // AppLog.MinLevel live) and, for it to persist across launches, restore the line that reads
-        // AppSettings.VerboseLogging into AppLog.MinLevel here.
         var appSettings = Services.GetRequiredService<AppSettings>();
+        AppLog.MinLevel = appSettings.VerboseLogging ? LogLevel.Debug : LogLevel.Info;
 
         // Restore the saved server password (DPAPI-encrypted file via CredentialService — NOT
         // PasswordVault, which needs package identity) into ServerConfiguration.
