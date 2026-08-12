@@ -40,9 +40,7 @@ public partial class AppSettings : ObservableObject
     [ObservableProperty] public partial bool AutoDownload { get; set; }
     [ObservableProperty] public partial bool SendWithReturn { get; set; } = true;
     [ObservableProperty] public partial bool ShowDeliveryTimestamps { get; set; }
-    [ObservableProperty] public partial bool StatusIndicatorsOnChats { get; set; }
     [ObservableProperty] public partial int SendDelay { get; set; }
-    [ObservableProperty] public partial bool ScrollToLastUnread { get; set; }
 
     // Notifications
     [ObservableProperty] public partial bool NotifyOnChatList { get; set; }

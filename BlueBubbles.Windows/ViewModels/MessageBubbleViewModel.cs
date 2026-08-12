@@ -21,10 +21,6 @@ public partial class MessageBubbleViewModel : ObservableObject
     public bool IsFromMe { get; }
     public string? SenderName { get; }
     public string? SenderInitials { get; }
-
-    /// <summary>Stable per-contact key for "Colorful bubbles" tinting (incoming only): the sender's
-    /// address. Lets a contact's bubbles read the same color as their avatar.</summary>
-    public string? SenderColorKey { get; }
     public long DateCreated { get; }
     public bool IsEmojiOnly { get; }
     public List<AttachmentViewModel>? Attachments { get; }
@@ -202,8 +198,6 @@ public partial class MessageBubbleViewModel : ObservableObject
             SenderName = contacts.GetDisplayName(message.Handle.Address);
             SenderInitials = contacts.GetInitials(SenderName);
         }
-
-        SenderColorKey = message.IsFromMe ? null : message.Handle?.Address;
 
         if (includeAttachments && attachmentCache is not null && message.Attachments.Count > 0)
         {

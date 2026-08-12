@@ -75,7 +75,7 @@ public sealed partial class ChatPage : Page
             await _vm.LoadChatAsync(tile);
             MessagesList.ItemsSource = _vm.Items;
             MessagesList.UpdateLayout();
-            ScrollToInitialPosition();
+            ScrollToBottom();
             MessagesList.Opacity = 1;
             _suppressScrollLoadMore = false;
 
@@ -394,23 +394,6 @@ public sealed partial class ChatPage : Page
     {
         if (_vm.Items.Count > 0)
             MessagesList.ScrollIntoView(_vm.Items[^1]);
-    }
-
-    /// <summary>Opens the thread at the bottom, or — when "Scroll to last unread" is enabled and the
-    /// chat has unread messages — at the first unread message.</summary>
-    private void ScrollToInitialPosition()
-    {
-        if (_settings.ScrollToLastUnread && _vm.FirstUnreadGuid is { } guid)
-        {
-            var target = _vm.Items.OfType<MessageBubbleViewModel>()
-                .FirstOrDefault(b => b.MessageGuid == guid);
-            if (target is not null)
-            {
-                MessagesList.ScrollIntoView(target, ScrollIntoViewAlignment.Leading);
-                return;
-            }
-        }
-        ScrollToBottom();
     }
 
     private bool IsNearBottom()

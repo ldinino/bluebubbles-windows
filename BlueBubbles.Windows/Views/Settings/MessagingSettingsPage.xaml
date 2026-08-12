@@ -31,16 +31,6 @@
                 <ToggleSwitch IsOn="{x:Bind Settings.ShowDeliveryTimestamps, Mode=TwoWay}" />
             </tk:SettingsCard>
 
-            <tk:SettingsCard Header="Send/receive indicators on chat list"
-                             Description="Show delivery status on conversation tiles">
-                <ToggleSwitch IsOn="{x:Bind Settings.StatusIndicatorsOnChats, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
-            <tk:SettingsCard Header="Scroll to last unread"
-                             Description="Open conversations at the first unread message">
-                <ToggleSwitch IsOn="{x:Bind Settings.ScrollToLastUnread, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
             <tk:SettingsCard Header="Send delay"
                              Description="Wait before sending so you can cancel (seconds)">
                 <NumberBox x:Name="SendDelayBox"
