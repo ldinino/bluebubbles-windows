@@ -35,7 +35,8 @@ function Write-Fail([string]$m) { Write-Host "    $m"   -ForegroundColor Red }
 function Stop-BlueBubbles {
     $procs = Get-Process -Name 'BlueBubbles.Windows' -ErrorAction SilentlyContinue
     if ($procs) {
-        Write-Warn "Stopping $($procs.Count) running BlueBubbles instance(s) to release file locks..."
+        # @() because a single Process is a scalar, and under Set-StrictMode a scalar has no .Count.
+        Write-Warn "Stopping $(@($procs).Count) running BlueBubbles instance(s) to release file locks..."
         $procs | Stop-Process -Force -ErrorAction SilentlyContinue
         # Give the OS a beat to close the handles before we delete.
         Start-Sleep -Milliseconds 500
