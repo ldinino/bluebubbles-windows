@@ -497,6 +497,32 @@ public class ChatsServiceTests
     }
 
     [Fact]
+    public async Task ApplyChatUpdateAsync_PayloadWithoutUnreadFlag_DoesNotClearTheUnreadBadge()
+    {
+        // A rename payload is deserialized straight off the wire. `hasUnreadMessage` is a
+        // non-nullable bool, so a payload that omits it yields false -- and ApplyServerOwnedFields
+        // copies it. If that lands, renaming a group silently marks it read.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-unread", "Old Name", "+15551112222");
+        using (var seed = factory.CreateDbContext())
+        {
+            seed.Chats.Single(c => c.Guid == "iMessage;+;chat-unread").HasUnreadMessage = true;
+            seed.SaveChanges();
+        }
+
+        var fromWire = System.Text.Json.JsonSerializer.Deserialize<Chat>("""
+            { "guid": "iMessage;+;chat-unread", "displayName": "New Name", "service": "iMessage" }
+            """, BlueBubbles.Core.Utils.JsonDefaults.Options)!;
+
+        await svc.ApplyChatUpdateAsync(fromWire);
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "iMessage;+;chat-unread");
+        Assert.Equal("New Name", chat.DisplayName);
+        Assert.True(chat.HasUnreadMessage, "renaming a group cleared its unread badge");
+    }
+
+    [Fact]
     public async Task ApplyChatUpdateAsync_GroupNameChange_PersistsNewDisplayName()
     {
         // The socket event is the only notice of a rename made on another device; without a write the
