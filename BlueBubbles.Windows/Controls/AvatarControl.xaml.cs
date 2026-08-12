@@ -95,7 +95,10 @@ public sealed partial class AvatarControl : UserControl
             if (_settings is not null)
                 _settings.PropertyChanged += OnSettingsChanged;
         }
-        RefreshLayout();
+        // Queued, not direct: the binding's property sets have usually already queued a relayout
+        // that has not run yet. Calling RefreshLayout here instead would run it twice on one bind,
+        // and the second run would re-decode the avatar because the first decode is still in flight.
+        QueueRelayout();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
