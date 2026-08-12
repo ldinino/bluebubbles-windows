@@ -133,15 +133,58 @@
   (`PrependMessages` never called `TriggerAutoDownload`). If fast scrolling now feels worse, this is
   the trade to revisit.
 
-#### B2h. Avatars decode twice too — same defect class, ~half the work wasted
-- [ ] **Measured on the 2026-08-11 16:48 launch (post-B2f build): 40 avatar decodes started, 19
-  stranded, 21 landed.** Nearly half the avatar decode work at startup is thrown away. The signature
-  is identical to B2f — `RefreshLayout gen=1` then `gen=2` 1-3 ms later, first decode dropped as
-  `STALE`.
-- [ ] Deliberately out of scope for the B2f pass and still unproven to share a cause. `AvatarControl`
-  has its own generation machinery and its own history (archive cluster A / AT1), so confirm the
-  mechanism before assuming `_loadingMediaPath` transplants.
-- [ ] Performance only. Avatars render correctly today.
+#### B2h. Avatars decode twice — **FIXED**
+- [x] Fixed in `4636a1f`, merged `15aa7cd`. One line: `AvatarControl.OnLoaded` now calls
+  `QueueRelayout()` instead of `RefreshLayout()`. Generation guard, `_loadGeneration`, the cache and
+  both decode paths untouched.
+- **Root cause, measured — and it is NOT B2f's defect class.** `OnLoaded` ran `RefreshLayout`
+  *directly*, bypassing the coalescer it was written for, while the relayout already queued by the
+  binding's dependency-property sets was still pending. One bind therefore ran two full relayouts
+  ~90-130 ms apart; the second found a cache MISS because the first decode was still in flight, so
+  it decoded again and orphaned the first. Caller breakdown over a settle window: `Loaded` 70,
+  `queued:DP:Initials` 32, `queued:DP:IsGroup` 5, `queued:DP:Size` 3, 60 coalesced.
+- **Struck as refuted (both were my hypotheses, and both were wrong):**
+  - ~~"the signature is identical to B2f / same defect class"~~ — B2f was one bind calling
+    `LoadMedia` twice through an early-out blind to an in-flight decode. This is one bind running
+    `RefreshLayout` twice. `_loadingMediaPath` was **not** transplanted and should not be.
+  - ~~"the conversation list may build its tiles twice at startup"~~ — ruled out: every doubled pair
+    carries the **same** `Avatar[N]` `_instanceId`, and a second list build would create new
+    controls with new ids. Also not container recycling, not `Loaded`-after-rebind, and not the
+    `ColorfulAvatars` `PropertyChanged` subscription.
+- **Measured before/after** (same machine, same day, same chat set; recounted independently by me
+  from `bluebubbles-2026-08-12.log`):
+
+  | | before (11:47) | after (11:53) |
+  |---|---|---|
+  | `cache MISS -> clear+decode` | 52 | 19 |
+  | `decode STALE` (discarded) | 26 | 4 |
+  | `decode landed` | 26 | 15 |
+  | `RefreshLayout` calls | 110 | 69 |
+
+  Discarded decode work **50% -> 21%**. 400/400, clean build, launch confirmed by process.
+- No unit test: the change is entirely in `BlueBubbles.Windows` and unreachable from the suite
+  (B2b). Evidence is the counts plus the clean build and launch — not the 400/400, which covers
+  none of this.
+- [ ] **Not verified (human-only):** correct face for the correct person after a hard scroll of the
+  conversation list and after navigating away and back. The change defers the initial render by one
+  dispatcher tick, which is its only theoretical risk. `QueueRelayout` falls back to a synchronous
+  `RefreshLayout` if `TryEnqueue` fails, so there is no path where an avatar never renders.
+
+#### B2j. Four avatar decodes are still discarded per launch, deliberately
+- [ ] The residual `STALE` decodes after B2h have a **different** cause: their two relayouts are
+  only 10-20 ms apart and *both* come from queued items, because the bound properties arrive across
+  two dispatcher ticks and the one-tick coalescing window cannot merge them. The relayout is
+  legitimate; only the decode restart is waste.
+- [ ] Closing it would take B2f's in-flight-path shape, but here it needs three fields (single +
+  two group ellipses) on the recycled-container path — precisely where a wrong face would show.
+  Judged not worth the correctness risk: a wasted decode is invisible, a wrong face is not.
+  Reopen only if the remaining 21% ever matters.
+
+#### B2k. An idle avatar control relayouts repeatedly with no user interaction
+- [ ] `Avatar[14]` reached `gen=13` during a ~90-second idle window with nobody touching the app.
+  Every relayout was a `cache HIT`, so it costs no decodes, but something is churning that
+  control's dependency properties. Not investigated. Worth finding out *what* is republishing tile
+  properties while idle — the answer may not be about avatars at all.
 
 #### B2i. `build-common.ps1` crashes when exactly one app instance is running
 - [ ] `Stop-BlueBubbles` does `$procs.Count`, and with `Set-StrictMode -Version Latest`
