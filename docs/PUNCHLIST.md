@@ -25,19 +25,28 @@
 - [ ] **Orphans left behind, sweep in A2:** `ContactColors.TintForKey` and
   `MessageBubbleViewModel.SenderColorKey` (still assigned, never read) have no remaining callers.
 
-#### A2. Messaging settings: drop "Scroll to last unread", make status indicators unconditional
-- [ ] **Neither is dead — both are fully wired.** Measured 2026-08-11:
-  - `ScrollToLastUnread` (default **off**) — `ChatPage.ScrollToInitialPosition` opens the thread at
-    the first unread message instead of the bottom. Slack/Discord behaviour in an iMessage client.
-    **Decision: remove the setting, always open at the bottom.**
-  - `StatusIndicatorsOnChats` (default **off**) — bound at `ConversationListPage.xaml` and
-    live-updated via `ConversationListViewModel.OnAppearanceSettingChanged`. It looked like a no-op
-    only because `ConversationTileViewModel` computes
-    `show = settings.StatusIndicatorsOnChats && _lastMessageIsFromMe`, so it appears **only** on
-    chats where you sent the last message. **Decision: delete the toggle, keep the behaviour on
-    permanently** — Sent/Delivered/Read on the tile is useful and iMessage-like; being off by
-    default is why it was never discovered.
-- [ ] Sequencing: must follow A1 (same files, and `ApplyAppearance` is the same method).
+#### A2. Messaging settings: drop "Scroll to last unread", make status indicators unconditional — **DONE**
+- [x] Merged `6562a07` (`2d0202b` + `b76f526`). `ScrollToLastUnread` removed and threads always open
+  at the bottom; `StatusIndicatorsOnChats` removed as a *toggle* while the Sent/Delivered/Read tile
+  indicator stays on permanently (`show = _lastMessageIsFromMe`). 400/400, clean build, app launched.
+- [x] **Neither was dead code.** Recorded so this isn't rediscovered: the indicator only ever appears
+  on chats where *you* sent the last message, which is why toggling it looked like a no-op.
+- [x] Removing the setting made `ApplyAppearance` need no `AppSettings` at all, which cascaded to the
+  tile constructor (3 call sites) and to `ConversationListViewModel`'s whole `AppSettings`
+  dependency. **Verified this does not break live 24-hour-time updates on the chat list** — those
+  run through a separate subscription in `ConversationListPage.xaml.cs` that calls
+  `RaiseTimestampChanged()` on each tile; the view model was never involved.
+- [x] Orphans swept: `ContactColors.TintForKey`, `MessageBubbleViewModel.SenderColorKey`,
+  `ChatViewModel.FirstUnreadGuid` and `ComputeFirstUnread`. Zero matches remain for any of them.
+- [x] **Caught in review:** the PR as pushed still contained `ComputeFirstUnread` with zero callers —
+  its deletion existed only as an *uncommitted* working-tree edit, so the reported green run was
+  measured against a tree that was not the deliverable. An unused private method is not a compiler
+  warning, so nothing else would have caught it. Committed as `b76f526` and re-verified from clean.
+- [x] Upgrade-path test renamed and extended to carry both removed keys. Negative control run by me:
+  `UnmappedMemberHandling.Disallow` fails that test and only that test.
+- [ ] **Not verified end-to-end (human-only):** tile indicators showing unconditionally, threads
+  opening at the bottom, Settings > Messaging layout, and restoring an old backup file that still
+  carries `scrollToLastUnread` / `statusIndicatorsOnChats`.
 
 #### B1. New/updated messages don't reach the conversation list until a restart or "fetch latest"
 - [x] Messages persisted fine; the *event contract* was broken. Six causes fixed: silent bare catch in
