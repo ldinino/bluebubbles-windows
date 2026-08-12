@@ -32,35 +32,9 @@
                 <ToggleSwitch IsOn="{x:Bind Settings.ColorfulAvatars, Mode=TwoWay}" />
             </tk:SettingsCard>
 
-            <tk:SettingsCard Header="Colorful bubbles"
-                             Description="Tint incoming message bubbles with a per-contact color">
-                <ToggleSwitch IsOn="{x:Bind Settings.ColorfulBubbles, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
-            <tk:SettingsCard Header="Dense chat tiles"
-                             Description="Show more conversations by using a compact tile height">
-                <ToggleSwitch IsOn="{x:Bind Settings.DenseChatTiles, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
-            <tk:SettingsCard Header="Hide dividers"
-                             Description="Remove the separator lines between conversations">
-                <ToggleSwitch IsOn="{x:Bind Settings.HideDividers, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
             <tk:SettingsCard Header="24-hour time"
                              Description="Show timestamps in 24-hour format">
                 <ToggleSwitch IsOn="{x:Bind Settings.Use24HrFormat, Mode=TwoWay}" />
-            </tk:SettingsCard>
-
-            <tk:SettingsCard Header="Avatar size">
-                <tk:SettingsCard.Description>
-                    <Slider x:Name="AvatarScaleSlider"
-                            Minimum="0.5"
-                            Maximum="1.5"
-                            StepFrequency="0.1"
-                            Width="240"
-                            Value="{x:Bind Settings.AvatarScale, Mode=TwoWay}" />
-                </tk:SettingsCard.Description>
             </tk:SettingsCard>
 
         </StackPanel>

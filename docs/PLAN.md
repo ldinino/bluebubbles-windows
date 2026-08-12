@@ -436,7 +436,7 @@ Settings is now its own full-window navigation context (spec 8.8) instead of liv
 - **8 category pages** under `Views/Settings/`:
   - **Connection** — status, server URL + "Fetch Latest URL", proxy service, Use Local Connection expander (toggle/port/test), vCard import, connection log (copy/clear). Reuses the existing `SettingsViewModel`.
   - **Notifications** — notify-in-unfocused-chats, notify-for-reactions, filter-unknown-senders.
-  - **Appearance** — theme (System/Light/Dark, applied live), colorful avatars/bubbles, dense tiles, hide dividers, 24-hr time, avatar-size slider.
+  - **Appearance** — theme (System/Light/Dark, applied live), colorful avatars/bubbles, dense tiles, hide dividers, 24-hr time, avatar-size slider. *(Colorful bubbles, dense tiles, hide dividers and the avatar-size slider were removed in 0.23.0 — punchlist A1. The surviving behaviour is each one's former default.)*
   - **Messaging** — display name, auto-download, send-with-Enter, delivery timestamps, chat-list indicators, scroll-to-last-unread, send delay (NumberBox 0–10).
   - **Private API** (gated) — send typing indicators, mark-chat-as-read, manual-mark-as-read (the always-on collapsed model from Phase 6.5; no per-send toggles).
   - **Server Management** — live server info, statistics, soft/hard/iMessage restart (confirmed), check/install update, server logs viewer, and the **Reset App** danger zone (moved here from the old flat page).

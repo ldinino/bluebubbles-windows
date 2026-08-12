@@ -64,10 +64,6 @@ public class SettingsService : ISettingsService
             // Appearance
             Theme = _appSettings.Theme,
             ColorfulAvatars = _appSettings.ColorfulAvatars,
-            ColorfulBubbles = _appSettings.ColorfulBubbles,
-            HideDividers = _appSettings.HideDividers,
-            DenseChatTiles = _appSettings.DenseChatTiles,
-            AvatarScale = _appSettings.AvatarScale,
             Use24HrFormat = _appSettings.Use24HrFormat,
             // Messaging
             AutoDownload = _appSettings.AutoDownload,
@@ -147,10 +143,6 @@ public class SettingsService : ISettingsService
             // Appearance
             _appSettings.Theme = data.Theme;
             _appSettings.ColorfulAvatars = data.ColorfulAvatars;
-            _appSettings.ColorfulBubbles = data.ColorfulBubbles;
-            _appSettings.HideDividers = data.HideDividers;
-            _appSettings.DenseChatTiles = data.DenseChatTiles;
-            if (data.AvatarScale > 0) _appSettings.AvatarScale = data.AvatarScale;
             _appSettings.Use24HrFormat = data.Use24HrFormat;
             // Messaging
             _appSettings.AutoDownload = data.AutoDownload;
@@ -241,10 +233,6 @@ public class SettingsService : ISettingsService
         // Appearance
         public int Theme { get; init; }
         public bool ColorfulAvatars { get; init; }
-        public bool ColorfulBubbles { get; init; }
-        public bool HideDividers { get; init; }
-        public bool DenseChatTiles { get; init; }
-        public double AvatarScale { get; init; } = 1.0;
         public bool Use24HrFormat { get; init; }
         // Messaging
         public bool AutoDownload { get; init; } = true;

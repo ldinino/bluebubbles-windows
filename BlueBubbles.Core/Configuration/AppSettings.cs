@@ -34,10 +34,6 @@ public partial class AppSettings : ObservableObject
     // Appearance
     [ObservableProperty] public partial int Theme { get; set; }
     [ObservableProperty] public partial bool ColorfulAvatars { get; set; }
-    [ObservableProperty] public partial bool ColorfulBubbles { get; set; }
-    [ObservableProperty] public partial bool HideDividers { get; set; }
-    [ObservableProperty] public partial bool DenseChatTiles { get; set; }
-    [ObservableProperty] public partial double AvatarScale { get; set; }
     [ObservableProperty] public partial bool Use24HrFormat { get; set; }
 
     // Messaging
@@ -99,7 +95,6 @@ public partial class AppSettings : ObservableObject
         NotificationSoundCustomPath = string.Empty;
         LastSelectedChatGuid = string.Empty;
         ApiTimeout = 30000;
-        AvatarScale = 1.0;
         AutoDownload = true;
         // Default-on so the established look is preserved now that these toggles are wired up.
         ColorfulAvatars = true;

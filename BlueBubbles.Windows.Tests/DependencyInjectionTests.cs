@@ -103,7 +103,7 @@ public class DependencyInjectionTests
         Assert.True(settings.ColorfulAvatars);
         Assert.True(settings.ShowDeliveryTimestamps);
         Assert.True(settings.CloseToTray);
-        Assert.Equal(1.0, settings.AvatarScale);
+        Assert.False(settings.Use24HrFormat);
     }
 
     [Fact]

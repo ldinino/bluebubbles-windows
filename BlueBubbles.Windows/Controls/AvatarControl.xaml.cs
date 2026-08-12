@@ -88,7 +88,7 @@ public sealed partial class AvatarControl : UserControl
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // Subscribe once so "Colorful avatars" / "Avatar size" changes re-render live.
+        // Subscribe once so "Colorful avatars" changes re-render live.
         if (_settings is null)
         {
             _settings = App.Services.GetService<AppSettings>();
@@ -113,7 +113,7 @@ public sealed partial class AvatarControl : UserControl
 
     private void OnSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(AppSettings.ColorfulAvatars) or nameof(AppSettings.AvatarScale))
+        if (e.PropertyName is nameof(AppSettings.ColorfulAvatars))
             DispatcherQueue.TryEnqueue(RefreshLayout);
     }
 
@@ -152,9 +152,9 @@ public sealed partial class AvatarControl : UserControl
                 $"Avatar[{_instanceId}] RefreshLayout gen={generation} group={IsGroup} " +
                 $"img={(AvatarImage?.Length ?? 0)}B initials='{Initials}'");
 
-        // "Avatar size" scales the requested Size; "Colorful avatars" toggles the tinted fallback.
+        // "Colorful avatars" toggles the tinted fallback.
         var settings = _settings ??= App.Services.GetService<AppSettings>();
-        var size = Size * (settings?.AvatarScale ?? 1.0);
+        var size = Size;
         var colorful = settings?.ColorfulAvatars ?? true;
 
         RootGrid.Width = size;

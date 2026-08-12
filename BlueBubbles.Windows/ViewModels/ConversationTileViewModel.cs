@@ -124,12 +124,12 @@ public partial class ConversationTileViewModel : ObservableObject
         _lastMessageRead = data.LastMessageDateRead;
     }
 
-    /// <summary>Applies the appearance settings (dense tiles, dividers, status indicators) to this
+    /// <summary>Applies the appearance settings (status indicators) to this
     /// tile. Called on construction/refresh and live when the settings change.</summary>
     public void ApplyAppearance(AppSettings settings)
     {
-        TilePadding = settings.DenseChatTiles ? new Thickness(8, 5, 8, 5) : new Thickness(8, 10, 8, 10);
-        DividerThickness = settings.HideDividers ? new Thickness(0) : new Thickness(0, 0, 0, 1);
+        TilePadding = new Thickness(8, 10, 8, 10);
+        DividerThickness = new Thickness(0, 0, 0, 1);
 
         var show = settings.StatusIndicatorsOnChats && _lastMessageIsFromMe;
         ShowStatusIndicator = show;
