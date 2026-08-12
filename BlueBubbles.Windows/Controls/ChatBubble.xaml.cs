@@ -80,7 +80,7 @@ public sealed partial class ChatBubble : UserControl
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        // Subscribe once so "Colorful bubbles" / "Show delivery timestamps" / "24-hour time"
+        // Subscribe once so "Show delivery timestamps" / "24-hour time"
         // changes re-render the visible bubbles live.
         if (_settings is null)
         {
@@ -116,8 +116,7 @@ public sealed partial class ChatBubble : UserControl
     private void OnSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (_currentVm is { } vm
-            && e.PropertyName is nameof(AppSettings.ColorfulBubbles)
-                or nameof(AppSettings.ShowDeliveryTimestamps)
+            && e.PropertyName is nameof(AppSettings.ShowDeliveryTimestamps)
                 or nameof(AppSettings.Use24HrFormat))
         {
             DispatcherQueue.TryEnqueue(() => ApplyStyle(vm));
@@ -291,10 +290,7 @@ public sealed partial class ChatBubble : UserControl
         else
         {
             BubbleBorder.HorizontalAlignment = HorizontalAlignment.Left;
-            // "Colorful bubbles": tint incoming bubbles with the sender's per-contact color.
-            BubbleBorder.Background = (_settings?.ColorfulBubbles ?? false)
-                ? new SolidColorBrush(Helpers.ContactColors.TintForKey(vm.SenderColorKey))
-                : GetBrush("ControlFillColorDefaultBrush");
+            BubbleBorder.Background = GetBrush("ControlFillColorDefaultBrush");
             var textBrush = GetBrush("TextFillColorPrimaryBrush");
             var secondaryBrush = GetBrush("TextFillColorSecondaryBrush");
             MessageText.Foreground = textBrush;

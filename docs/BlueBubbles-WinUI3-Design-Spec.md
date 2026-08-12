@@ -760,10 +760,6 @@ Categories and items:
 **Appearance**
 - Theme: System / Light / Dark (RadioButtons or ComboBox)
 - Colorful avatars (ToggleSwitch)
-- Colorful bubbles (ToggleSwitch)
-- Dense chat tiles (ToggleSwitch)
-- Hide dividers (ToggleSwitch)
-- Avatar scale (Slider)
 - 24-hour time format (ToggleSwitch)
 
 **Messaging**

@@ -60,9 +60,7 @@ public class SettingsServiceTests
             var appSettings = new AppSettings
             {
                 Theme = 2,
-                ColorfulBubbles = true,
-                HideDividers = true,
-                AvatarScale = 1.5,
+                ColorfulAvatars = false,
                 Use24HrFormat = true,
                 AutoDownload = false,
                 SendWithReturn = false,
@@ -81,9 +79,8 @@ public class SettingsServiceTests
             svc2.Load();
 
             Assert.Equal(2, appSettings2.Theme);
-            Assert.True(appSettings2.ColorfulBubbles);
-            Assert.True(appSettings2.HideDividers);
-            Assert.Equal(1.5, appSettings2.AvatarScale);
+            // ColorfulAvatars defaults to true, so a round-tripped false proves the value travelled.
+            Assert.False(appSettings2.ColorfulAvatars);
             Assert.True(appSettings2.Use24HrFormat);
             Assert.False(appSettings2.AutoDownload);
             Assert.False(appSettings2.SendWithReturn);
@@ -153,10 +150,48 @@ public class SettingsServiceTests
             Assert.True(appSettings.FinishedSetup);
             Assert.True(appSettings.SendWithReturn);
             Assert.True(appSettings.AutoDownload);
-            Assert.Equal(1.0, appSettings.AvatarScale);
+            Assert.True(appSettings.ColorfulAvatars);
             Assert.True(appSettings.PrivateSendTypingIndicators);
             Assert.True(appSettings.PrivateMarkChatAsRead);
             Assert.True(appSettings.CloseToTray);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void Load_FileWithRemovedAppearanceKeys_StillAppliesSurvivingSettings()
+    {
+        // Upgrade path: settings.json written by <= 0.22.x still carries colorfulBubbles /
+        // denseChatTiles / hideDividers / avatarScale. JsonOpts leaves UnmappedMemberHandling at
+        // the Skip default, so those keys must be ignored without failing the whole load.
+        var tempFile = Path.GetTempFileName();
+        File.WriteAllText(tempFile, """
+            {
+              "finishedSetup": true,
+              "settingsVersion": 1,
+              "theme": 2,
+              "colorfulAvatars": false,
+              "use24HrFormat": true,
+              "colorfulBubbles": true,
+              "denseChatTiles": true,
+              "hideDividers": true,
+              "avatarScale": 1.5
+            }
+            """);
+
+        try
+        {
+            var appSettings = new AppSettings();
+            var svc = new SettingsService(appSettings, new ServerConfiguration(), tempFile);
+            svc.Load();
+
+            Assert.True(appSettings.FinishedSetup);
+            Assert.Equal(2, appSettings.Theme);
+            Assert.False(appSettings.ColorfulAvatars);
+            Assert.True(appSettings.Use24HrFormat);
         }
         finally
         {

@@ -104,10 +104,6 @@ public sealed partial class BackupSettingsPage : Page
     {
         ["theme"] = _settings.Theme,
         ["colorfulAvatars"] = _settings.ColorfulAvatars,
-        ["colorfulBubbles"] = _settings.ColorfulBubbles,
-        ["hideDividers"] = _settings.HideDividers,
-        ["denseChatTiles"] = _settings.DenseChatTiles,
-        ["avatarScale"] = _settings.AvatarScale,
         ["use24HrFormat"] = _settings.Use24HrFormat,
     };
 
@@ -115,10 +111,6 @@ public sealed partial class BackupSettingsPage : Page
     {
         if (TryInt(data, "theme", out var i)) _settings.Theme = i;
         if (TryBool(data, "colorfulAvatars", out var b)) _settings.ColorfulAvatars = b;
-        if (TryBool(data, "colorfulBubbles", out b)) _settings.ColorfulBubbles = b;
-        if (TryBool(data, "hideDividers", out b)) _settings.HideDividers = b;
-        if (TryBool(data, "denseChatTiles", out b)) _settings.DenseChatTiles = b;
-        if (TryDouble(data, "avatarScale", out var d)) _settings.AvatarScale = d;
         if (TryBool(data, "use24HrFormat", out b)) _settings.Use24HrFormat = b;
     }
 
@@ -215,13 +207,6 @@ public sealed partial class BackupSettingsPage : Page
         value = 0;
         if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(name, out var v)) return false;
         return v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out value);
-    }
-
-    private static bool TryDouble(JsonElement obj, string name, out double value)
-    {
-        value = 0;
-        if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(name, out var v)) return false;
-        return v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out value);
     }
 
     private static bool TryString(JsonElement obj, string name, out string value)

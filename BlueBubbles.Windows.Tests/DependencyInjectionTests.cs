@@ -103,7 +103,11 @@ public class DependencyInjectionTests
         Assert.True(settings.ColorfulAvatars);
         Assert.True(settings.ShowDeliveryTimestamps);
         Assert.True(settings.CloseToTray);
-        Assert.Equal(1.0, settings.AvatarScale);
+        // Non-CLR-default values only: a `false` bool or a null string would pass even if the
+        // constructor never ran, which is what this test exists to catch.
+        Assert.Equal(AppSettings.CurrentSettingsVersion, settings.SettingsVersion);
+        Assert.Equal("default", settings.NotificationSound);
+        Assert.Equal("1234", settings.LocalhostPort);
     }
 
     [Fact]

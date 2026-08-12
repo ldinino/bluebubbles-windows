@@ -357,8 +357,6 @@ public partial class ConversationListViewModel : ObservableObject
     {
         switch (e.PropertyName)
         {
-            case nameof(AppSettings.DenseChatTiles):
-            case nameof(AppSettings.HideDividers):
             case nameof(AppSettings.StatusIndicatorsOnChats):
                 RunOnUI(() =>
                 {

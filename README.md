@@ -30,8 +30,7 @@ native Windows messaging experience that works with your existing server setup. 
 - **Flexible connection** — sign in with Google to auto-discover your server URL via Firebase
   (handles Cloudflare-tunnel URL rotation), or enter the URL + password manually; optional
   direct LAN / localhost connection for lower latency on the same network.
-- **Customizable** — colorful avatars and bubbles, dense tiles, 24-hour time, avatar size,
-  send delay, and more.
+- **Customizable** — colorful avatars, 24-hour time, send delay, and more.
 
 ### Not yet implemented
 
