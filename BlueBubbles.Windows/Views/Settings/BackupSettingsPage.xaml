@@ -28,20 +28,11 @@
                        Margin="0,0,0,8" />
 
             <tk:SettingsCard Header="Settings backup"
-                             Description="Save messaging, notification and Private API preferences to the server">
+                             Description="Save messaging, notification, appearance and Private API preferences to the server">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button x:Name="SaveSettingsButton" Content="Save" Click="OnSaveSettingsClick" />
                     <Button x:Name="RestoreSettingsButton" Content="Restore" Click="OnRestoreSettingsClick" />
                     <Button x:Name="DeleteSettingsButton" Content="Delete" Click="OnDeleteSettingsClick" />
-                </StackPanel>
-            </tk:SettingsCard>
-
-            <tk:SettingsCard Header="Theme backup"
-                             Description="Save your theme and appearance choices to the server">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Name="SaveThemeButton" Content="Save" Click="OnSaveThemeClick" />
-                    <Button x:Name="RestoreThemeButton" Content="Restore" Click="OnRestoreThemeClick" />
-                    <Button x:Name="DeleteThemeButton" Content="Delete" Click="OnDeleteThemeClick" />
                 </StackPanel>
             </tk:SettingsCard>
 

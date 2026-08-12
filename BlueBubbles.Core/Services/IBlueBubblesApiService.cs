@@ -180,11 +180,6 @@ public interface IBlueBubblesApiService
 
     // ── Backup ──
 
-    Task<ApiResponse<JsonElement>> GetThemeAsync(CancellationToken ct = default);
-    Task<ApiResponse<JsonElement>> SetThemeAsync(string name,
-        Dictionary<string, object?> data, CancellationToken ct = default);
-    Task<ApiResponse<JsonElement>> DeleteThemeAsync(string name,
-        CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> GetSettingsBackupAsync(
         CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> SetSettingsBackupAsync(string name,

@@ -11,7 +11,6 @@ namespace BlueBubbles.Windows.Views.Settings;
 public sealed partial class BackupSettingsPage : Page
 {
     private const string SettingsBackupName = "BlueBubbles WinUI Settings";
-    private const string ThemeBackupName = "BlueBubbles WinUI Theme";
 
     private readonly IBlueBubblesApiService _api;
     private readonly ISettingsService _settingsService;
@@ -47,6 +46,9 @@ public sealed partial class BackupSettingsPage : Page
         ["privateSendTypingIndicators"] = _settings.PrivateSendTypingIndicators,
         ["privateMarkChatAsRead"] = _settings.PrivateMarkChatAsRead,
         ["privateManualMarkAsRead"] = _settings.PrivateManualMarkAsRead,
+        ["theme"] = _settings.Theme,
+        ["colorfulAvatars"] = _settings.ColorfulAvatars,
+        ["use24HrFormat"] = _settings.Use24HrFormat,
     };
 
     private void ApplySettingsPayload(JsonElement data)
@@ -62,6 +64,9 @@ public sealed partial class BackupSettingsPage : Page
         if (TryBool(data, "privateSendTypingIndicators", out b)) _settings.PrivateSendTypingIndicators = b;
         if (TryBool(data, "privateMarkChatAsRead", out b)) _settings.PrivateMarkChatAsRead = b;
         if (TryBool(data, "privateManualMarkAsRead", out b)) _settings.PrivateManualMarkAsRead = b;
+        if (TryInt(data, "theme", out i)) _settings.Theme = i;
+        if (TryBool(data, "colorfulAvatars", out b)) _settings.ColorfulAvatars = b;
+        if (TryBool(data, "use24HrFormat", out b)) _settings.Use24HrFormat = b;
     }
 
     private async void OnSaveSettingsClick(object sender, RoutedEventArgs e)
@@ -79,6 +84,7 @@ public sealed partial class BackupSettingsPage : Page
             {
                 ApplySettingsPayload(payload);
                 _settingsService.Save();
+                Services.ThemeHelper.Apply(_settings.Theme);
                 ShowStatus("Settings restored from the server.", InfoBarSeverity.Success);
             }
             else
@@ -92,53 +98,6 @@ public sealed partial class BackupSettingsPage : Page
         {
             var response = await _api.DeleteSettingsBackupAsync(SettingsBackupName);
             Report(response, "Settings backup deleted from the server.");
-        });
-
-    // ── Theme backup ──
-
-    private Dictionary<string, object?> BuildThemePayload() => new()
-    {
-        ["theme"] = _settings.Theme,
-        ["colorfulAvatars"] = _settings.ColorfulAvatars,
-        ["use24HrFormat"] = _settings.Use24HrFormat,
-    };
-
-    private void ApplyThemePayload(JsonElement data)
-    {
-        if (TryInt(data, "theme", out var i)) _settings.Theme = i;
-        if (TryBool(data, "colorfulAvatars", out var b)) _settings.ColorfulAvatars = b;
-        if (TryBool(data, "use24HrFormat", out b)) _settings.Use24HrFormat = b;
-    }
-
-    private async void OnSaveThemeClick(object sender, RoutedEventArgs e)
-        => await RunAsync(SaveThemeButton, async () =>
-        {
-            var response = await _api.SetThemeAsync(ThemeBackupName, BuildThemePayload());
-            Report(response, "Theme backed up to the server.");
-        });
-
-    private async void OnRestoreThemeClick(object sender, RoutedEventArgs e)
-        => await RunAsync(RestoreThemeButton, async () =>
-        {
-            var response = await _api.GetThemeAsync();
-            if (TryExtractPayload(response.Data, ThemeBackupName, out var payload))
-            {
-                ApplyThemePayload(payload);
-                _settingsService.Save();
-                Services.ThemeHelper.Apply(_settings.Theme);
-                ShowStatus("Theme restored from the server.", InfoBarSeverity.Success);
-            }
-            else
-            {
-                ShowStatus("No theme backup was found on the server.", InfoBarSeverity.Warning);
-            }
-        });
-
-    private async void OnDeleteThemeClick(object sender, RoutedEventArgs e)
-        => await RunAsync(DeleteThemeButton, async () =>
-        {
-            var response = await _api.DeleteThemeAsync(ThemeBackupName);
-            Report(response, "Theme backup deleted from the server.");
         });
 
     // ── Helpers ──
