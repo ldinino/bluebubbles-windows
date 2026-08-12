@@ -324,35 +324,37 @@ public partial class ChatDetailsViewModel : ObservableObject
             : $"{Participants.Count} participants";
     }
 
-    private async void OnChatUpdated(object? sender, ChatUpdatedEventArgs e)
+    private void OnChatUpdated(object? sender, ChatUpdatedEventArgs e)
     {
-        var data = e.Data;
-        Chat? chat = null;
-        try
-        {
-            chat = data.Deserialize<Chat>(Core.Utils.JsonDefaults.Options);
-        }
-        catch { return; }
-
+        // e.Chat is parsed from the payload's chats[0]; the payload itself is a message, so
+        // deserializing it as a chat (as this used to) yielded the message's GUID and never matched.
+        var chat = e.Chat;
         if (chat is null || chat.Guid != _chatGuid) return;
 
         var dispatcher = App.MainWindow?.DispatcherQueue;
         if (dispatcher is null) return;
 
-        dispatcher.TryEnqueue(async () =>
-        {
-            if (e.EventType == SocketEvents.GroupNameChange && chat.DisplayName is not null)
-            {
-                ChatDisplayName = chat.DisplayName;
-            }
+        dispatcher.TryEnqueue(() => _ = ApplyChatUpdateAsync(e.EventType, chat));
+    }
 
-            if (e.EventType is SocketEvents.ParticipantAdded
+    private async Task ApplyChatUpdateAsync(string eventType, Chat chat)
+    {
+        try
+        {
+            if (eventType == SocketEvents.GroupNameChange && chat.DisplayName is not null)
+                ChatDisplayName = chat.DisplayName;
+
+            if (eventType is SocketEvents.ParticipantAdded
                 or SocketEvents.ParticipantRemoved
                 or SocketEvents.ParticipantLeft)
             {
                 await RefreshParticipantsAsync();
             }
-        });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Ui, $"Chat details update for {chat.Guid} failed: {ex.Message}");
+        }
     }
 }
 

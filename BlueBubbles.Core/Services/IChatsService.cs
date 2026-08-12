@@ -41,6 +41,13 @@ public interface IChatsService
     /// dropped until a full incremental sync runs.</summary>
     Task EnsureChatExistsAsync(Chat chatData);
 
+    /// <summary>Persists the chat carried by a <c>group-name-change</c> / <c>participant-*</c> socket
+    /// event: server-owned fields via ChatFieldMerge, plus a full reconcile of the participant join
+    /// rows (the payload's participant list is authoritative, so omissions are removals). Update-only —
+    /// an unknown chat is ignored. Without this the events change nothing on disk and the conversation
+    /// list keeps showing the old name/participants.</summary>
+    Task ApplyChatUpdateAsync(Chat chatData);
+
     /// <summary>Announces that messages were just persisted for <paramref name="chatGuid"/> so the
     /// open thread can append them from the DB. Used by the sync path, which writes straight to the
     /// database rather than through the live socket event.</summary>

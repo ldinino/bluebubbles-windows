@@ -39,6 +39,13 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
         _actionHandler.ReactionReceived += (_, e) =>
             _queue.Writer.TryWrite(new IncomingEvent(IncomingEventType.Reaction,
                 new MessageEventArgs(e.Reaction, null)));
+        // Group renames / membership changes only ever reached the view models, so nothing wrote them
+        // to the cache the conversation list reads from.
+        _actionHandler.ChatUpdated += (_, e) =>
+        {
+            if (e.Chat is not null)
+                _queue.Writer.TryWrite(new IncomingEvent(IncomingEventType.ChatUpdated, null, e.Chat));
+        };
 
         _ = Task.Run(ProcessAsync);
     }
@@ -58,13 +65,16 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
                 switch (evt.Type)
                 {
                     case IncomingEventType.NewMessage:
-                        await ProcessNewMessageAsync(evt.Args);
+                        await ProcessNewMessageAsync(evt.Args!);
                         break;
                     case IncomingEventType.UpdatedMessage:
-                        await ProcessUpdatedMessageAsync(evt.Args);
+                        await ProcessUpdatedMessageAsync(evt.Args!);
                         break;
                     case IncomingEventType.Reaction:
-                        await ProcessReactionAsync(evt.Args);
+                        await ProcessReactionAsync(evt.Args!);
+                        break;
+                    case IncomingEventType.ChatUpdated:
+                        await _chatsService.ApplyChatUpdateAsync(evt.Chat!);
                         break;
                 }
             }
@@ -74,8 +84,8 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
                 // diagnosable after the fact.
                 AppLog.Error(LogCategory.Socket,
                     $"Failed to process {evt.Type} event " +
-                    $"(chat={evt.Args.Message.Chats?.FirstOrDefault()?.Guid ?? "?"}, " +
-                    $"message={evt.Args.Message.Guid}): {ex}");
+                    $"(chat={evt.Args?.Message.Chats?.FirstOrDefault()?.Guid ?? evt.Chat?.Guid ?? "?"}, " +
+                    $"message={evt.Args?.Message.Guid ?? "-"}): {ex}");
             }
         }
     }
@@ -147,6 +157,6 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
             e.Message.WasDeliveredQuietly));
     }
 
-    private record IncomingEvent(IncomingEventType Type, MessageEventArgs Args);
-    private enum IncomingEventType { NewMessage, UpdatedMessage, Reaction }
+    private record IncomingEvent(IncomingEventType Type, MessageEventArgs? Args, Chat? Chat = null);
+    private enum IncomingEventType { NewMessage, UpdatedMessage, Reaction, ChatUpdated }
 }

@@ -315,6 +315,34 @@ public class IncomingMessageProcessorTests
     }
 
     [Fact]
+    public async Task ChatUpdated_PersistsTheChatFromThePayload()
+    {
+        // The four group events used to reach view models only, so nothing wrote them to the cache.
+        var (processor, handler, _, chatsSvc) = CreateProcessor();
+        processor.Start();
+
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chatsSvc.ChatUpdateApplied += () => applied.TrySetResult();
+
+        var json = JsonSerializer.Deserialize<JsonElement>("""
+        {
+            "guid": "msg-group-1",
+            "itemType": 2,
+            "chats": [{ "guid": "iMessage;+;chat-renamed", "displayName": "Renamed" }]
+        }
+        """);
+
+        handler.HandleEvent(SocketEvents.GroupNameChange, json, "Test");
+
+        await Task.WhenAny(applied.Task, Task.Delay(3000));
+        Assert.True(applied.Task.IsCompleted, "ApplyChatUpdateAsync was never called");
+
+        var chat = Assert.Single(chatsSvc.AppliedChatUpdates);
+        Assert.Equal("iMessage;+;chat-renamed", chat.Guid);
+        Assert.Equal("Renamed", chat.DisplayName);
+    }
+
+    [Fact]
     public async Task Reaction_FromMe_PersistedButNotNotified()
     {
         var (processor, handler, msgSvc, notifSvc) = CreateProcessorWithNotifications();
@@ -559,6 +587,8 @@ internal class RecordingChatsService : IChatsService
 {
     public List<(string ChatGuid, string? Text, long DateCreated, bool IsFromMe)> HandledNewMessages { get; } = [];
     public List<string> EnsuredChats { get; } = [];
+    public List<Chat> AppliedChatUpdates { get; } = [];
+    public event Action? ChatUpdateApplied;
     public List<string> PersistedNotifications { get; } = [];
 
     public IReadOnlyList<ChatWithParticipants> Chats => [];
@@ -597,6 +627,13 @@ internal class RecordingChatsService : IChatsService
     public Task EnsureChatExistsAsync(Chat chatData)
     {
         EnsuredChats.Add(chatData.Guid);
+        return Task.CompletedTask;
+    }
+
+    public Task ApplyChatUpdateAsync(Chat chatData)
+    {
+        AppliedChatUpdates.Add(chatData);
+        ChatUpdateApplied?.Invoke();
         return Task.CompletedTask;
     }
 

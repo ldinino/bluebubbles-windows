@@ -224,6 +224,7 @@ public class DependencyInjectionTests
         public string? FindExistingChatGuid(IEnumerable<string> addresses) => null;
         public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
         public Task EnsureChatExistsAsync(Chat chatData) => Task.CompletedTask;
+        public Task ApplyChatUpdateAsync(Chat chatData) => Task.CompletedTask;
         public void NotifyMessagesPersisted(string chatGuid) { }
     }
     private class StubMessagesService : IMessagesService

@@ -130,6 +130,36 @@ public class ActionHandlerTests
         Assert.Equal(SocketEvents.GroupNameChange, received!.EventType);
     }
 
+    [Fact]
+    public void GroupNameChange_ExposesChatFromMessagePayload()
+    {
+        // The server emits these events as a serialized message whose chats[0] is the freshly loaded
+        // chat (participants included) — the top-level "guid" is the message's, not the chat's.
+        var handler = new ActionHandler();
+        ChatUpdatedEventArgs? received = null;
+        handler.ChatUpdated += (_, e) => received = e;
+
+        var json = Parse("""
+        {
+            "guid": "msg-500",
+            "itemType": 2,
+            "groupTitle": "New Name",
+            "chats": [{
+                "guid": "iMessage;+;chat-group",
+                "displayName": "New Name",
+                "participants": [{ "address": "+15551112222", "service": "iMessage" }]
+            }]
+        }
+        """);
+
+        handler.HandleEvent(SocketEvents.GroupNameChange, json, "Test");
+
+        Assert.NotNull(received?.Chat);
+        Assert.Equal("iMessage;+;chat-group", received!.Chat!.Guid);
+        Assert.Equal("New Name", received.Chat.DisplayName);
+        Assert.Equal("+15551112222", Assert.Single(received.Chat.Participants!).Address);
+    }
+
     [Theory]
     [InlineData(SocketEvents.ParticipantAdded)]
     [InlineData(SocketEvents.ParticipantRemoved)]
