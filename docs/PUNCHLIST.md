@@ -7,28 +7,44 @@
 
 ## Open bugs
 
-#### B6. `chat-updated` socket events are never persisted, so renames don't reach the list
-- [ ] **Measured 2026-08-12, in source.** `ActionHandler` handles `group-name-change`,
-  `participant-added`, `participant-removed` and `participant-left` by firing
-  `ChatUpdated?.Invoke(this, new ChatUpdatedEventArgs(eventName, data))` and **nothing else** — no
-  DB write, no service call. There are exactly two subscribers:
-  - `ConversationListViewModel` -> debounced `LoadChatsAsync()`, which reads the **database**.
-  - `ChatDetailsViewModel` -> sets `ChatDisplayName` in memory, and only while that chat's details
-    pane is open. Its `RefreshParticipantsAsync` re-reads `_chatsService.Chats` — the in-memory list
-    built from the DB — so the participant path is stale as well.
-- **Consequence:** a group rename or participant change made elsewhere updates one label in an open
-  details pane and nothing else. The conversation tile keeps the old name until a full sync
-  re-fetches chats. **B4's debounce therefore throttles a reload that cannot reflect the event that
-  triggered it** — the throttle is still correct, but it was protecting a no-op.
-- **This is a spec deviation, not a design choice:** `docs/PLAN.md:112` states the intent as
-  "`group-name-change`, `participant-*` -> update chat in DB".
-- **Not verified:** whether the symptom is visible in practice, i.e. whether any *other* path
-  (incremental sync, `chat-read-status-changed`, a socket `new-message` carrying the chat) happens
-  to refresh the name soon enough to mask it. That is step one before writing anything.
-- Note while in the area: `ChatDetailsViewModel.OnChatUpdated` is `async void` — the same hazard B4
-  just removed from the sibling class.
-- Server-is-truth applies: any write must go through `ChatFieldMerge.ApplyServerOwnedFields` so
-  client-only fields (pin/mute/archive) are not clobbered. See CLAUDE.md.
+#### B6. `chat-updated` socket events were never persisted — **FIXED**
+- [x] Merged `cf376e5` (`65499c8` + `5146e3d` + `ccc34c4`). `ActionHandler` now parses the chat out
+  of the payload's `chats[0]`; `ChatsService.ApplyChatUpdateAsync` is the single writer, going
+  through `ChatFieldMerge.ApplyServerOwnedFields` and reconciling participant join rows —
+  `LinkParticipantsAsync` for adds plus an explicit diff-and-delete for removals, since that helper
+  only ever adds. A payload with no participants leaves membership alone; an unknown chat is
+  ignored, since creation stays with `EnsureChatExistsAsync`. Drained on the existing serialized
+  queue, so persistence stays in Core.
+- **Original diagnosis, confirmed:** the four events fired `ChatUpdated` and nothing else — no DB
+  write, no service call — with only two subscribers, one reading the database and one touching an
+  in-memory label. `docs/PLAN.md:112` had stated the intent as "`group-name-change`,
+  `participant-*` -> update chat in DB", so this was a spec deviation.
+- **Refuted along the way:** the details-pane rename never worked either. The server emits these as
+  a serialized *message* whose `chats[0]` is the chat; `ChatDetailsViewModel` deserialized the whole
+  payload as a `Chat`, got the message's GUID, and its `chat.Guid != _chatGuid` guard always
+  returned. Verified against the server source and the Flutter client, not guessed.
+- **It did not self-heal while the app was open.** A delta only runs at launch, socket connect and
+  network-change recovery, and `ReconcileChatsAsync` only prunes deletes — so with a healthy socket
+  the stale name persisted indefinitely. Correctness bug, not latency.
+- [x] **Caught in review — a regression this PR would have introduced.** `ApplyServerOwnedFields`
+  copied `HasUnreadMessage` unconditionally and `Chat.HasUnreadMessage` was a non-nullable `bool`,
+  so a group-event payload omitting `hasUnreadMessage` deserialized to `false` and **renaming a
+  group cleared its unread badge**. No existing test caught it because every fixture stated the
+  field explicitly. Fixed by making the model property `bool?` and guarding inside `ChatFieldMerge`
+  — the authority, not a call-site exception. Silence now means "no opinion", not "read", which
+  closes the same latent exposure in `SyncService` since it shares the merge.
+- Verified by me, not accepted from the report: the failing test I pushed survived untouched;
+  restoring the unconditional copy fails only it (410/411); an `&& false` guard fails only the two
+  new theory cases (409/411); and the original client-only-field mutation is still caught under the
+  nullable model (410/411). 411/411 on a clean build with a real launch.
+- **Consequence for B4:** its debounce was throttling a reload that could not reflect its own
+  trigger. The throttle was always correct; only now is it doing real work.
+- [ ] **Not verified (human-only):** a real rename or participant change from another device landing
+  on the conversation tile *and* in an open details pane.
+- [ ] Follow-up, small: `ChatDetailsViewModel.RefreshParticipantsAsync` reads the in-memory
+  `_chatsService.Chats`, so an open pane can lag one beat behind the now-correct database.
+- Unverified reasoning, not measurement: that the server's `ChatSerializer` omits
+  `hasUnreadMessage` for these events. The guard is correct either way.
 
 #### A1. Remove four Appearance settings — **DONE**
 - [x] Colorful bubbles, Dense chat tiles, Hide dividers and Avatar size removed from Settings >
@@ -289,9 +305,13 @@
 - [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
   exception in it is unobserved. Found while reviewing B1; deliberately left out of that PR's scope.
 
-#### B5. Tests write to the real `%LOCALAPPDATA%\BlueBubbles\logs`
-- [ ] Pre-existing: `AppLog` is a static singleton, so the suite pollutes production logs. Harmless,
-  untidy.
+#### B5. Tests write to the real `%LOCALAPPDATA%\BlueBubbles\logs` — **promoted**
+- [ ] Pre-existing: `AppLog` is a static singleton, so the suite writes into the production log.
+- [ ] **No longer merely untidy.** Fixture noise is now interleaved with the logs used as primary
+  evidence — B6's review surfaced `[ERROR] ... injected save failure` (the
+  `FailedEvent_IsLoggedAndQueueKeepsDraining` fixture) sitting in a real session log. Every
+  measurement in this debug session came from these files, so polluting them costs more than the
+  tidiness. Worth taking before B2c/B2d.
 
 ---
 
