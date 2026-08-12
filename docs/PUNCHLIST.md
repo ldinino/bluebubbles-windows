@@ -114,7 +114,7 @@
 - Known, accepted: a user with an existing theme backup on the server can no longer delete it from
   this client. It is inert server-side data; not worth solving.
 
- — mechanism fixed, **effect not yet measured**
+#### B2g. Images decode oldest-first — mechanism fixed, **effect not yet measured**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
   container is realized (`AttachmentHolder`, `NotDownloaded` case), so it follows what is on or near
   screen instead of walking the loaded window oldest-first. The new-message append path still
