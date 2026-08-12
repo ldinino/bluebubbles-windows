@@ -186,14 +186,18 @@
   control's dependency properties. Not investigated. Worth finding out *what* is republishing tile
   properties while idle — the answer may not be about avatars at all.
 
-#### B2i. `build-common.ps1` crashes when exactly one app instance is running
-- [ ] `Stop-BlueBubbles` does `$procs.Count`, and with `Set-StrictMode -Version Latest`
-  (`build-common.ps1:27`) a single `Process` object has no `Count` in PowerShell 5.1. Reproduced:
-  `The property 'Count' cannot be found on this object.` Zero or two-plus instances work; exactly
-  one — the case where the script most needs to release the file lock — kills it at "Cleaning
-  obj/bin".
-- [ ] Affects `build-and-run.ps1` and `publish.ps1`, both of which set StrictMode too. Fix is
-  `@($procs).Count`. **Release machinery — needs maintainer authorisation before it is touched.**
+#### B2i. `build-common.ps1` crashed when exactly one app instance was running — **FIXED**
+- [x] Fixed in `f1214b2`: `$procs.Count` -> `@($procs).Count` in `Stop-BlueBubbles`. Under
+  `Set-StrictMode -Version Latest` (`build-common.ps1:27`) a single `Process` is a scalar and has no
+  `.Count` in PowerShell 5.1, so the clean step threw exactly when it most needed to kill the
+  lock-holder. Zero or two-plus instances were unaffected.
+- [x] Verified end to end, not just in isolation: with one live instance, `build-and-run.ps1` now
+  prints `Stopping 1 running BlueBubbles instance(s)...` — the statement that used to throw — then
+  cleans, builds, and passes 400/400. Negative control reproduced first (`n=1 -> THREW`,
+  `n=2 -> OK`).
+- [x] Swept all three `.ps1` for the same pattern; this was the only occurrence. `publish.ps1` shares
+  the function and is fixed with it. Re-checked pure-ASCII (0 non-ASCII bytes) and 0 parse errors
+  across `build-and-run.ps1`, `build-common.ps1`, `publish.ps1`.
 
 
 #### B2b. No UI-layer logic in this codebase is testable
