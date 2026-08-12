@@ -98,7 +98,23 @@
     Off-screen attachments were downloading because the download was fired from view-model
     construction, not from container realization. That is B2g.
 
-#### B2g. Images decode oldest-first — mechanism fixed, **effect not yet measured**
+#### A3. Remove the "Theme backup" section, fold its three keys into Settings backup
+- [ ] Settings > Backup currently has **two independent** server-backed features: "Settings backup"
+  (`SetSettingsBackupAsync` / `Get` / `Delete`, 11 messaging/notification/private-API keys) and
+  "Theme backup" (`SetThemeAsync` / `Get` / `Delete`). Remove the second.
+- **After A1, the theme payload is only `theme`, `colorfulAvatars`, `use24HrFormat`** — three
+  ordinary settings, which is exactly why a whole separate section for them reads as pointless.
+- **Decision: fold those three keys into the settings payload rather than dropping them.** Costs
+  three lines each way plus a `ThemeHelper.Apply(_settings.Theme)` on the settings-restore path;
+  deleting them outright would make "restore my settings" silently lose your theme, which is a small
+  regression for no gain. Old settings backups simply lack the keys and the `Try*` helpers no-op.
+- [ ] `IBlueBubblesApiService.GetThemeAsync` / `SetThemeAsync` / `DeleteThemeAsync` lose their only
+  callers. Remove them from the interface, `BlueBubblesApiService`, and the two test stubs
+  (`OutgoingMessageServiceTests`, `SyncServiceTests`) — consistent with the A1/A2 orphan sweeps.
+- Known, accepted: a user with an existing theme backup on the server can no longer delete it from
+  this client. It is inert server-side data; not worth solving.
+
+ — mechanism fixed, **effect not yet measured**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
   container is realized (`AttachmentHolder`, `NotDownloaded` case), so it follows what is on or near
   screen instead of walking the loaded window oldest-first. The new-message append path still
