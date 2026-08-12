@@ -10,7 +10,9 @@ public record Chat(
     [property: JsonPropertyName("lastMessage")] Message? LastMessage,
     [property: JsonPropertyName("isArchived")] bool IsArchived,
     [property: JsonPropertyName("isPinned")] bool IsPinned,
-    [property: JsonPropertyName("hasUnreadMessage")] bool HasUnreadMessage,
+    // Nullable so "the payload said nothing" is distinguishable from "the payload said read":
+    // group-event payloads omit it entirely, and false there would clear the unread badge.
+    [property: JsonPropertyName("hasUnreadMessage")] bool? HasUnreadMessage,
     [property: JsonPropertyName("service")] string? Service,
     [property: JsonPropertyName("muteType")] string? MuteType,
     [property: JsonPropertyName("muteArgs")] string? MuteArgs,

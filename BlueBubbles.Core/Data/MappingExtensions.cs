@@ -173,7 +173,7 @@ public static class MappingExtensions
         DisplayName = dto.DisplayName,
         IsArchived = dto.IsArchived,
         IsPinned = dto.IsPinned,
-        HasUnreadMessage = dto.HasUnreadMessage,
+        HasUnreadMessage = dto.HasUnreadMessage ?? false,
         Service = dto.Service,
         MuteType = dto.MuteType,
         MuteArgs = dto.MuteArgs,

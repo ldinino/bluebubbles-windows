@@ -522,6 +522,32 @@ public class ChatsServiceTests
         Assert.True(chat.HasUnreadMessage, "renaming a group cleared its unread badge");
     }
 
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public async Task ApplyChatUpdateAsync_PayloadWithUnreadFlag_AppliesIt(string wireValue, bool expected)
+    {
+        // The guard above must not become "ignore the field": read state IS server-owned when the
+        // payload states it, so a mark-read on another device still has to land here.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-read-state", "Group", "+15551112222");
+        using (var seed = factory.CreateDbContext())
+        {
+            seed.Chats.Single(c => c.Guid == "iMessage;+;chat-read-state").HasUnreadMessage = !expected;
+            seed.SaveChanges();
+        }
+
+        var fromWire = System.Text.Json.JsonSerializer.Deserialize<Chat>($$"""
+            { "guid": "iMessage;+;chat-read-state", "hasUnreadMessage": {{wireValue}} }
+            """, BlueBubbles.Core.Utils.JsonDefaults.Options)!;
+
+        await svc.ApplyChatUpdateAsync(fromWire);
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal(expected,
+            db.Chats.Single(c => c.Guid == "iMessage;+;chat-read-state").HasUnreadMessage);
+    }
+
     [Fact]
     public async Task ApplyChatUpdateAsync_GroupNameChange_PersistsNewDisplayName()
     {

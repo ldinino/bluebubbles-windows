@@ -23,6 +23,14 @@ namespace BlueBubbles.Core.Services;
 /// <para><c>LatestMessageDate</c> is intentionally left to the caller: it is derived from the
 /// chat's last message (with a caller-specific fallback for brand-new local chats), not a direct
 /// server field copy.</para>
+///
+/// <para><b>A third category exists: server-owned but only when present.</b> <c>HasUnreadMessage</c>
+/// is nullable on <see cref="Chat"/> and is copied only when the payload actually carries it. Not
+/// every payload is a full chat record — the <c>group-name-change</c> / <c>participant-*</c> socket
+/// events serialize the chat without a read-state field, and a non-nullable bool would deserialize
+/// that silence to <c>false</c> and clear the user's unread badge on every rename. Silence means
+/// "no opinion", not "read". Any future field the server sometimes omits belongs here too, guarded
+/// the same way — never preserved by an inline exception at a call site.</para>
 /// </summary>
 internal static class ChatFieldMerge
 {
@@ -33,7 +41,7 @@ internal static class ChatFieldMerge
     {
         target.ChatIdentifier = server.ChatIdentifier;
         target.DisplayName = server.DisplayName;
-        target.HasUnreadMessage = server.HasUnreadMessage;
+        if (server.HasUnreadMessage is { } hasUnread) target.HasUnreadMessage = hasUnread;
         target.Service = server.Service;
         target.AutoSendReadReceipts = server.AutoSendReadReceipts;
         target.AutoSendTypingIndicators = server.AutoSendTypingIndicators;
