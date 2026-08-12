@@ -64,10 +64,6 @@ public partial class ChatViewModel : ObservableObject
     /// outlined bubbles pinned at the bottom of the thread until the server sends them.</summary>
     public ObservableCollection<ScheduledMessageItem> ScheduledItems { get; } = [];
 
-    /// <summary>GUID of the first unread message in the loaded page, or null. Used by the optional
-    /// "Scroll to last unread" setting to open the thread at the first unread message.</summary>
-    public string? FirstUnreadGuid { get; private set; }
-
     [ObservableProperty] public partial string ChatDisplayName { get; set; }
     [ObservableProperty] public partial string ParticipantSummary { get; set; }
     [ObservableProperty] public partial string Initials { get; set; }
@@ -203,7 +199,7 @@ public partial class ChatViewModel : ObservableObject
     {
         var m = FindOpenConversation(_chatsService.Chats)
             ?? FindOpenConversation(_chatsService.ArchivedChats);
-        return m is null ? null : new ConversationTileViewModel(m, _contacts, _settings);
+        return m is null ? null : new ConversationTileViewModel(m, _contacts);
     }
 
     private MergedConversation? FindOpenConversation(IReadOnlyList<ChatWithParticipants> source)
@@ -331,7 +327,6 @@ public partial class ChatViewModel : ObservableObject
             }
 
             if (messages.Count > 0) _oldestMessageDate = messages[0].DateCreated;
-            FirstUnreadGuid = ComputeFirstUnread(tile.Chat, messages);
             BuildMessageList(messages);
             await LoadAndApplyReactionsAsync(messages);
             await ResolveReplySnippetsAsync();
@@ -358,30 +353,6 @@ public partial class ChatViewModel : ObservableObject
             _reapplyMergePending = false;
             await OnContactsChangedAsync();
         }
-    }
-
-    /// <summary>Finds the first unread message in a freshly-loaded page (oldest→newest). Prefers the
-    /// message right after the chat's last-read marker; falls back to the oldest unread incoming
-    /// message. Returns null when the chat has no unread messages.</summary>
-    private static string? ComputeFirstUnread(ChatEntity chat, IReadOnlyList<MessageEntity> messages)
-    {
-        if (!chat.HasUnreadMessage || messages.Count == 0) return null;
-
-        if (!string.IsNullOrEmpty(chat.LastReadMessageGuid))
-        {
-            for (var i = 0; i < messages.Count; i++)
-            {
-                if (messages[i].Guid == chat.LastReadMessageGuid)
-                    return i + 1 < messages.Count ? messages[i + 1].Guid : null;
-            }
-        }
-
-        foreach (var m in messages)
-        {
-            if (!m.IsFromMe && m.DateRead is null)
-                return m.Guid;
-        }
-        return null;
     }
 
     [RelayCommand]

@@ -39,9 +39,7 @@ public sealed partial class BackupSettingsPage : Page
         ["autoDownload"] = _settings.AutoDownload,
         ["sendWithReturn"] = _settings.SendWithReturn,
         ["showDeliveryTimestamps"] = _settings.ShowDeliveryTimestamps,
-        ["statusIndicatorsOnChats"] = _settings.StatusIndicatorsOnChats,
         ["sendDelay"] = _settings.SendDelay,
-        ["scrollToLastUnread"] = _settings.ScrollToLastUnread,
         ["notifyOnChatList"] = _settings.NotifyOnChatList,
         ["notifyReactions"] = _settings.NotifyReactions,
         ["notificationSound"] = _settings.NotificationSound,
@@ -56,9 +54,7 @@ public sealed partial class BackupSettingsPage : Page
         if (TryBool(data, "autoDownload", out var b)) _settings.AutoDownload = b;
         if (TryBool(data, "sendWithReturn", out b)) _settings.SendWithReturn = b;
         if (TryBool(data, "showDeliveryTimestamps", out b)) _settings.ShowDeliveryTimestamps = b;
-        if (TryBool(data, "statusIndicatorsOnChats", out b)) _settings.StatusIndicatorsOnChats = b;
         if (TryInt(data, "sendDelay", out var i)) _settings.SendDelay = i;
-        if (TryBool(data, "scrollToLastUnread", out b)) _settings.ScrollToLastUnread = b;
         if (TryBool(data, "notifyOnChatList", out b)) _settings.NotifyOnChatList = b;
         if (TryBool(data, "notifyReactions", out b)) _settings.NotifyReactions = b;
         if (TryString(data, "notificationSound", out var s)) _settings.NotificationSound = s;

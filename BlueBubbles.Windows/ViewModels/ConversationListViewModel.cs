@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,7 +15,6 @@ public partial class ConversationListViewModel : ObservableObject
     private readonly IIncomingMessageProcessor _incomingProcessor;
     private readonly ISyncService _syncService;
     private readonly IWindowStateService _windowState;
-    private readonly AppSettings _appSettings;
 
     private List<ConversationTileViewModel> _allTiles = [];
     private List<ConversationTileViewModel> _archivedTiles = [];
@@ -41,8 +39,7 @@ public partial class ConversationListViewModel : ObservableObject
         ISocketService socketService,
         IIncomingMessageProcessor incomingProcessor,
         ISyncService syncService,
-        IWindowStateService windowState,
-        AppSettings appSettings)
+        IWindowStateService windowState)
     {
         _chatsService = chatsService;
         _contacts = contacts;
@@ -51,13 +48,10 @@ public partial class ConversationListViewModel : ObservableObject
         _incomingProcessor = incomingProcessor;
         _syncService = syncService;
         _windowState = windowState;
-        _appSettings = appSettings;
         SearchQuery = string.Empty;
 
         _reloadDebounce = new Timer(
             _ => RunOnUI(() => _ = ReloadFromDatabaseAsync()), null, Timeout.Infinite, Timeout.Infinite);
-
-        _appSettings.PropertyChanged += OnAppearanceSettingChanged;
 
         _chatsService.ChatsChanged += (_, _) => RunOnUI(RebuildList);
         _chatsService.ChatUpdated += (_, guid) => RunOnUI(() => RefreshTile(guid));
@@ -153,7 +147,7 @@ public partial class ConversationListViewModel : ObservableObject
                 existing.Refresh(m);
                 return existing;
             }
-            return new ConversationTileViewModel(m, _contacts, _appSettings);
+            return new ConversationTileViewModel(m, _contacts);
         }).ToList();
 
         ApplyFilter();
@@ -281,7 +275,7 @@ public partial class ConversationListViewModel : ObservableObject
                 existing.Refresh(m);
                 return existing;
             }
-            return new ConversationTileViewModel(m, _contacts, _appSettings);
+            return new ConversationTileViewModel(m, _contacts);
         }).ToList();
 
         if (IsShowingArchived)
@@ -351,20 +345,6 @@ public partial class ConversationListViewModel : ObservableObject
                 return i;
         }
         return -1;
-    }
-
-    private void OnAppearanceSettingChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        switch (e.PropertyName)
-        {
-            case nameof(AppSettings.StatusIndicatorsOnChats):
-                RunOnUI(() =>
-                {
-                    foreach (var t in _allTiles) t.ApplyAppearance(_appSettings);
-                    foreach (var t in _archivedTiles) t.ApplyAppearance(_appSettings);
-                });
-                break;
-        }
     }
 
     private static void RunOnUI(Action action)

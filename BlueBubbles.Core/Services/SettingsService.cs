@@ -69,9 +69,7 @@ public class SettingsService : ISettingsService
             AutoDownload = _appSettings.AutoDownload,
             SendWithReturn = _appSettings.SendWithReturn,
             ShowDeliveryTimestamps = _appSettings.ShowDeliveryTimestamps,
-            StatusIndicatorsOnChats = _appSettings.StatusIndicatorsOnChats,
             SendDelay = _appSettings.SendDelay,
-            ScrollToLastUnread = _appSettings.ScrollToLastUnread,
             // Notifications
             NotifyOnChatList = _appSettings.NotifyOnChatList,
             NotifyReactions = _appSettings.NotifyReactions,
@@ -148,9 +146,7 @@ public class SettingsService : ISettingsService
             _appSettings.AutoDownload = data.AutoDownload;
             _appSettings.SendWithReturn = data.SendWithReturn;
             _appSettings.ShowDeliveryTimestamps = data.ShowDeliveryTimestamps;
-            _appSettings.StatusIndicatorsOnChats = data.StatusIndicatorsOnChats;
             _appSettings.SendDelay = data.SendDelay;
-            _appSettings.ScrollToLastUnread = data.ScrollToLastUnread;
             // Notifications
             _appSettings.NotifyOnChatList = data.NotifyOnChatList;
             _appSettings.NotifyReactions = data.NotifyReactions;
@@ -238,9 +234,7 @@ public class SettingsService : ISettingsService
         public bool AutoDownload { get; init; } = true;
         public bool SendWithReturn { get; init; } = true;
         public bool ShowDeliveryTimestamps { get; init; }
-        public bool StatusIndicatorsOnChats { get; init; }
         public int SendDelay { get; init; }
-        public bool ScrollToLastUnread { get; init; }
         // Notifications
         public bool NotifyOnChatList { get; init; }
         public bool NotifyReactions { get; init; } = true;

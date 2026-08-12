@@ -2,10 +2,7 @@ using Windows.UI;
 
 namespace BlueBubbles.Windows.Helpers;
 
-/// <summary>
-/// Deterministic per-contact color palette shared by avatar fallbacks and (when "Colorful
-/// bubbles" is enabled) incoming message bubble tints, so a contact reads the same color in both.
-/// </summary>
+/// <summary>Deterministic per-contact color palette used by the colorful avatar fallbacks.</summary>
 public static class ContactColors
 {
     private static readonly Color[] Palette =
@@ -31,13 +28,5 @@ public static class ContactColors
                 hash = hash * 33 + c;
         }
         return Palette[hash % (uint)Palette.Length];
-    }
-
-    /// <summary>A translucent version of <see cref="ForKey"/> suitable as a bubble background
-    /// tint — subtle enough to keep the message text legible over it.</summary>
-    public static Color TintForKey(string? key)
-    {
-        var c = ForKey(key);
-        return Color.FromArgb(0x33, c.R, c.G, c.B);
     }
 }

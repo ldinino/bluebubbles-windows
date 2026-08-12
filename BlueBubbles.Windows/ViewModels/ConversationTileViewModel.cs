@@ -1,4 +1,3 @@
-using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -9,7 +8,6 @@ namespace BlueBubbles.Windows.ViewModels;
 public partial class ConversationTileViewModel : ObservableObject
 {
     private readonly IContactResolverService _contacts;
-    private readonly AppSettings _settings;
 
     private bool _lastMessageIsFromMe;
     private long? _lastMessageDelivered;
@@ -52,10 +50,9 @@ public partial class ConversationTileViewModel : ObservableObject
 
     public string ChatGuid => Chat.Guid;
 
-    public ConversationTileViewModel(MergedConversation data, IContactResolverService contacts, AppSettings settings)
+    public ConversationTileViewModel(MergedConversation data, IContactResolverService contacts)
     {
         _contacts = contacts;
-        _settings = settings;
         StatusText = string.Empty;
         DisplayName = string.Empty;
         Initials = string.Empty;
@@ -109,7 +106,7 @@ public partial class ConversationTileViewModel : ObservableObject
         IsArchived = data.IsArchived;
         ResolveGroupAvatars(data.Primary);
         CaptureLastMessageStatus(data);
-        ApplyAppearance(_settings);
+        ApplyAppearance();
     }
 
     /// <summary>True when the given underlying chat GUID belongs to this conversation (any constituent).
@@ -124,14 +121,14 @@ public partial class ConversationTileViewModel : ObservableObject
         _lastMessageRead = data.LastMessageDateRead;
     }
 
-    /// <summary>Applies the appearance settings (status indicators) to this
-    /// tile. Called on construction/refresh and live when the settings change.</summary>
-    public void ApplyAppearance(AppSettings settings)
+    /// <summary>Applies the tile's layout and its Sent/Delivered/Read indicator, which shows only
+    /// when the conversation's last message is ours.</summary>
+    public void ApplyAppearance()
     {
         TilePadding = new Thickness(8, 10, 8, 10);
         DividerThickness = new Thickness(0, 0, 0, 1);
 
-        var show = settings.StatusIndicatorsOnChats && _lastMessageIsFromMe;
+        var show = _lastMessageIsFromMe;
         ShowStatusIndicator = show;
         StatusText = show
             ? _lastMessageRead is not null ? "Read"

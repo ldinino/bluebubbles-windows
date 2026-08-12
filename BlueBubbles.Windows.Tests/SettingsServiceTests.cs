@@ -162,11 +162,12 @@ public class SettingsServiceTests
     }
 
     [Fact]
-    public void Load_FileWithRemovedAppearanceKeys_StillAppliesSurvivingSettings()
+    public void Load_FileWithRemovedSettingKeys_StillAppliesSurvivingSettings()
     {
         // Upgrade path: settings.json written by <= 0.22.x still carries colorfulBubbles /
-        // denseChatTiles / hideDividers / avatarScale. JsonOpts leaves UnmappedMemberHandling at
-        // the Skip default, so those keys must be ignored without failing the whole load.
+        // denseChatTiles / hideDividers / avatarScale / statusIndicatorsOnChats / scrollToLastUnread.
+        // JsonOpts leaves UnmappedMemberHandling at the Skip default, so those keys must be ignored
+        // without failing the whole load.
         var tempFile = Path.GetTempFileName();
         File.WriteAllText(tempFile, """
             {
@@ -175,10 +176,14 @@ public class SettingsServiceTests
               "theme": 2,
               "colorfulAvatars": false,
               "use24HrFormat": true,
+              "showDeliveryTimestamps": true,
+              "sendDelay": 3,
               "colorfulBubbles": true,
               "denseChatTiles": true,
               "hideDividers": true,
-              "avatarScale": 1.5
+              "avatarScale": 1.5,
+              "statusIndicatorsOnChats": true,
+              "scrollToLastUnread": true
             }
             """);
 
@@ -192,6 +197,8 @@ public class SettingsServiceTests
             Assert.Equal(2, appSettings.Theme);
             Assert.False(appSettings.ColorfulAvatars);
             Assert.True(appSettings.Use24HrFormat);
+            Assert.True(appSettings.ShowDeliveryTimestamps);
+            Assert.Equal(3, appSettings.SendDelay);
         }
         finally
         {
