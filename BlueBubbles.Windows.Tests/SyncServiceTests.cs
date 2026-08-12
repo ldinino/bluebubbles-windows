@@ -880,9 +880,6 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<JsonElement>> SetAccountAliasAsync(string alias, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> AnswerFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> LeaveFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> GetThemeAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> SetThemeAsync(string name, Dictionary<string, object?> data, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> DeleteThemeAsync(string name, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetSettingsBackupAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> SetSettingsBackupAsync(string name, Dictionary<string, object?> data, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> DeleteSettingsBackupAsync(string name, CancellationToken ct = default) => throw new NotImplementedException();

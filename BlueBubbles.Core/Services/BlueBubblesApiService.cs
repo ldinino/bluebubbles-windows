@@ -632,21 +632,7 @@ public class BlueBubblesApiService : IBlueBubblesApiService
         => PostAsync<JsonElement>($"facetime/leave/{callUuid}",
             new { }, ct: ct);
 
-    // ── Backup (6) ──
-
-    public Task<ApiResponse<JsonElement>> GetThemeAsync(CancellationToken ct = default)
-        => GetAsync<JsonElement>("backup/theme", ct: ct);
-
-    public Task<ApiResponse<JsonElement>> SetThemeAsync(
-        string name, Dictionary<string, object?> data,
-        CancellationToken ct = default)
-        => PostAsync<JsonElement>("backup/theme",
-            new { name, data }, ct: ct);
-
-    public Task<ApiResponse<JsonElement>> DeleteThemeAsync(
-        string name, CancellationToken ct = default)
-        => DeleteAsync<JsonElement>("backup/theme",
-            new { name }, ct: ct);
+    // ── Backup (3) ──
 
     public Task<ApiResponse<JsonElement>> GetSettingsBackupAsync(
         CancellationToken ct = default)

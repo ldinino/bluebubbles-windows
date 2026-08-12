@@ -787,8 +787,7 @@ Categories and items:
 - Server logs viewer (read-only TextBox or RichEditBox, monospaced)
 
 **Backup & Restore**
-- Theme backup: save / restore / delete
-- Settings backup: save / restore / delete
+- Settings backup: save / restore / delete (includes the theme/appearance keys)
 
 **About**
 - App version
