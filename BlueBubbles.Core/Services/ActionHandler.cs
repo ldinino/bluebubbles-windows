@@ -63,7 +63,7 @@ public class ActionHandler : IActionHandler
             case SocketEvents.ParticipantAdded:
             case SocketEvents.ParticipantRemoved:
             case SocketEvents.ParticipantLeft:
-                ChatUpdated?.Invoke(this, new ChatUpdatedEventArgs(eventName, data));
+                ChatUpdated?.Invoke(this, new ChatUpdatedEventArgs(eventName, data, ExtractChat(data)));
                 break;
             case SocketEvents.IncomingFacetime:
                 IncomingFaceTime?.Invoke(this, data);
@@ -81,6 +81,35 @@ public class ActionHandler : IActionHandler
             case SocketEvents.ScheduledMessageError:
                 HandleScheduledMessage(eventName, data);
                 break;
+        }
+    }
+
+    /// <summary>Pulls the chat out of a group-event payload. The server emits these as a serialized
+    /// message (<c>chats[0]</c>, participants loaded), matching the Flutter client's
+    /// <c>Chat.fromMap(data['chats'].first)</c>; a bare chat object is accepted as a fallback.</summary>
+    private static Chat? ExtractChat(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) return null;
+        if (data.TryGetProperty("data", out var inner) && inner.ValueKind == JsonValueKind.Object)
+            data = inner;
+
+        JsonElement chatElement;
+        if (data.TryGetProperty("chats", out var chats)
+            && chats.ValueKind == JsonValueKind.Array && chats.GetArrayLength() > 0)
+        {
+            chatElement = chats[0];
+        }
+        else if (data.TryGetProperty("guid", out _))
+        {
+            chatElement = data;
+        }
+        else return null;
+
+        try { return chatElement.Deserialize<Chat>(JsonDefaults.Options); }
+        catch (JsonException ex)
+        {
+            AppLog.Warn(LogCategory.Socket, $"Could not parse chat from chat-updated payload: {ex.Message}");
+            return null;
         }
     }
 

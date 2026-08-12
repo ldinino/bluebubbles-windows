@@ -280,6 +280,51 @@ public class ChatsService : IChatsService
         await LoadChatsAsync();
     }
 
+    public async Task ApplyChatUpdateAsync(Chat chatData)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var entity = await db.Chats
+            .Include(c => c.ChatParticipants)
+            .ThenInclude(cp => cp.Handle)
+            .FirstOrDefaultAsync(c => c.Guid == chatData.Guid);
+        if (entity is null)
+        {
+            // Nothing to update: the chat isn't cached yet, and the payload for these events is not a
+            // create path (EnsureChatExistsAsync owns that, off new-message).
+            AppLog.Warn(LogCategory.Socket, $"Chat update for unknown chat {chatData.Guid}; ignoring");
+            return;
+        }
+
+        // Server-owned fields only; client-owned pin/mute/archive are preserved. See ChatFieldMerge.
+        ChatFieldMerge.ApplyServerOwnedFields(entity, chatData);
+
+        if (chatData.Participants is { Count: > 0 })
+        {
+            await LinkParticipantsAsync(db, entity, chatData.Participants);
+
+            // The server loads participants fresh for these events, so the payload's list is the whole
+            // membership — a handle it omits has left the chat. LinkParticipantsAsync only ever adds,
+            // so removal has to be applied here or a participant-removed event never lands.
+            var keep = chatData.Participants
+                .Select(h => ParticipantKey(h.Address, h.Service))
+                .ToHashSet();
+            var stale = entity.ChatParticipants
+                .Where(cp => !keep.Contains(ParticipantKey(cp.Handle.Address, cp.Handle.Service)))
+                .ToList();
+            if (stale.Count > 0)
+                db.ChatParticipants.RemoveRange(stale);
+        }
+
+        await db.SaveChangesAsync();
+
+        // Reload rather than patch the cache: participants and display name both feed the tile, and
+        // the list renders from this in-memory copy, so a DB-only write would be invisible.
+        await LoadChatsAsync();
+    }
+
+    private static string ParticipantKey(string address, string? service) => $"{address}|{service}";
+
     /// <summary>Returns the chat's participants, preferring those already on the payload. The live
     /// socket <c>new-message</c> event carries the chat but not its participants, so a chat created
     /// from it would render as "Unknown" — fetch the full participant list from the server in that

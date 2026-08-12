@@ -460,4 +460,197 @@ public class ChatsServiceTests
         Assert.True(raised > 0, "ChatsChanged was not raised for a message on an unknown chat");
         Assert.Contains(svc.Chats, c => c.Chat.Guid == "chat-late");
     }
+
+    // ---- ApplyChatUpdateAsync (group-name-change / participant-* socket events) ----
+
+    private static Chat UpdatedChat(string guid, string? displayName, List<Handle>? participants) =>
+        new(guid, guid, displayName, participants, null, false, false, false, "iMessage",
+            null, null, null, null, null, 43, false, false, null);
+
+    private static async Task SeedGroupChat(
+        TestDbContextFactory factory, string guid, string? displayName, params string[] participants)
+    {
+        using var db = factory.CreateDbContext();
+        var chat = new ChatEntity { Guid = guid, DisplayName = displayName, LatestMessageDate = 1000 };
+        db.Chats.Add(chat);
+        await db.SaveChangesAsync();
+
+        foreach (var address in participants)
+        {
+            var handle = new HandleEntity { Address = address, Service = "iMessage" };
+            db.Handles.Add(handle);
+            await db.SaveChangesAsync();
+            db.ChatParticipants.Add(new ChatParticipant { ChatId = chat.Id, HandleId = handle.Id });
+        }
+        await db.SaveChangesAsync();
+    }
+
+    private static List<string> ParticipantAddresses(TestDbContextFactory factory, string guid)
+    {
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == guid);
+        return db.ChatParticipants
+            .Where(cp => cp.ChatId == chat.Id)
+            .Select(cp => cp.Handle.Address)
+            .OrderBy(a => a)
+            .ToList();
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_PayloadWithoutUnreadFlag_DoesNotClearTheUnreadBadge()
+    {
+        // A rename payload is deserialized straight off the wire. `hasUnreadMessage` is a
+        // non-nullable bool, so a payload that omits it yields false -- and ApplyServerOwnedFields
+        // copies it. If that lands, renaming a group silently marks it read.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-unread", "Old Name", "+15551112222");
+        using (var seed = factory.CreateDbContext())
+        {
+            seed.Chats.Single(c => c.Guid == "iMessage;+;chat-unread").HasUnreadMessage = true;
+            seed.SaveChanges();
+        }
+
+        var fromWire = System.Text.Json.JsonSerializer.Deserialize<Chat>("""
+            { "guid": "iMessage;+;chat-unread", "displayName": "New Name", "service": "iMessage" }
+            """, BlueBubbles.Core.Utils.JsonDefaults.Options)!;
+
+        await svc.ApplyChatUpdateAsync(fromWire);
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "iMessage;+;chat-unread");
+        Assert.Equal("New Name", chat.DisplayName);
+        Assert.True(chat.HasUnreadMessage, "renaming a group cleared its unread badge");
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public async Task ApplyChatUpdateAsync_PayloadWithUnreadFlag_AppliesIt(string wireValue, bool expected)
+    {
+        // The guard above must not become "ignore the field": read state IS server-owned when the
+        // payload states it, so a mark-read on another device still has to land here.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-read-state", "Group", "+15551112222");
+        using (var seed = factory.CreateDbContext())
+        {
+            seed.Chats.Single(c => c.Guid == "iMessage;+;chat-read-state").HasUnreadMessage = !expected;
+            seed.SaveChanges();
+        }
+
+        var fromWire = System.Text.Json.JsonSerializer.Deserialize<Chat>($$"""
+            { "guid": "iMessage;+;chat-read-state", "hasUnreadMessage": {{wireValue}} }
+            """, BlueBubbles.Core.Utils.JsonDefaults.Options)!;
+
+        await svc.ApplyChatUpdateAsync(fromWire);
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal(expected,
+            db.Chats.Single(c => c.Guid == "iMessage;+;chat-read-state").HasUnreadMessage);
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_GroupNameChange_PersistsNewDisplayName()
+    {
+        // The socket event is the only notice of a rename made on another device; without a write the
+        // conversation list (which renders from the DB) keeps the old name.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-group", "Old Name", "+15551112222");
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-group", "New Name", null));
+
+        using var db = factory.CreateDbContext();
+        Assert.Equal("New Name", db.Chats.Single(c => c.Guid == "iMessage;+;chat-group").DisplayName);
+        Assert.Equal("New Name", svc.Chats.Single().Chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_DoesNotClobberClientOnlyFields()
+    {
+        // The server has no endpoint for pin/mute/archive, so its payload always carries the defaults.
+        // Copying them wipes the user's state — the exact regression ChatFieldMerge exists to prevent.
+        var (svc, factory) = CreateService();
+        using (var db = factory.CreateDbContext())
+        {
+            db.Chats.Add(new ChatEntity
+            {
+                Guid = "iMessage;+;chat-pinned",
+                DisplayName = "Old Name",
+                IsPinned = true,
+                PinIndex = 3,
+                IsArchived = true,
+                MuteType = "mute",
+                MuteArgs = "args",
+                CustomAvatarPath = "avatar.png",
+                OldestSyncedMessageDate = 12345
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-pinned", "New Name", null));
+
+        using var db2 = factory.CreateDbContext();
+        var chat = db2.Chats.Single(c => c.Guid == "iMessage;+;chat-pinned");
+        Assert.Equal("New Name", chat.DisplayName);
+        Assert.True(chat.IsPinned);
+        Assert.Equal(3, chat.PinIndex);
+        Assert.True(chat.IsArchived);
+        Assert.Equal("mute", chat.MuteType);
+        Assert.Equal("args", chat.MuteArgs);
+        Assert.Equal("avatar.png", chat.CustomAvatarPath);
+        Assert.Equal(12345, chat.OldestSyncedMessageDate);
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_ParticipantAdded_LinksTheNewHandle()
+    {
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-add", "Group", "+15551112222");
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-add", "Group",
+            [MockHandle("+15551112222", "iMessage"), MockHandle("+15553334444", "iMessage")]));
+
+        Assert.Equal(["+15551112222", "+15553334444"],
+            ParticipantAddresses(factory, "iMessage;+;chat-add"));
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_ParticipantRemoved_DropsTheJoinRow()
+    {
+        // The payload's participant list is the whole membership, so an omitted handle has left.
+        // LinkParticipantsAsync only adds, so removal has to be applied explicitly.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-remove", "Group", "+15551112222", "+15553334444");
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-remove", "Group",
+            [MockHandle("+15551112222", "iMessage")]));
+
+        Assert.Equal(["+15551112222"], ParticipantAddresses(factory, "iMessage;+;chat-remove"));
+        Assert.Single(svc.Chats.Single().Participants);
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_PayloadWithoutParticipants_KeepsExistingOnes()
+    {
+        // A payload that omits participants entirely says nothing about membership; treating it as
+        // "everyone left" would empty the chat and render it as Unknown.
+        var (svc, factory) = CreateService();
+        await SeedGroupChat(factory, "iMessage;+;chat-keep", "Group", "+15551112222", "+15553334444");
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-keep", "Renamed", null));
+
+        Assert.Equal(["+15551112222", "+15553334444"],
+            ParticipantAddresses(factory, "iMessage;+;chat-keep"));
+    }
+
+    [Fact]
+    public async Task ApplyChatUpdateAsync_UnknownChat_DoesNotCreateIt()
+    {
+        // Update-only: creating chats from this payload is EnsureChatExistsAsync's job (off new-message).
+        var (svc, factory) = CreateService();
+
+        await svc.ApplyChatUpdateAsync(UpdatedChat("iMessage;+;chat-absent", "Ghost", null));
+
+        using var db = factory.CreateDbContext();
+        Assert.Empty(db.Chats.Where(c => c.Guid == "iMessage;+;chat-absent"));
+    }
 }

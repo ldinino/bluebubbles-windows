@@ -39,7 +39,10 @@ public record MessageEventArgs(Message Message, string? TempGuid);
 /// <summary>A tapback (reaction) message together with its resolved (prefix-stripped) parent GUID.</summary>
 public record ReactionEventArgs(Message Reaction, string ParentGuid);
 
-public record ChatUpdatedEventArgs(string EventType, JsonElement Data);
+/// <summary>Chat is the chat carried by the payload (the server emits these events as a serialized
+/// message whose <c>chats</c> array holds the freshly-loaded chat, participants included), or null
+/// when it couldn't be parsed.</summary>
+public record ChatUpdatedEventArgs(string EventType, JsonElement Data, Chat? Chat = null);
 
 /// <summary>
 /// EventType is the raw scheduled-message socket event name; Messages is normalized to a list
