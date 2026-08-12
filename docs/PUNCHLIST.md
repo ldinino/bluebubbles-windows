@@ -7,23 +7,37 @@
 
 ## Open bugs
 
-#### A1. Remove four Appearance settings (maintainer decision, 2026-08-11)
-- [ ] Remove **Colorful bubbles**, **Dense chat tiles**, **Hide dividers** and **Avatar size** from
-  Settings > Appearance. Kept: Theme, Colorful avatars, 24-hour time.
-- **They are not dead code** — all four are wired and have real effects
-  (`ChatBubble.xaml.cs` bubble tint, `ConversationTileViewModel` `TilePadding`/`DividerThickness`,
-  `AvatarControl` `Size * AvatarScale`). This is a deliberate feature removal for being clutter, not
-  a cleanup, so the surviving behaviour has to be chosen rather than fallen into.
-- **Surviving behaviour = today's defaults**, so a user on defaults sees no visual change: bubbles
-  take `ControlFillColorDefaultBrush`, tiles use `Thickness(8,10,8,10)`, the 1px divider stays,
-  avatars render unscaled.
-- **Measured, and the reason this is safe:** `SettingsService.JsonOpts` sets only `WriteIndented`
-  and `CamelCase` — no `UnmappedMemberHandling.Disallow` — so System.Text.Json skips unknown
-  properties and an existing `settings.json` still loads once the keys are gone. **No migration or
-  cleanup shim is needed or wanted.** (Had that option been `Disallow`, this removal would have
-  reset every setting for every existing user on upgrade.)
-- [ ] Docs to follow the code: `README.md`, `docs/BlueBubbles-WinUI3-Design-Spec.md` (the Appearance
-  list), `docs/PLAN.md` phase entry.
+#### A1. Remove four Appearance settings — **DONE**
+- [x] Colorful bubbles, Dense chat tiles, Hide dividers and Avatar size removed from Settings >
+  Appearance (`02dbe69` + `c13cb2a`, merged `c24619d`). Kept: Theme, Colorful avatars, 24-hour time.
+  Surviving behaviour is today's defaults, so a user on defaults sees no change. Appearance page
+  eyeballed by the maintainer.
+- [x] **No settings migration, and none was needed.** `SettingsService.JsonOpts` leaves
+  `UnmappedMemberHandling` at `Skip`, so an existing `settings.json` still loads with the dead keys
+  present. `SettingsVersion` was correctly left at 1 and the v0->v1 migration untouched.
+- [x] New test `Load_FileWithRemovedAppearanceKeys_StillAppliesSurvivingSettings` covers the upgrade
+  path, which nothing did before. Negative control run by me: setting
+  `UnmappedMemberHandling.Disallow` fails that test and **only** that test.
+- [x] Fixed in review: the defaults test had swapped a non-vacuous assertion (`AvatarScale == 1.0`,
+  where `double` defaults to `0.0`) for a vacuous one (`Use24HrFormat == false`, where `bool`
+  already defaults to `false` and the constructor never sets it). Replaced with `SettingsVersion`,
+  `NotificationSound` and `LocalhostPort`; mutation-proved by stripping two constructor defaults.
+- [ ] **Orphans left behind, sweep in A2:** `ContactColors.TintForKey` and
+  `MessageBubbleViewModel.SenderColorKey` (still assigned, never read) have no remaining callers.
+
+#### A2. Messaging settings: drop "Scroll to last unread", make status indicators unconditional
+- [ ] **Neither is dead — both are fully wired.** Measured 2026-08-11:
+  - `ScrollToLastUnread` (default **off**) — `ChatPage.ScrollToInitialPosition` opens the thread at
+    the first unread message instead of the bottom. Slack/Discord behaviour in an iMessage client.
+    **Decision: remove the setting, always open at the bottom.**
+  - `StatusIndicatorsOnChats` (default **off**) — bound at `ConversationListPage.xaml` and
+    live-updated via `ConversationListViewModel.OnAppearanceSettingChanged`. It looked like a no-op
+    only because `ConversationTileViewModel` computes
+    `show = settings.StatusIndicatorsOnChats && _lastMessageIsFromMe`, so it appears **only** on
+    chats where you sent the last message. **Decision: delete the toggle, keep the behaviour on
+    permanently** — Sent/Delivered/Read on the tile is useful and iMessage-like; being off by
+    default is why it was never discovered.
+- [ ] Sequencing: must follow A1 (same files, and `ApplyAppearance` is the same method).
 
 #### B1. New/updated messages don't reach the conversation list until a restart or "fetch latest"
 - [x] Messages persisted fine; the *event contract* was broken. Six causes fixed: silent bare catch in
