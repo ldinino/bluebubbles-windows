@@ -440,7 +440,7 @@ Settings is now its own full-window navigation context (spec 8.8) instead of liv
   - **Messaging** — display name, auto-download, send-with-Enter, delivery timestamps, chat-list indicators, scroll-to-last-unread, send delay (NumberBox 0–10).
   - **Private API** (gated) — send typing indicators, mark-chat-as-read, manual-mark-as-read (the always-on collapsed model from Phase 6.5; no per-send toggles).
   - **Server Management** — live server info, statistics, soft/hard/iMessage restart (confirmed), check/install update, server logs viewer, and the **Reset App** danger zone (moved here from the old flat page).
-  - **Backup & Restore** — settings + theme backup save/restore/delete against the `backup/settings` and `backup/theme` endpoints (round-trips this app's own schema).
+  - **Backup & Restore** — settings + theme backup save/restore/delete against the `backup/settings` and `backup/theme` endpoints (round-trips this app's own schema). *(0.23.0: the separate theme backup was removed and its three keys folded into the settings payload; `backup/theme` is no longer called and its API methods are gone. See punchlist A3.)*
   - **About** — app version (from package), live server version, GitHub/Discord/Docs links.
 - **Theme application** — new `Services/ThemeHelper` maps `AppSettings.Theme` (0=System/1=Light/2=Dark) to `ElementTheme` and applies it to the window root; applied at startup in `MainWindow` and live from the Appearance page.
 - **Auto-save** — new `Services/SettingsAutoSave` wires each category page's `AppSettings` edits (x:Bind TwoWay) to `ISettingsService.Save()` while loaded.

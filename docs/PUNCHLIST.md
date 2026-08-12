@@ -98,21 +98,24 @@
     Off-screen attachments were downloading because the download was fired from view-model
     construction, not from container realization. That is B2g.
 
-#### A3. Remove the "Theme backup" section, fold its three keys into Settings backup
-- [ ] Settings > Backup currently has **two independent** server-backed features: "Settings backup"
-  (`SetSettingsBackupAsync` / `Get` / `Delete`, 11 messaging/notification/private-API keys) and
-  "Theme backup" (`SetThemeAsync` / `Get` / `Delete`). Remove the second.
-- **After A1, the theme payload is only `theme`, `colorfulAvatars`, `use24HrFormat`** — three
-  ordinary settings, which is exactly why a whole separate section for them reads as pointless.
-- **Decision: fold those three keys into the settings payload rather than dropping them.** Costs
-  three lines each way plus a `ThemeHelper.Apply(_settings.Theme)` on the settings-restore path;
-  deleting them outright would make "restore my settings" silently lose your theme, which is a small
-  regression for no gain. Old settings backups simply lack the keys and the `Try*` helpers no-op.
-- [ ] `IBlueBubblesApiService.GetThemeAsync` / `SetThemeAsync` / `DeleteThemeAsync` lose their only
-  callers. Remove them from the interface, `BlueBubblesApiService`, and the two test stubs
-  (`OutgoingMessageServiceTests`, `SyncServiceTests`) — consistent with the A1/A2 orphan sweeps.
-- Known, accepted: a user with an existing theme backup on the server can no longer delete it from
-  this client. It is inert server-side data; not worth solving.
+#### A3. Remove the "Theme backup" section, fold its three keys into Settings backup — **DONE**
+- [x] Merged `2d00f00`. The Theme backup card, its three handlers, `ThemeBackupName`, and the
+  `GetThemeAsync`/`SetThemeAsync`/`DeleteThemeAsync` API methods (interface, implementation, both
+  test stubs) are gone. `theme`, `colorfulAvatars` and `use24HrFormat` now ride in the settings
+  payload, and the settings-restore path calls `ThemeHelper.Apply` so a restore re-themes the live
+  window instead of waiting for a relaunch.
+- [x] Verified: zero matches for `ThemeAsync|backup/theme|ThemeBackupName` anywhere in the source;
+  no shared helper deleted (`RunAsync`, `Report`, `TryExtractPayload`, `TryBool`, `TryInt`,
+  `TryString` are all still used by the settings path); clean build, 400/400 unchanged from
+  baseline, launch confirmed by process (`Id 11408`, `MainWindowTitle "BlueBubbles"`).
+- **Backward compatibility is a source read, not an executed test** — `BackupSettingsPage` is in
+  `BlueBubbles.Windows` and unreachable from the suite (B2b). `TryBool`/`TryInt` return false before
+  the caller's assignment when a key is absent, so an old backup leaves current values alone. Note
+  `ThemeHelper.Apply` still fires on such a restore, harmlessly re-applying the unchanged theme.
+- [ ] **Not verified end-to-end (human-only):** Settings > Backup rendering; a real save/restore
+  round-trip proving the three keys persist server-side; the live re-theme on restore; and an actual
+  pre-change backup restoring as a no-op.
+- Accepted: an existing theme backup already on the server is now unreachable from this client.
 
 #### B2g. Images decode oldest-first — mechanism fixed, **effect not yet measured**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
