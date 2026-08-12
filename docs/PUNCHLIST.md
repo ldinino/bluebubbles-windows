@@ -7,6 +7,29 @@
 
 ## Open bugs
 
+#### B6. `chat-updated` socket events are never persisted, so renames don't reach the list
+- [ ] **Measured 2026-08-12, in source.** `ActionHandler` handles `group-name-change`,
+  `participant-added`, `participant-removed` and `participant-left` by firing
+  `ChatUpdated?.Invoke(this, new ChatUpdatedEventArgs(eventName, data))` and **nothing else** — no
+  DB write, no service call. There are exactly two subscribers:
+  - `ConversationListViewModel` -> debounced `LoadChatsAsync()`, which reads the **database**.
+  - `ChatDetailsViewModel` -> sets `ChatDisplayName` in memory, and only while that chat's details
+    pane is open. Its `RefreshParticipantsAsync` re-reads `_chatsService.Chats` — the in-memory list
+    built from the DB — so the participant path is stale as well.
+- **Consequence:** a group rename or participant change made elsewhere updates one label in an open
+  details pane and nothing else. The conversation tile keeps the old name until a full sync
+  re-fetches chats. **B4's debounce therefore throttles a reload that cannot reflect the event that
+  triggered it** — the throttle is still correct, but it was protecting a no-op.
+- **This is a spec deviation, not a design choice:** `docs/PLAN.md:112` states the intent as
+  "`group-name-change`, `participant-*` -> update chat in DB".
+- **Not verified:** whether the symptom is visible in practice, i.e. whether any *other* path
+  (incremental sync, `chat-read-status-changed`, a socket `new-message` carrying the chat) happens
+  to refresh the name soon enough to mask it. That is step one before writing anything.
+- Note while in the area: `ChatDetailsViewModel.OnChatUpdated` is `async void` — the same hazard B4
+  just removed from the sibling class.
+- Server-is-truth applies: any write must go through `ChatFieldMerge.ApplyServerOwnedFields` so
+  client-only fields (pin/mute/archive) are not clobbered. See CLAUDE.md.
+
 #### A1. Remove four Appearance settings — **DONE**
 - [x] Colorful bubbles, Dense chat tiles, Hide dividers and Avatar size removed from Settings >
   Appearance (`02dbe69` + `c13cb2a`, merged `c24619d`). Kept: Theme, Colorful avatars, 24-hour time.
