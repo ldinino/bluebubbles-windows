@@ -355,30 +355,6 @@ public partial class ChatViewModel : ObservableObject
         }
     }
 
-    /// <summary>Finds the first unread message in a freshly-loaded page (oldest→newest). Prefers the
-    /// message right after the chat's last-read marker; falls back to the oldest unread incoming
-    /// message. Returns null when the chat has no unread messages.</summary>
-    private static string? ComputeFirstUnread(ChatEntity chat, IReadOnlyList<MessageEntity> messages)
-    {
-        if (!chat.HasUnreadMessage || messages.Count == 0) return null;
-
-        if (!string.IsNullOrEmpty(chat.LastReadMessageGuid))
-        {
-            for (var i = 0; i < messages.Count; i++)
-            {
-                if (messages[i].Guid == chat.LastReadMessageGuid)
-                    return i + 1 < messages.Count ? messages[i + 1].Guid : null;
-            }
-        }
-
-        foreach (var m in messages)
-        {
-            if (!m.IsFromMe && m.DateRead is null)
-                return m.Guid;
-        }
-        return null;
-    }
-
     [RelayCommand]
     private async Task LoadMoreMessagesAsync()
     {
