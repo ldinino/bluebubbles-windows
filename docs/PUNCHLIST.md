@@ -305,13 +305,32 @@
 - [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
   exception in it is unobserved. Found while reviewing B1; deliberately left out of that PR's scope.
 
-#### B5. Tests write to the real `%LOCALAPPDATA%\BlueBubbles\logs` — **promoted**
-- [ ] Pre-existing: `AppLog` is a static singleton, so the suite writes into the production log.
-- [ ] **No longer merely untidy.** Fixture noise is now interleaved with the logs used as primary
-  evidence — B6's review surfaced `[ERROR] ... injected save failure` (the
-  `FailedEvent_IsLoggedAndQueueKeepsDraining` fixture) sitting in a real session log. Every
-  measurement in this debug session came from these files, so polluting them costs more than the
-  tidiness. Worth taking before B2c/B2d.
+#### B5. Tests wrote to the real `%LOCALAPPDATA%\BlueBubbles\logs` — **FIXED**
+- [x] Merged `87f961f` (`2333bb2`). `AppLog.RedirectLogDirectory(string)` (guarded by the existing
+  `_fileLock`, resets `_currentLogDate` so the new directory gets created and pruned on next write)
+  plus a `[ModuleInitializer]` in the test assembly pointing the suite at
+  `%TEMP%\BlueBubblesTests\logs-<guid>`, with best-effort cleanup on `ProcessExit`.
+- **Why `[ModuleInitializer]` and not a fixture:** `_logDir ??=` caches on first use and xunit runs
+  collections in parallel, so any fixture or collection hook can lose the race. Module init runs at
+  assembly load, before discovery.
+- **Deliberately not done:** no "disable file logging" flag — a production-only off switch can ship
+  accidentally on, and it would stop the suite exercising `WriteToFile` at all. Redirecting keeps
+  the real write path under test.
+- **The fixture's `[ERROR] ... injected save failure` line was NOT silenced.** It is the assertion in
+  B1's `FailedEvent_IsLoggedAndQueueKeepsDraining`; only where it lands was the problem.
+- Verified by me, both directions: on the fixed branch a full suite leaves the real log
+  byte-identical (308880 bytes / 3069 lines / 77 `injected` before and after, 413 passed); on
+  unfixed `main` the same run grows it by **2928 bytes** (411 passed). Nothing changed in
+  formatting, levels, retention, `MaxEntries`, `EntryAdded` or `Entries`.
+- Mutation worth keeping in mind: pointing `_logDir` at a *wrong* temp path (not merely removing the
+  redirect) still fails the location test, which is what makes the two tests non-redundant.
+- [ ] Untested by design, declared not dressed up: the `_currentLogDate = DateTime.MinValue` reset —
+  the suite never calls `Initialize()`, so nothing distinguishes its presence. Midnight rollover
+  during a run is also unverified.
+- **Audit finding (clean):** `AppLog` was the only leak into real user state. Two `GetFolderPath`
+  sites exist in Core (`AppLog`, `SettingsService`); the SQLite and attachment paths live in
+  `BlueBubbles.Windows`, which the test project does not reference; all 12 `new SettingsService(...)`
+  sites pass a temp file; DB tests use in-memory/`TestDbContextFactory`.
 
 ---
 
