@@ -51,6 +51,20 @@ public static class AppLog
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "BlueBubbles", "logs");
 
+    /// <summary>
+    /// Point file logging at <paramref name="directory"/> instead of the default. Exists so the
+    /// test assembly can send its bytes to a disposable temp directory while still exercising the
+    /// real write path; production never calls it.
+    /// </summary>
+    public static void RedirectLogDirectory(string directory)
+    {
+        lock (_fileLock)
+        {
+            _logDir = directory;
+            _currentLogDate = DateTime.MinValue; // force create+prune of the new dir on next write
+        }
+    }
+
     // Legacy parameterless overloads default to the App category so existing call sites compile
     // unchanged; the category overloads are preferred for new code.
     public static void Debug(string message) => Add(LogLevel.Debug, LogCategory.App, message);
