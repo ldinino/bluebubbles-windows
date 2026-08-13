@@ -61,7 +61,7 @@
   where `double` defaults to `0.0`) for a vacuous one (`Use24HrFormat == false`, where `bool`
   already defaults to `false` and the constructor never sets it). Replaced with `SettingsVersion`,
   `NotificationSound` and `LocalhostPort`; mutation-proved by stripping two constructor defaults.
-- [ ] **Orphans left behind, sweep in A2:** `ContactColors.TintForKey` and
+- [x] **Orphans swept by A2:** `ContactColors.TintForKey` and
   `MessageBubbleViewModel.SenderColorKey` (still assigned, never read) have no remaining callers.
 
 #### A2. Messaging settings: drop "Scroll to last unread", make status indicators unconditional — **DONE**
@@ -301,9 +301,13 @@
 - Research branches are the only record of the harness and detector and are **NOT FOR MERGE**:
   `experiment/otp-toast-windows-affordance` (`98ef65a`), `research/otp-real-corpus` (`b6c8cce`).
 
-#### B4. `ConversationListViewModel.OnChatUpdated` is `async void` with an unthrottled full reload
-- [ ] Runs `LoadChatsAsync()` on every group-name/participant socket event with no debounce, and an
-  exception in it is unobserved. Found while reviewing B1; deliberately left out of that PR's scope.
+#### B4. `ConversationListViewModel.OnChatUpdated` was `async void` with an unthrottled full reload — **FIXED**
+- [x] Merged `345ef87`. The handler no longer runs `LoadChatsAsync()` directly on every
+  group-name/participant socket event, and it can no longer throw unobserved; it routes through a
+  debounce matching B1's pattern.
+- Note recorded during B6: until B6 landed, this debounce was throttling a reload that could not
+  reflect its own trigger, because nothing persisted the `chat-updated` payload. The throttle was
+  always correct; it only started doing real work once B6 merged.
 
 #### B5. Tests wrote to the real `%LOCALAPPDATA%\BlueBubbles\logs` — **FIXED**
 - [x] Merged `87f961f` (`2333bb2`). `AppLog.RedirectLogDirectory(string)` (guarded by the existing
