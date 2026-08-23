@@ -47,7 +47,10 @@
 - Narrow permanent instrumentation was re-added on the attachment write path (duplicate skipped /
   duplicate collapsed), gated behind verbose logging — B2e had removed the last tracing and we
   immediately lost the ability to see the next attachment bug from a log.
-- [ ] **Not verified (human-only):** photos rendering once in a real thread.
+- [x] **Verified by the maintainer, 2026-08-23** (build off `4a24917`): photos render once in real
+  threads, both on arrival and scrolling back through older threads. No Class B doubling observed
+  either — so the 41 distinct-`OriginalRowId` groups are not visibly duplicating in practice, though
+  that was not specifically hunted for.
 - [ ] **Class B may still double-render, and would be a DIFFERENT bug.** Those 41 groups are two
   genuine server rows for the same file; collapsing them client-side would fight the server. If
   photos still double after this, that is the remaining cause.
@@ -91,7 +94,8 @@
   nullable model (410/411). 411/411 on a clean build with a real launch.
 - **Consequence for B4:** its debounce was throttling a reload that could not reflect its own
   trigger. The throttle was always correct; only now is it doing real work.
-- [ ] **Not verified (human-only):** a real rename or participant change from another device landing
+- [x] **Verified by the maintainer, 2026-08-23:** a real rename and participant change from another
+  device landing
   on the conversation tile *and* in an open details pane.
 - [ ] Follow-up, small: `ChatDetailsViewModel.RefreshParticipantsAsync` reads the in-memory
   `_chatsService.Chats`, so an open pane can lag one beat behind the now-correct database.
@@ -135,7 +139,7 @@
   warning, so nothing else would have caught it. Committed as `b76f526` and re-verified from clean.
 - [x] Upgrade-path test renamed and extended to carry both removed keys. Negative control run by me:
   `UnmappedMemberHandling.Disallow` fails that test and only that test.
-- [ ] **Not verified end-to-end (human-only):** tile indicators showing unconditionally, threads
+- [x] **Verified by the maintainer, 2026-08-23:** tile indicators showing unconditionally, threads
   opening at the bottom, Settings > Messaging layout, and restoring an old backup file that still
   carries `scrollToLastUnread` / `statusIndicatorsOnChats`.
 
@@ -149,7 +153,7 @@
   tests, app launched and responding, PID 12256). Negative controls run by me — all four new tests fail
   on unmutated-away fixes. A mutation of the owning-chat lookup (`ChatId ± 1`) originally **survived**;
   covered by `UpdateMessage_ReturnsOwningChatGuid_NotJustTheFirstChat` (commit `4fa277d`).
-- [ ] **Not verified end-to-end** — nobody has watched a live inbound message land in the list with the
+- [x] **Verified end-to-end by the maintainer, 2026-08-23** — a live inbound message lands in the list with the
   macOS server running. Symptom fix is inferred, not observed.
 - Deliberately unchanged: reactions still raise no persist event (nothing list-visible changes).
 
@@ -203,7 +207,7 @@
   `BlueBubbles.Windows` and unreachable from the suite (B2b). `TryBool`/`TryInt` return false before
   the caller's assignment when a key is absent, so an old backup leaves current values alone. Note
   `ThemeHelper.Apply` still fires on such a restore, harmlessly re-applying the unchanged theme.
-- [ ] **Not verified end-to-end (human-only):** Settings > Backup rendering; a real save/restore
+- [x] **Verified end-to-end by the maintainer, 2026-08-23:** Settings > Backup rendering; a real save/restore
   round-trip proving the three keys persist server-side; the live re-theme on restore; and an actual
   pre-change backup restoring as a no-op.
 - Accepted: an existing theme backup already on the server is now unreachable from this client.
@@ -256,7 +260,7 @@
 - No unit test: the change is entirely in `BlueBubbles.Windows` and unreachable from the suite
   (B2b). Evidence is the counts plus the clean build and launch — not the 400/400, which covers
   none of this.
-- [ ] **Not verified (human-only):** correct face for the correct person after a hard scroll of the
+- [x] **Verified by the maintainer, 2026-08-23:** correct face for the correct person after a hard scroll of the
   conversation list and after navigating away and back. The change defers the initial render by one
   dispatcher tick, which is its only theoretical risk. `QueueRelayout` falls back to a synchronous
   `RefreshLayout` if `TryEnqueue` fails, so there is no path where an avatar never renders.
@@ -422,7 +426,11 @@ template.
   now lives in `MessagePersistenceHelper`: `ApplyServerFields` is the single definition of the
   36-field message field list, and the update, soft-delete and reaction-parent mutations moved into
   the same file. Insert-only vs upsert semantics, identity (server GUID) and the `IsBookmarked`
-  client-ownership rule are unchanged. 423/423, Core line-rate 0.7227 -> 0.7241.
+  client-ownership rule are unchanged. 423/423, Core line-rate 0.7227 -> 0.7241. Clean
+  `build-and-run.ps1` with a real launch on trunk.
+  - [x] **Live message flow verified by the maintainer, 2026-08-23:** send, receive, edit, unsend,
+    tapback and reply all correct. That was the risk this refactor carried — it rewrote where every
+    message field is assigned — and it is now closed by observation, not inference.
   - **The audit's enumeration was incomplete: MessageEntity had 6 writers, not 5.** The agent found
     `MessagesService.SaveReactionAsync` setting `parent.HasReactions = true` on the parent row.
   - **Identity was already uniform** — the server GUID on all six. No B7-shape hazard existed here;
