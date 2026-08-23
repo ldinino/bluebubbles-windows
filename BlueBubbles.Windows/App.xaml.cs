@@ -118,6 +118,10 @@ public partial class App : Application
         // so a relaunch backfills anything missed even before the socket settles. After an upgrade
         // that changed how the cache converges, run a one-time full heal first (it applies server-side
         // deletes/edits an older build never reconciled) and skip the redundant delta.
+        // One check per launch, never a poll: unauthenticated GitHub allows 60 requests/hour/IP.
+        // CheckForUpdateAsync swallows every failure by contract, so this cannot break startup.
+        _ = Services.GetRequiredService<IUpdateService>().CheckForUpdateAsync();
+
         if (appSettings.FinishedSetup)
         {
             var sync = Services.GetRequiredService<ISyncService>();
@@ -370,6 +374,9 @@ public partial class App : Application
             new LocalhostDetectionService(
                 sp.GetRequiredService<IBlueBubblesApiService>(),
                 sp.GetRequiredService<AppSettings>()));
+        // Its own HttpClient: talks to api.github.com, so it must not carry the BlueBubbles
+        // server's proxy headers or auth.
+        services.AddSingleton<IUpdateService>(_ => new UpdateService(new HttpClient()));
         services.AddSingleton<ISocketService>(sp =>
             new SocketService(
                 sp.GetRequiredService<ServerConfiguration>(),
