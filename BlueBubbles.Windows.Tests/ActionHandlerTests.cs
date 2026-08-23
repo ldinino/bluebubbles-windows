@@ -243,7 +243,8 @@ public class ActionHandlerTests
     {
         var handler = new ActionHandler();
         MessageEventArgs? received = null;
-        handler.NewMessageReceived += (_, e) => received = e;
+        var fired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        handler.NewMessageReceived += (_, e) => { received = e; fired.TrySetResult(); };
 
         var json = Parse("""
         {
@@ -273,8 +274,16 @@ public class ActionHandlerTests
         Assert.Null(received);
         Assert.True(handler.ContainsOutOfOrderGuid("msg-mine"));
 
-        // Wait for the delay
-        await Task.Delay(700);
+        // Still not fired well inside the 500ms window. This is what makes the test live up to its
+        // name: asserting only "fires eventually" passes even with the delay removed entirely.
+        // The margin is below the delay, so a slow runner makes this *more* true, never flaky.
+        var early = await Task.WhenAny(fired.Task, Task.Delay(200));
+        Assert.NotSame(fired.Task, early);
+
+        // Wait on the signal, not a fixed margin above the delay: a bare 700ms wait left only
+        // 200ms of slack and lost the race on a loaded CI runner.
+        var completed = await Task.WhenAny(fired.Task, Task.Delay(5000));
+        Assert.Same(fired.Task, completed);
         Assert.NotNull(received);
         Assert.Equal("msg-mine", received!.Message.Guid);
     }
