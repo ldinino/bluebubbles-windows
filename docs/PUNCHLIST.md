@@ -7,6 +7,13 @@
 
 ## Open bugs
 
+#### B8. `DeleteMessageAsync` persists a soft delete and announces nothing
+- [ ] Found during W1a. It sets `DateDeleted` and saves, but raises no `MessagesPersisted` and no
+  reload — the open thread only updates because the caller happens to refresh afterwards. Same
+  defect class as B1 and B6 (persistence and notification decided in different components), and a
+  concrete instance of the audit's "9 of 25 paths" finding.
+- [ ] Likely resolved by W1a-2 (single announcer). Check there first before writing a point fix.
+
 #### B7. Photos render twice in a thread — duplicate attachment rows — **FIXED**
 - [x] Merged `7354c4b` (`fe911bd` + `4a58b60`). Identity for an attachment is now
   **`(MessageId, OriginalRowId)`** with the GUID check kept as a strict superset, so the write path
@@ -411,10 +418,31 @@ a shared helper is Attachments, which is also the one just proven correct in B7.
 template.
 
 #### W1. One writer per entity, in Core
-- [ ] **W1a. MessageEntity** — 5 writers (adds at `MessagePersistenceHelper` and `MessagesService`;
-  ad-hoc mutations in `MessagesService` ×2 and `MessageWindowReconciler`). Start here: it is where B1
-  and B2 lived. The single writer must persist *and* announce, so notification stops being decided
-  in a different component.
+- [x] **W1a. MessageEntity persistence — DONE** (`2c28e00`, merged `0e21ecc`). All field assignment
+  now lives in `MessagePersistenceHelper`: `ApplyServerFields` is the single definition of the
+  36-field message field list, and the update, soft-delete and reaction-parent mutations moved into
+  the same file. Insert-only vs upsert semantics, identity (server GUID) and the `IsBookmarked`
+  client-ownership rule are unchanged. 423/423, Core line-rate 0.7227 -> 0.7241.
+  - **The audit's enumeration was incomplete: MessageEntity had 6 writers, not 5.** The agent found
+    `MessagesService.SaveReactionAsync` setting `parent.HasReactions = true` on the parent row.
+  - **Identity was already uniform** — the server GUID on all six. No B7-shape hazard existed here;
+    `temp-` GUIDs are only ever excluded, `OriginalRowId` is only used for ordering.
+  - Verified by me: mutating the `if (isNew)` guard on `IsBookmarked` so an upsert copies it from the
+    server fails `RefreshLatest_PreservesLocalBookmark_StillAppliesServerText` — the CLAUDE.md
+    client-ownership rule is defended by an existing test. Dropping `DidNotifyRecipient` from the
+    consolidated writer fails **only** the new
+    `LiveInsertAndServerUpsert_WriteTheSameFieldsFromTheSamePayload` (422 pass) — the pre-existing
+    421 tests missed a dropped field entirely, which is the exact B2 shape this closed.
+  - Good methodology worth copying: the negative control for a refactor was to run the new tests
+    against **pre-refactor** `35ab22e` (423/423), proving they are genuine characterization tests,
+    *then* mutate the old code to expose the hole.
+- [ ] **W1a-2. Single announcer for messages** — carved out of W1a deliberately. Consolidating
+  announcement into the writer **cannot** be done without a behaviour change: `SaveMessagesAsync`
+  has 4 callers, of which `MessagesService.cs:111` and `:166` announce nothing at all, while
+  `SyncService.cs:344` / `:482` announce once per chat per batch. Moving the call into the writer
+  changes `MessagesPersisted` from per-batch to per-call and adds events to paths that intentionally
+  have none, driving `ConversationListViewModel.ScheduleReloadFromDatabase`. Verified: exactly 4
+  production `NotifyMessagesPersisted` call sites. **Do this after W1b/W1c**, with its own evidence.
 - [ ] **W1b. HandleEntity (6) and ChatParticipant (6)** — spread across `MessagePersistenceHelper`,
   `ChatsService`, `MessagesService`, `SyncService`. One removal site total, in `ChatsService`.
 - [ ] **W1c. ChatEntity (13)**, including the two construction sites that bypass
@@ -422,6 +450,8 @@ template.
   `SyncService.cs:551`. Both are insert paths today; the audit could not determine whether either
   can run against a row that already holds client-only state (e.g. after a soft-delete/resurrect).
   **CLAUDE.md hard rule applies.**
+- Note from W1a for W1b/W1c: `MessageWindowReconciler` is now *policy* over the writer (which rows
+  are gone), not a field writer. The same split should fall out for chats.
 - [ ] Expected side effect: the locking exposure largely dissolves. "Which of three writers needs the
   mutex" is hard; "my one writer takes it" is not. Do **not** attack the 34-of-42 figure directly
   first.
