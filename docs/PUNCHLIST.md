@@ -620,7 +620,21 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 
 ## Release plan
 
-**Future minor** — audio message support (F2), scheduled-send enhancements (F4), client updater
-(U1).
+**0.24.0 — cut 2026-08-23, draft `v0.24.0` awaiting publish.** Ships F5 (toast actions) and U1
+(update checker), plus the B7 duplicate-attachment fix. CI run `32671986227` green; draft asset
+`BlueBubbles-Setup-0.24.0-x64.exe` carries `digest: sha256:d15575e4...`, confirming the field the
+updater depends on is really published. Asset name matches `AssetPrefix`/`AssetSuffix` exactly.
+- **First release attempt (`32671654362`) failed CI** on `ActionHandlerTests
+  .NewMessage_FromMe_NoTempGuid_DelaysBeforeFiring` — a 700ms fixed wait with only 200ms of slack
+  above the production 500ms delay. Fixed in `2f9d80b` by waiting on a `TaskCompletionSource`.
+  **The test was also hollow:** with an explicit rebuild, deleting the production delay passed the
+  old test (970ms) and fails the new one (`Assert.NotSame`, 295ms vs 792ms real). Debug-only local
+  runs never saw it; CI runs Release.
+- [ ] **Publish the draft** once the F5 toast checks pass.
+- [ ] **After publishing, the updater's untested path becomes testable for the first time** — the
+  0.23.0 -> 0.24.0 hop cannot exercise it (0.23.0 has no update check), so the *next* release is
+  the real end-to-end test of download -> verify -> launch.
+
+**Future minor** — audio message support (F2), scheduled-send enhancements (F4).
 
 No version bump: repo hygiene (H2). Stretch goal (no schedule): arm64 (S1).
