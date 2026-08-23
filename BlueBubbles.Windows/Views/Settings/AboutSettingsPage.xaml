@@ -31,6 +31,37 @@
                 <TextBlock x:Name="AppVersionValue" Style="{StaticResource BodyTextBlockStyle}" />
             </tk:SettingsCard>
 
+            <tk:SettingsCard Header="Updates"
+                             Description="Checks GitHub Releases. Updates are never installed automatically.">
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <TextBlock x:Name="UpdateStatusText"
+                               Style="{StaticResource BodyTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               VerticalAlignment="Center" />
+                    <Button x:Name="CheckForUpdatesButton"
+                            Content="Check for updates"
+                            Click="OnCheckForUpdatesClick" />
+                </StackPanel>
+            </tk:SettingsCard>
+
+            <InfoBar x:Name="UpdateInfoBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     Severity="Informational"
+                     Margin="0,4">
+                <InfoBar.ActionButton>
+                    <Button x:Name="UpdateActionButton"
+                            Content="Download and install"
+                            Click="OnDownloadUpdateClick" />
+                </InfoBar.ActionButton>
+                <InfoBar.Content>
+                    <ProgressBar x:Name="UpdateProgressBar"
+                                 Minimum="0" Maximum="1"
+                                 Visibility="Collapsed"
+                                 Margin="0,4,0,12" />
+                </InfoBar.Content>
+            </InfoBar>
+
             <tk:SettingsCard Header="Server version">
                 <TextBlock x:Name="ServerVersionValue"
                            Style="{StaticResource BodyTextBlockStyle}"

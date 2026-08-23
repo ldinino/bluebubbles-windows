@@ -20,6 +20,13 @@ public sealed partial class AboutSettingsPage : Page
     private readonly SettingsViewModel _vm;
     private readonly AppSettings _settings;
     private readonly ISettingsService _settingsService;
+    private readonly IUpdateService _updates;
+
+    // The release the user has been offered; null unless a check found a strictly newer version.
+    private UpdateCheckResult? _pendingUpdate;
+
+    // Guards the async void handlers against a second click while one is still in flight.
+    private bool _updateBusy;
 
     // Suppresses the Toggled handler while we set the switch's initial state in the constructor,
     // so loading the page doesn't trigger a redundant save.
@@ -31,6 +38,7 @@ public sealed partial class AboutSettingsPage : Page
         _vm = App.Services.GetRequiredService<SettingsViewModel>();
         _settings = App.Services.GetRequiredService<AppSettings>();
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
+        _updates = App.Services.GetRequiredService<IUpdateService>();
         InitializeComponent();
 
         _initializing = true;
@@ -50,6 +58,9 @@ public sealed partial class AboutSettingsPage : Page
         PopulateLogCategories();
         LogTextBox.Text = _vm.LogText;
 
+        // Surface whatever the launch-time check already found, without re-hitting the API.
+        ShowUpdateResult(_updates.LastResult);
+
         Loaded += async (_, _) => await LoadServerVersionAsync();
         Loaded += (_, _) => _vm.PropertyChanged += OnVmPropertyChanged;
         Unloaded += (_, _) => _vm.PropertyChanged -= OnVmPropertyChanged;
@@ -65,6 +76,117 @@ public sealed partial class AboutSettingsPage : Page
         catch
         {
             ServerVersionValue.Text = "Unavailable";
+        }
+    }
+
+    private async void OnCheckForUpdatesClick(object sender, RoutedEventArgs e)
+    {
+        if (_updateBusy) return;
+        _updateBusy = true;
+        try
+        {
+            CheckForUpdatesButton.IsEnabled = false;
+            UpdateStatusText.Text = "Checking...";
+
+            var result = await _updates.CheckForUpdateAsync();
+
+            CheckForUpdatesButton.IsEnabled = true;
+            ShowUpdateResult(result);
+        }
+        catch (Exception ex)
+        {
+            // This is async void: an escaping exception terminates the process, so none may escape.
+            AppLog.Error(LogCategory.App, $"Update check UI failed: {ex}");
+            CheckForUpdatesButton.IsEnabled = true;
+            UpdateStatusText.Text = "Update check failed";
+        }
+        finally
+        {
+            _updateBusy = false;
+        }
+    }
+
+    private void ShowUpdateResult(UpdateCheckResult? result)
+    {
+        _pendingUpdate = result?.UpdateAvailable == true ? result : null;
+
+        if (_pendingUpdate is null)
+        {
+            UpdateStatusText.Text = result is null ? string.Empty : $"Up to date ({AppInfo.Version})";
+            UpdateInfoBar.IsOpen = false;
+            return;
+        }
+
+        UpdateStatusText.Text = $"Version {_pendingUpdate.LatestVersion} available";
+        UpdateInfoBar.Severity = InfoBarSeverity.Informational;
+        UpdateInfoBar.Title = $"Update available: {_pendingUpdate.LatestVersion}";
+        UpdateInfoBar.Message =
+            "The installer is downloaded from GitHub and its SHA-256 checksum is verified before it " +
+            "runs. It is not code-signed, so Windows SmartScreen will warn you - choose " +
+            "\"More info\" then \"Run anyway\" to continue.";
+        UpdateActionButton.IsEnabled = true;
+        UpdateActionButton.Visibility = Visibility.Visible;
+        UpdateInfoBar.IsOpen = true;
+    }
+
+    private async void OnDownloadUpdateClick(object sender, RoutedEventArgs e)
+    {
+        if (_pendingUpdate is null || _updateBusy)
+            return;
+
+        _updateBusy = true;
+        try
+        {
+            UpdateActionButton.IsEnabled = false;
+            UpdateProgressBar.Value = 0;
+            UpdateProgressBar.Visibility = Visibility.Visible;
+
+            var progress = new Progress<double>(value => UpdateProgressBar.Value = value);
+            var result = await _updates.DownloadAndLaunchAsync(_pendingUpdate, progress);
+
+            UpdateProgressBar.Visibility = Visibility.Collapsed;
+
+            if (result.Success)
+            {
+                UpdateInfoBar.Severity = InfoBarSeverity.Success;
+                UpdateInfoBar.Title = "Installer verified and started";
+                UpdateInfoBar.Message =
+                    "Follow the installer prompts. If SmartScreen appears, choose \"More info\" then " +
+                    "\"Run anyway\".";
+                UpdateActionButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            // A checksum failure is not transient - say so loudly rather than inviting a retry.
+            var tampered = result.Status is UpdateDownloadStatus.DigestMismatch
+                or UpdateDownloadStatus.DigestMissing or UpdateDownloadStatus.UntrustedHost;
+
+            UpdateInfoBar.Severity = tampered ? InfoBarSeverity.Error : InfoBarSeverity.Warning;
+            UpdateInfoBar.Title = result.Status switch
+            {
+                UpdateDownloadStatus.DigestMismatch => "Checksum verification FAILED - nothing was run",
+                UpdateDownloadStatus.DigestMissing => "Update cannot be verified - nothing was run",
+                UpdateDownloadStatus.UntrustedHost => "Untrusted download location - nothing was run",
+                _ => "Update download failed"
+            };
+            UpdateInfoBar.Message = result.Message;
+            UpdateActionButton.IsEnabled = !tampered;
+            UpdateInfoBar.IsOpen = true;
+        }
+        catch (Exception ex)
+        {
+            // This is async void: an escaping exception terminates the process, so none may escape.
+            AppLog.Error(LogCategory.App, $"Update download UI failed: {ex}");
+            UpdateProgressBar.Visibility = Visibility.Collapsed;
+            UpdateInfoBar.Severity = InfoBarSeverity.Error;
+            UpdateInfoBar.Title = "Update download failed";
+            UpdateInfoBar.Message = ex.Message;
+            UpdateInfoBar.IsOpen = true;
+            UpdateActionButton.IsEnabled = true;
+        }
+        finally
+        {
+            _updateBusy = false;
         }
     }
 
