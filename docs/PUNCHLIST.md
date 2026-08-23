@@ -550,25 +550,37 @@ template.
 - [ ] **Human-only, still pending:** confirm the toast renders four buttons; confirm Mark as read
   clears the badge **without the window appearing**; confirm Love/Like still send tapbacks.
 
-#### U1. In-app updater  *(target 0.24.0)*
-- **Measured 2026-08-23:** no update code exists anywhere (0 matches for
-  `UpdateService|CheckForUpdate|releases/latest|api.github.com`). `AppInfo.Version` already returns a
-  clean 3-part version from the entry assembly, unpackaged-safe — that is the local-version source.
-- [ ] Use the GitHub **`/releases/latest`** endpoint: it excludes drafts and prereleases, which
-  matters because this project cuts drafts routinely and has published-then-deleted a release before.
-- [ ] **Verify the download before executing it.** The GitHub release API returns a per-asset
-  `digest` (`sha256:...`) — confirmed present on this repo's assets. An installer that is downloaded
-  and run without a hash check is a remote-code-execution path into the user's machine.
-- [ ] Asset is `BlueBubbles-Setup-X.Y.Z-x64.exe`; **x64 only** (arm64 is blocked, see S1).
-- [ ] Never auto-install. Surface "update available", let the user choose, and expect the SmartScreen
-  prompt because the installer is unsigned.
-- [ ] Version comparison must be semantic, not string — tags are `vX.Y.Z`, `AppInfo.Version` is
-  `X.Y.Z`, and `0.9.0` vs `0.10.0` breaks a string compare.
-- [ ] Unauthenticated GitHub API is rate-limited (60/hr/IP); a check on launch is fine, a poll is not.
-- [ ] No package-identity APIs (CLAUDE.md hard rule).
-- [ ] Check GitHub Releases for a newer version on launch (and/or on demand).
-- [ ] Download + run the unpackaged installer (ties into Inno Setup / `publish.ps1` output and the GH Actions release flow, item 34).
-- [ ] Surface "update available" in the UI; respect the unpackaged-distribution constraints (no package-identity APIs).
+#### U1. In-app updater — **DONE, merged `6a1ce4a` (PR 13)**
+- **Measured 2026-08-23:** no update code existed anywhere. `AppInfo.Version` returns a clean 3-part
+  version from the entry assembly, unpackaged-safe — that is the local-version source.
+- [x] `/releases/latest` used (`UpdateService.cs:93`), excluding drafts and prereleases.
+- [x] **Download verified before execution.** `ParseSha256Digest` runs *before* any bytes are
+  fetched, so a missing digest means no download at all; `CryptographicOperations.FixedTimeEquals`
+  gates the single `_launcher.Launch` call site (`:284`), and a mismatch deletes the file and logs
+  at Error. Head-engineer mutation forcing the comparison true failed
+  `Download_DigestMismatch_RefusesToExecuteAndDeletesFile` — 498/499. **The check is not decorative.**
+- [x] Host allowlist on both the asset URL and the *post-redirect* final URI (`:260-265`), checked
+  before `BuildDownloadPath`, so an untrusted redirect never writes a file.
+- [x] x64 asset only; `SelectAsset` excludes `-arm64.exe`.
+- [x] Never auto-installs — the About page surfaces it and the user chooses.
+- [x] Semantic comparison via `SemanticVersion.CompareTo` on parsed ints, not strings. `remote <=
+  local` never offers a downgrade, so a local dev build ahead of the release is safe.
+- [x] One check per launch, no poll (60/hr/IP unauthenticated limit noted in `App.xaml.cs`).
+- [x] No package-identity APIs.
+- [x] **Cannot break startup:** `CheckForUpdateAsync` wraps its whole body in a catch-all returning
+  `None`, with a `CancelAfter` timeout; `App.xaml.cs` fire-and-forgets it in one line.
+- **Separate `HttpClient` for GitHub** so the BlueBubbles server's auth/proxy headers are never sent
+  to `api.github.com`. Keep it that way.
+- **Live check verified:** logged `Update check: running 0.23.0, latest release is 0.23.0. No update
+  offered.` Clean build 0 warnings/0 errors, 499/499, app launches and stays up, `.pri` staged.
+- [ ] **Human-only, never exercised:** the download → verify → launch cycle has *never* run against
+  a real release; only the check path has touched the live API. Needs a pass once 0.24.0 is
+  published. SmartScreen behaviour on the unsigned installer is also unverified.
+- [ ] **Open question deferred to first real use:** the installer replacing files while the app is
+  running. Inno Setup will want the running exe. Decide whether the app closes itself before launch.
+- **Also landed:** `async void` hardening on two handlers that previously let exceptions escape — an
+  escaping exception there kills the process with no log line and no WER record, which is why a
+  crash investigation this session chased a false artifact. They now catch and log.
 
 ---
 
