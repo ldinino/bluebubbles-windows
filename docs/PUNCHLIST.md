@@ -7,39 +7,50 @@
 
 ## Open bugs
 
-#### B7. Photos render twice in a thread — duplicate attachment ROWS, not a render fault
-- [ ] **Reproduced visually on 0.23.0** (maintainer's laptop, screenshot 2026-08-23): each photo in a
-  thread drawn twice side by side. The `[attach-diag]` tracing was removed in B2e, so the log cannot
-  show it.
-- [x] **MEASURED against a read-only copy of a real cache** (5703 messages / 944 attachment rows).
-  This is a **data** problem, not rendering:
-  - `duplicate attachment Guid rows` -> **none**; `duplicate message Guid rows` -> **none**.
-  - Same `TransferName` appearing 2-3x within one message -> **59 groups, 61 surplus rows** (~6.5%
-    of all attachment rows).
-  - The surplus rows are the **same server attachment under two different GUIDs**. Message 760:
-    `929F3235-...` and `at_0_716824CE-...`, both `TotalBytes=52349`, both `OriginalRowId=9022`.
-    Message 4756: `DEB39F3B-...` and `at_0_13274AA6-...`, both `TotalBytes=166761`, both
-    `OriginalRowId=9489`.
-  - Full example, message 4213 (`Id | Guid | TotalBytes | Width | Height | OriginalRowId`):
-    `578 | 814940FD-... | 170678 | NULL | NULL | 9292`
-    `803 | at_0_6752A69E-... | 170678 | 231 | 500 | 9292`
-    `804 | at_1_6752A69E-... | 170678 | 0 | 0 | 9344`
-    Rows 578 and 803 are the same server attachment; 804 carries a different `OriginalRowId`.
-- **Why the existing dedupe cannot catch it:** `MessagePersistenceHelper.SaveAttachmentsAsync` skips
-  on `att.Guid` only. Two GUID forms for one attachment sail straight through.
-- **`at_N_<messageGuid>` is a synthesized GUID form** — e.g. message `363A203A-...` carries
-  attachment `at_0_363A203A-...`. Surplus rows break down as **102 `at_N_` prefixed vs 18 plain**.
-- **`OriginalRowId` looks like the reliable identity** (the server's own row id), but see the
-  caveat: message 421 has `at_0_1956174A` / `at_1_1956174A` with the *same* TransferName and
-  TotalBytes but *different* `OriginalRowId`s (7944 / 7951), so a naive `OriginalRowId` dedupe may
-  be neither necessary nor sufficient. Establish the true identity before writing a fix.
-- [ ] **INFERENCE, NOT MEASURED — verify first:** that B2 (PR 4, `e318fe1`, which added attachment
-  persistence to the live socket path) introduced or worsened this by giving a second writer a
-  second GUID form. Affected rows span old (`OriginalRowId` 7944) and very recent (9645-9668)
-  attachments, so it is *not* purely post-B2. Do not assume causation.
-- [ ] Needs a **repair path** for already-duplicated caches as well as a write-side fix — the rows
-  are on disk on at least two of the maintainer's machines, and 0.23.0 is published.
-- Note: 0.23.0 is the current published release, so this is shipped behaviour.
+#### B7. Photos render twice in a thread — duplicate attachment rows — **FIXED**
+- [x] Merged `7354c4b` (`fe911bd` + `4a58b60`). Identity for an attachment is now
+  **`(MessageId, OriginalRowId)`** with the GUID check kept as a strict superset, so the write path
+  is a superset of the old rule. `AttachmentDeduplicator.CollapseDuplicatesAsync` repairs existing
+  caches, run from `SyncService` (the cache has no version stamp — `EnsureCreatedAsync`, no
+  migrations history — and the pass is idempotent).
+- **Root cause, measured:** `originalROWID` is Apple's chat.db attachment ROWID and `guid` is
+  Apple's GUID, both passed through verbatim by the server's `AttachmentSerializer`. **Apple
+  rewrites the GUID as a transfer completes** (plain UUID -> `at_<n>_<messageGuid>`) while the ROWID
+  stays put, so GUID-keyed dedupe stored the same photo twice. We never synthesize `at_N_`.
+- **Verified independently by me against the pre-sync snapshot**
+  (`Documents\bb-evidence\bluebubbles-presync-20260823-1119.db`):
+  - The 59 groups are two populations: **18 are the bug** (same `MessageId`+`OriginalRowId`), and
+    every one is **exactly one `at_N_` plus one plain GUID** (18 and 18) — strong confirmation of the
+    Apple-rewrite mechanism. The other **41 groups / 82 rows** have distinct `OriginalRowId`s and are
+    genuinely separate server attachments that must survive.
+  - Repair on a copy using shipped code: `944 -> 926`, removed 18, second run removed 0,
+    identity-dupe groups `18 -> 0`, and **`distinctPairs(926) == after.total(926)`** — every
+    distinct `(MessageId, OriginalRowId)` survives exactly once.
+  - 0 rows have a NULL `OriginalRowId`, so the GUID fallback is untested by real data.
+- [x] ~~B2 (`e318fe1`) introduced or worsened this~~ **REFUTED** — affected rows date 2026-06-08 to
+  2026-08-12 and B2 merged 2026-08-11; 17 of 18 predate it. That was my inference and it was wrong.
+- [x] **Coverage hole found and closed in review.** A `TransferName` identity — the plausible wrong
+  fix — **survived the full 420-test suite**, because the `OriginalRowId` pre-filter masks it in
+  every synthetic case. It is not harmless: **9 messages in real data have a mixed shape** (a
+  same-ROWID duplicate *and* a distinct attachment sharing the TransferName — 2671, 2735, 2738,
+  2761, 2762, 4213, 4756, 4864, 5015), and under that rule msg 4213 drops from 3 rows to 1, losing a
+  legitimate attachment. Shipped code handles all nine correctly. Added
+  `Collapse_MessageWithBothADuplicateAndADistinctRow_CollapsesOnlyTheDuplicate` (`4a58b60`), which
+  fails under the mutation.
+- Narrow permanent instrumentation was re-added on the attachment write path (duplicate skipped /
+  duplicate collapsed), gated behind verbose logging — B2e had removed the last tracing and we
+  immediately lost the ability to see the next attachment bug from a log.
+- [ ] **Not verified (human-only):** photos rendering once in a real thread.
+- [ ] **Class B may still double-render, and would be a DIFFERENT bug.** Those 41 groups are two
+  genuine server rows for the same file; collapsing them client-side would fight the server. If
+  photos still double after this, that is the remaining cause.
+- [ ] **Unexplained:** Class A begins abruptly at `OriginalRowId` 9022 / 2026-06-08 in a cache
+  reaching back to 2025-08-02. Something changed then and it was not this codebase. Worth knowing
+  before assuming the write-side fix is sufficient.
+- Process note: the repair executed against the maintainer's **live cache** during the agent's
+  build-and-run, i.e. unreviewed code mutated real user data pre-merge. It removed exactly the
+  correct 18 rows and the snapshot predates it, so no harm — but agents must not run migrations
+  against live user data before review.
 
 #### B6. `chat-updated` socket events were never persisted — **FIXED**
 - [x] Merged `cf376e5` (`65499c8` + `5146e3d` + `ccc34c4`). `ActionHandler` now parses the chat out
