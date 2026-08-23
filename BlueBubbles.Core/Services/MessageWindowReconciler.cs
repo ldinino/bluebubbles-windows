@@ -52,7 +52,7 @@ internal static class MessageWindowReconciler
         {
             if (serverGuids.Contains(m.Guid)) continue;
             if (protectedGuids?.Contains(m.Guid) == true) continue;
-            m.DateDeleted = now;
+            MessagePersistenceHelper.MarkDeleted(m, now);
             pruned++;
         }
 
