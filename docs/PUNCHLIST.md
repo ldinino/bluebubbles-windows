@@ -301,6 +301,15 @@
   is what turned B2 from a fix into a research task, and it will do the same to the next UI bug.
   Decide whether to add a `net8.0-windows` test project or accept human-only verification for the
   view layer.
+- **Preferred approach, established by F5 (`38dc7c8`): lift the decision into Core, leave the
+  rendering in the view.** F5 needed "does this action raise the window?" to be testable. Rather
+  than reaching into `App.xaml.cs`, it extracted `ToastActivationRouter` — a pure function over
+  toast args returning an `ActivatesWindow` flag — into `BlueBubbles.Core`, where the existing suite
+  already runs. 19 tests, and a mutation of the rule fails. **This is the recommended pattern over a
+  `net8.0-windows` test project**, because it needs no new infrastructure and it moves the part
+  worth testing to where tests already are. Apply it per-bug rather than as a big-bang migration.
+- Residual gap the pattern does *not* close: the builder/rendering half stays human-only. F5's
+  button count had to be verified by reading source at review.
 
 #### B2c. `GetMessagesByGuidsAsync` omits `.Include(m => m.Attachments)`
 - [ ] `LoadMessagesAsync` and `LoadMessagesAfterAsync` include it; this one doesn't. Harmless today
@@ -517,18 +526,29 @@ template.
 
 ## U — Client updater  *(feature → future minor)*
 
-#### F5. Toast actions: two reactions + mark as read  *(target 0.24.0)*
-- [ ] Today the toast emits `AddTextBox` + **Send** + **4** tapbacks (Love, Like, Dislike, Laugh) =
-  5 buttons, the Windows ceiling (`NotificationService.cs:25`, `:172-186`). Change to **Send + 2
-  reactions + Mark as read = 4**, which fits with a slot to spare.
-- [ ] **Mark as read must not foreground the app.** Saving a click is the whole point; if it raises
-  the window it has cost one instead. `IChatsService.MarkChatReadAsync(chatGuid, read,
-  notifyServer)` already exists.
+#### F5. Toast actions: two reactions + mark as read — **DONE, merged `38dc7c8` (PR 12)**
+- [x] Toast previously emitted `AddTextBox` + **Send** + **4** tapbacks (Love, Like, Dislike, Laugh)
+  = 5 buttons, the Windows ceiling. Now **Send + Love + Like + Mark as read = 4** on a message toast
+  and **Send + Mark as read = 2** on a reaction toast. Counted in source at review
+  (`NotificationService.cs:172-192`), since the builder itself is unreachable from the suite (B2b).
+- [x] **Mark as read does not foreground the app.** The routing decision was lifted into
+  `BlueBubbles.Core/Services/ToastActivationRouter.cs` as a pure `Resolve(args, userInput)` with an
+  explicit `ActivatesWindow => Kind is OpenChat or OpenApp`. Head-engineer mutation adding `MarkRead`
+  to that rule failed `Resolve_InlineActions_DoNotActivateWindow(action: "markRead")` — 441/442.
+  Verified separately that no inline branch in `App.xaml.cs` touches a window API.
 - **Do not claim this buys back the OS "Copy code" affordance.** B3 measured that the button budget
   is *not* what suppresses it — the OS affordance renders in its own row, outside both the 5-action
   and 5-input budgets. Freeing a slot changes nothing there.
-- [ ] Check whether server-side mark-as-read requires Private API (`PrivateMarkChatAsRead` exists as
-  a preference) and what should happen when it is unavailable.
+- **Decision (agent, endorsed at review): the button is always shown.** If Private API is
+  unavailable the mark-as-read is silently local-only. Hiding it would make toast layout depend on a
+  setting, and clearing the local badge is most of the value even with no server-side read receipt.
+- **Known, scoped out: if the app is closed, a toast action still shows the window.** The toast
+  spawns the process that becomes primary. Inherent to unpackaged single-instancing, predates F5;
+  fixing it needs a cold-start-to-tray path that would also change `openChat`. Flagged, not fixed.
+- **Pre-existing `MarkChatActedOn` found by the agent** — reply and tapback already used a
+  non-activating "acted on this toast" path, so Mark as read is a new entry point, not new behaviour.
+- [ ] **Human-only, still pending:** confirm the toast renders four buttons; confirm Mark as read
+  clears the badge **without the window appearing**; confirm Love/Like still send tapbacks.
 
 #### U1. In-app updater  *(target 0.24.0)*
 - **Measured 2026-08-23:** no update code exists anywhere (0 matches for
