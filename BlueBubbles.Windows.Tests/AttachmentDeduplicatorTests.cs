@@ -58,6 +58,35 @@ public class AttachmentDeduplicatorTests
     }
 
     [Fact]
+    public async Task Collapse_MessageWithBothADuplicateAndADistinctRow_CollapsesOnlyTheDuplicate()
+    {
+        // The mixed shape: one message holding a same-ROWID duplicate AND a genuinely different
+        // attachment that happens to share the TransferName. Nine such messages exist in a real
+        // cache (e.g. plain+at_0_ at ROWID 9292 alongside at_1_ at 9344, all "1000069083.jpg").
+        // Without this case a TransferName-based identity passes every other test in this class
+        // while destroying the distinct row.
+        var (factory, messageId) = SeedMessage();
+        using (var seed = factory.CreateDbContext())
+        {
+            seed.Attachments.Add(Row(messageId, 9292, "814940FD-1001-4A89-A81A-CEBBBB6F1AC8"));
+            seed.SaveChanges();
+            seed.Attachments.Add(Row(messageId, 9292, "at_0_msg-1", 231));
+            seed.SaveChanges();
+            seed.Attachments.Add(Row(messageId, 9344, "at_1_msg-1", 500));
+            seed.SaveChanges();
+        }
+
+        using var db = factory.CreateDbContext();
+        var removed = await AttachmentDeduplicator.CollapseDuplicatesAsync(db);
+
+        Assert.Equal(1, removed);
+        var left = db.Attachments.Where(a => a.MessageId == messageId).OrderBy(a => a.Id).ToList();
+        Assert.Equal(2, left.Count);
+        Assert.Equal(new int?[] { 9292, 9344 }, left.Select(a => a.OriginalRowId).ToArray());
+        Assert.Equal(new[] { "at_0_msg-1", "at_1_msg-1" }, left.Select(a => a.Guid).ToArray());
+    }
+
+    [Fact]
     public async Task Collapse_RunTwice_SecondRunIsANoOp()
     {
         var (factory, messageId) = SeedMessage();
