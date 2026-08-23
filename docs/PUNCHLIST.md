@@ -7,6 +7,40 @@
 
 ## Open bugs
 
+#### B7. Photos render twice in a thread — duplicate attachment ROWS, not a render fault
+- [ ] **Reproduced visually on 0.23.0** (maintainer's laptop, screenshot 2026-08-23): each photo in a
+  thread drawn twice side by side. The `[attach-diag]` tracing was removed in B2e, so the log cannot
+  show it.
+- [x] **MEASURED against a read-only copy of a real cache** (5703 messages / 944 attachment rows).
+  This is a **data** problem, not rendering:
+  - `duplicate attachment Guid rows` -> **none**; `duplicate message Guid rows` -> **none**.
+  - Same `TransferName` appearing 2-3x within one message -> **59 groups, 61 surplus rows** (~6.5%
+    of all attachment rows).
+  - The surplus rows are the **same server attachment under two different GUIDs**. Message 760:
+    `929F3235-...` and `at_0_716824CE-...`, both `TotalBytes=52349`, both `OriginalRowId=9022`.
+    Message 4756: `DEB39F3B-...` and `at_0_13274AA6-...`, both `TotalBytes=166761`, both
+    `OriginalRowId=9489`.
+  - Full example, message 4213 (`Id | Guid | TotalBytes | Width | Height | OriginalRowId`):
+    `578 | 814940FD-... | 170678 | NULL | NULL | 9292`
+    `803 | at_0_6752A69E-... | 170678 | 231 | 500 | 9292`
+    `804 | at_1_6752A69E-... | 170678 | 0 | 0 | 9344`
+    Rows 578 and 803 are the same server attachment; 804 carries a different `OriginalRowId`.
+- **Why the existing dedupe cannot catch it:** `MessagePersistenceHelper.SaveAttachmentsAsync` skips
+  on `att.Guid` only. Two GUID forms for one attachment sail straight through.
+- **`at_N_<messageGuid>` is a synthesized GUID form** — e.g. message `363A203A-...` carries
+  attachment `at_0_363A203A-...`. Surplus rows break down as **102 `at_N_` prefixed vs 18 plain**.
+- **`OriginalRowId` looks like the reliable identity** (the server's own row id), but see the
+  caveat: message 421 has `at_0_1956174A` / `at_1_1956174A` with the *same* TransferName and
+  TotalBytes but *different* `OriginalRowId`s (7944 / 7951), so a naive `OriginalRowId` dedupe may
+  be neither necessary nor sufficient. Establish the true identity before writing a fix.
+- [ ] **INFERENCE, NOT MEASURED — verify first:** that B2 (PR 4, `e318fe1`, which added attachment
+  persistence to the live socket path) introduced or worsened this by giving a second writer a
+  second GUID form. Affected rows span old (`OriginalRowId` 7944) and very recent (9645-9668)
+  attachments, so it is *not* purely post-B2. Do not assume causation.
+- [ ] Needs a **repair path** for already-duplicated caches as well as a write-side fix — the rows
+  are on disk on at least two of the maintainer's machines, and 0.23.0 is published.
+- Note: 0.23.0 is the current published release, so this is shipped behaviour.
+
 #### B6. `chat-updated` socket events were never persisted — **FIXED**
 - [x] Merged `cf376e5` (`65499c8` + `5146e3d` + `ccc34c4`). `ActionHandler` now parses the chat out
   of the payload's `chats[0]`; `ChatsService.ApplyChatUpdateAsync` is the single writer, going
