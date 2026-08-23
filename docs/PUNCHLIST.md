@@ -517,7 +517,35 @@ template.
 
 ## U — Client updater  *(feature → future minor)*
 
-#### U1. In-app updater
+#### F5. Toast actions: two reactions + mark as read  *(target 0.24.0)*
+- [ ] Today the toast emits `AddTextBox` + **Send** + **4** tapbacks (Love, Like, Dislike, Laugh) =
+  5 buttons, the Windows ceiling (`NotificationService.cs:25`, `:172-186`). Change to **Send + 2
+  reactions + Mark as read = 4**, which fits with a slot to spare.
+- [ ] **Mark as read must not foreground the app.** Saving a click is the whole point; if it raises
+  the window it has cost one instead. `IChatsService.MarkChatReadAsync(chatGuid, read,
+  notifyServer)` already exists.
+- **Do not claim this buys back the OS "Copy code" affordance.** B3 measured that the button budget
+  is *not* what suppresses it — the OS affordance renders in its own row, outside both the 5-action
+  and 5-input budgets. Freeing a slot changes nothing there.
+- [ ] Check whether server-side mark-as-read requires Private API (`PrivateMarkChatAsRead` exists as
+  a preference) and what should happen when it is unavailable.
+
+#### U1. In-app updater  *(target 0.24.0)*
+- **Measured 2026-08-23:** no update code exists anywhere (0 matches for
+  `UpdateService|CheckForUpdate|releases/latest|api.github.com`). `AppInfo.Version` already returns a
+  clean 3-part version from the entry assembly, unpackaged-safe — that is the local-version source.
+- [ ] Use the GitHub **`/releases/latest`** endpoint: it excludes drafts and prereleases, which
+  matters because this project cuts drafts routinely and has published-then-deleted a release before.
+- [ ] **Verify the download before executing it.** The GitHub release API returns a per-asset
+  `digest` (`sha256:...`) — confirmed present on this repo's assets. An installer that is downloaded
+  and run without a hash check is a remote-code-execution path into the user's machine.
+- [ ] Asset is `BlueBubbles-Setup-X.Y.Z-x64.exe`; **x64 only** (arm64 is blocked, see S1).
+- [ ] Never auto-install. Surface "update available", let the user choose, and expect the SmartScreen
+  prompt because the installer is unsigned.
+- [ ] Version comparison must be semantic, not string — tags are `vX.Y.Z`, `AppInfo.Version` is
+  `X.Y.Z`, and `0.9.0` vs `0.10.0` breaks a string compare.
+- [ ] Unauthenticated GitHub API is rate-limited (60/hr/IP); a check on launch is fine, a poll is not.
+- [ ] No package-identity APIs (CLAUDE.md hard rule).
 - [ ] Check GitHub Releases for a newer version on launch (and/or on demand).
 - [ ] Download + run the unpackaged installer (ties into Inno Setup / `publish.ps1` output and the GH Actions release flow, item 34).
 - [ ] Surface "update available" in the UI; respect the unpackaged-distribution constraints (no package-identity APIs).
