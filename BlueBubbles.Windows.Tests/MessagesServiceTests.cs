@@ -374,6 +374,70 @@ public class MessagesServiceTests
         Assert.Equal(msg.Id, att.MessageId);
     }
 
+    private static Attachment MakeAttachmentWithRow(int rowId, string guid, string transferName) =>
+        new(rowId, guid, "public.jpeg", "image/jpeg", false, transferName, 52349, 275, 600, false, null);
+
+    // PUNCHLIST B7: Apple rewrites an attachment's GUID as the transfer completes, so the socket
+    // save sees a plain UUID and the later server re-fetch sees `at_0_<messageGuid>` for the SAME
+    // server row. Deduping on the GUID alone stored it twice and the photo rendered twice.
+    [Fact]
+    public async Task SocketThenRefetch_SameServerRowUnderBothGuidForms_StoresOneRow()
+    {
+        var refetched = MakeMessage("msg-b7", "photo", null, 1000) with
+        {
+            HasAttachments = true,
+            Attachments = [MakeAttachmentWithRow(9022, "at_0_msg-b7", "IMG_9015.png")]
+        };
+        var api = new SyncMockApiService([], new Dictionary<string, List<Message>>
+        {
+            ["chat-b7"] = [refetched]
+        });
+        var (svc, factory, _) = CreateService(api);
+        var chat = SeedChat(factory, "chat-b7");
+
+        // First sighting: the live socket payload, carrying Apple's pre-transfer plain GUID.
+        await svc.SaveIncomingMessageAsync("chat-b7", MakeMessage("msg-b7", "photo", null, 1000) with
+        {
+            HasAttachments = true,
+            Attachments = [MakeAttachmentWithRow(9022, "929F3235-90D6-48BB-8895-5CA8B753323C", "IMG_9015.png")]
+        });
+
+        // Second sighting: the same server row (originalROWID 9022) under the rewritten GUID.
+        await svc.RefreshLatestFromServerAsync(chat.Id, "chat-b7");
+
+        using var db = factory.CreateDbContext();
+        var msg = db.Messages.Single(m => m.Guid == "msg-b7");
+        var rows = db.Attachments.Where(a => a.MessageId == msg.Id).ToList();
+        Assert.Single(rows);
+        Assert.Equal(9022, rows[0].OriginalRowId);
+    }
+
+    // The identity rule must not over-collapse: a message legitimately can carry the same file
+    // twice, and the server gives those two attachments distinct originalROWIDs (real cache,
+    // message 421: at_0_/at_1_ with the same TransferName and TotalBytes but ROWIDs 7944/7951).
+    [Fact]
+    public async Task SaveIncoming_SameFileTwiceUnderDistinctServerRows_KeepsBothRows()
+    {
+        var (svc, factory, _) = CreateService();
+        var chat = SeedChat(factory, "chat-b7b");
+
+        await svc.SaveIncomingMessageAsync("chat-b7b", MakeMessage("msg-b7b", "gif", null, 1000) with
+        {
+            HasAttachments = true,
+            Attachments =
+            [
+                MakeAttachmentWithRow(7944, "at_0_msg-b7b", "same.gif"),
+                MakeAttachmentWithRow(7951, "at_1_msg-b7b", "same.gif")
+            ]
+        });
+
+        using var db = factory.CreateDbContext();
+        var msg = db.Messages.Single(m => m.Guid == "msg-b7b");
+        var rows = db.Attachments.Where(a => a.MessageId == msg.Id).OrderBy(a => a.OriginalRowId).ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal([7944, 7951], rows.Select(r => r.OriginalRowId).ToArray());
+    }
+
     [Fact]
     public async Task RefreshLatest_PreservesLocalBookmark_StillAppliesServerText()
     {

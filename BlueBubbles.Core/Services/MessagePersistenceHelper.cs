@@ -139,9 +139,9 @@ internal static class MessagePersistenceHelper
     }
 
     /// <summary>The single writer of attachment rows. Every persist path (bulk sync, window
-    /// reconcile, live socket save) must go through here so the GUID dedupe below stays the one
-    /// rule that keeps a re-fetched window from duplicating rows. Requires the owning message rows
-    /// to already be saved.</summary>
+    /// reconcile, live socket save) must go through here so the identity dedupe below stays the
+    /// one rule that keeps a re-fetched window from duplicating rows. Requires the owning message
+    /// rows to already be saved.</summary>
     public static async Task SaveAttachmentsAsync(
         BlueBubblesDbContext db, IEnumerable<Message> messages, CancellationToken ct)
     {
@@ -154,9 +154,31 @@ internal static class MessagePersistenceHelper
 
             foreach (var att in msg.Attachments)
             {
-                if (att.Guid is not null &&
-                    await db.Attachments.AnyAsync(a => a.Guid == att.Guid, ct))
+                // Identity is the server's `originalROWID` (Apple's chat.db attachment ROWID,
+                // passed through verbatim by the server's AttachmentSerializer), NOT the GUID:
+                // Apple rewrites an attachment's GUID as a transfer completes, so one attachment
+                // is seen first as a plain UUID and later as `at_<n>_<messageGuid>`. Keying only
+                // on the GUID let the second form insert a second row for the same file (B7).
+                // The GUID check is kept as well, so this is a strict superset of the old rule;
+                // two rows with *different* ROWIDs stay distinct, because a message legitimately
+                // can carry the same file twice.
+                var isDuplicate =
+                    (att.Guid is not null &&
+                        (db.Attachments.Local.Any(a => a.Guid == att.Guid) ||
+                         await db.Attachments.AnyAsync(a => a.Guid == att.Guid, ct)))
+                    || (att.OriginalRowId.HasValue &&
+                        (db.Attachments.Local.Any(a =>
+                             a.MessageId == msgEntity.Id && a.OriginalRowId == att.OriginalRowId) ||
+                         await db.Attachments.AnyAsync(a =>
+                             a.MessageId == msgEntity.Id && a.OriginalRowId == att.OriginalRowId, ct)));
+
+                if (isDuplicate)
+                {
+                    AppLog.Debug(LogCategory.Sync,
+                        $"Attachment write skipped as duplicate: message={msg.Guid} " +
+                        $"rowId={att.OriginalRowId?.ToString() ?? "none"} guid={att.Guid ?? "none"}");
                     continue;
+                }
 
                 db.Attachments.Add(new AttachmentEntity
                 {
