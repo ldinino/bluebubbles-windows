@@ -257,6 +257,22 @@ public class SyncService : ISyncService
         }
         try
         {
+            // Caches written before the B7 identity fix hold the same server attachment twice
+            // under two Apple GUID forms, which renders every affected photo twice. Runs here
+            // rather than behind a version stamp because the cache has none (EnsureCreatedAsync,
+            // no migrations history) and the pass is idempotent and cheap by construction.
+            await using (var repairDb = await _dbFactory.CreateDbContextAsync(ct))
+            {
+                await AttachmentDeduplicator.CollapseDuplicatesAsync(repairDb, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn(LogCategory.Sync, $"Attachment duplicate repair skipped: {ex.Message}");
+        }
+
+        try
+        {
             long lastSyncedRowId = startRowId;
             long lastSyncedTimestamp = syncStart;
 
