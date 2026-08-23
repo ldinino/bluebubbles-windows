@@ -383,6 +383,84 @@
 
 ---
 
+## W — Structural work  *(from the 2026-08-23 architecture audit at `34f439f`)*
+
+> **Decision (maintainer + head engineer, 2026-08-23): no rewrite.** The audit was commissioned to
+> test whether core components needed restructuring, partly for reliability and partly so the app
+> could be ported from the BlueBubbles client-server model to a native iMessage stack
+> (rustpush / OpenBubbles-style). It found that the fragility is specific and measurable, not
+> pervasive, and that portability debt is small. Rewriting the tested half (Core, 72% line coverage)
+> while the untested half stays untested was rejected. **Do not re-open this as "should we rewrite"
+> without new measurements.**
+
+**The audit's load-bearing numbers** (verified independently by the head engineer; line numbers
+drift a few lines because B7 merged after `34f439f`):
+
+| | |
+|---|---|
+| Writers per entity | Attachments **1** (shared helper). MessageEntity **5**, ChatEntity **13**, Handle **6**, ChatParticipant **6** — no shared helper. |
+| Persistence vs notification | Decided in *different components* on **9 of 25** inbound paths. |
+| Locking | **34 of 42** `SaveChangesAsync` outside the only lock (`MessagesService._saveLock`, 7 regions). Three message-persistence implementations; the lock covers one. No WAL, no `busy_timeout`. |
+| Test reach | `BlueBubbles.Core` 0.7227 line-rate. `BlueBubbles.Windows` **absent from the coverage report entirely** — not 0%, uninstrumented, because the test project does not reference it. 10,514 C# + 2,801 XAML lines = 58.0% of production C#. |
+| Port seam | 33 files would change. True leakage: **43 references across 10 files**. |
+
+**Why this is the right target:** four of this release's eight bugs — B1 (persisted, never notified),
+B2 (a writer that didn't write attachments), B6 (a writer that didn't write chat updates), B7 (two
+writers, two identity schemes) — are all the same shape. The one entity with a single writer through
+a shared helper is Attachments, which is also the one just proven correct in B7. That is the
+template.
+
+#### W1. One writer per entity, in Core
+- [ ] **W1a. MessageEntity** — 5 writers (adds at `MessagePersistenceHelper` and `MessagesService`;
+  ad-hoc mutations in `MessagesService` ×2 and `MessageWindowReconciler`). Start here: it is where B1
+  and B2 lived. The single writer must persist *and* announce, so notification stops being decided
+  in a different component.
+- [ ] **W1b. HandleEntity (6) and ChatParticipant (6)** — spread across `MessagePersistenceHelper`,
+  `ChatsService`, `MessagesService`, `SyncService`. One removal site total, in `ChatsService`.
+- [ ] **W1c. ChatEntity (13)**, including the two construction sites that bypass
+  `ChatFieldMerge.ApplyServerOwnedFields` — confirmed at `ChatsService.cs:258` and
+  `SyncService.cs:551`. Both are insert paths today; the audit could not determine whether either
+  can run against a row that already holds client-only state (e.g. after a soft-delete/resurrect).
+  **CLAUDE.md hard rule applies.**
+- [ ] Expected side effect: the locking exposure largely dissolves. "Which of three writers needs the
+  mutex" is hard; "my one writer takes it" is not. Do **not** attack the 34-of-42 figure directly
+  first.
+- [ ] Not measured: whether the unlocked saves actually collide at runtime. SQLite's default
+  rollback-journal locking may have been absorbing it. Worth instrumenting, not worth assuming.
+
+#### W2. Transport leakage cleanup — 43 references, 10 files
+- [ ] The genuinely wrong ones, in priority order: `ChatViewModel.cs` emitting **raw wire strings**
+  (`"started-typing"` / `"stopped-typing"`) at ~L668/675/687; the `SocketState` connection-banner
+  cluster in `ConversationListViewModel` + `ConversationListPage.xaml.cs` +
+  `ConnectionSettingsPage.xaml.cs`; `BackupSettingsPage.xaml.cs` taking
+  **`ApiResponse<JsonElement>` in a UI method signature**; `AboutSettingsPage.xaml.cs` resolving
+  `IBlueBubblesApiService` from the container in view code-behind; `ChatDetailsViewModel.cs:343`
+  branching on `SocketEvents.GroupNameChange`; and `ConversationListViewModel` downcasting
+  `_socketService is ObservableObject`.
+- [ ] Excluded deliberately: DI registration in `App.xaml.cs` (a composition root naming concrete
+  transports is what it is for) and the setup / server-management UI (genuinely
+  BlueBubbles-specific).
+- [ ] **Larger, deferred:** wire DTOs are used directly as the domain model — every file in
+  `Core/Models` except `SocketEvents.cs` carries `[JsonPropertyName]`, and `Message`/`Chat`/`Handle`/
+  `Attachment` are what the ViewModels bind against. That is the real portability debt. Not now.
+
+#### W3. Dead or staged transport scaffolding
+- [ ] Three socket events are registered and raised with **zero subscribers**:
+  `incoming-facetime`, `ft-call-status-changed`, `imessage-aliases-removed`.
+- [ ] `IFaceTimeService` and `IFindMyService` exist with **no implementation registered** in
+  `App.xaml.cs`. Dead or staged is currently indistinguishable from source — decide and record which.
+
+#### W4. Sequencing note (supersedes earlier advice)
+- The head engineer previously said B2b (UI testability) must come first, on the grounds that you
+  cannot refactor what you cannot test. **That was wrong for this work:** W1 lives in Core, which is
+  at 72% line coverage and where every mutation test this session has bitten. B2b is not a
+  prerequisite. Order: **W1 -> W2 -> B2b**.
+- The audit found the UI layer **untested**, not **wrong**. Chat list, chat thread, avatars and chat
+  details feeling fragile is a coverage problem (it is why B2f, B2h, A3 and B2g shipped on log counts
+  and eyeballs). Rewriting them would produce new untested code, not fewer bugs.
+
+---
+
 ## F — Feature backlog  *(feature → future minor)*
 
 #### F2. Audio message support
