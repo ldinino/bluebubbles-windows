@@ -233,66 +233,50 @@ public partial class App : Application
     /// action (e.g. a tapback) was dropped.</summary>
     internal void HandleNotificationActivation(AppNotificationActivatedEventArgs e)
     {
-        var args = e.Arguments;
-        if (!args.TryGetValue(NotificationService.ActionKey, out var action))
+        var activation = ToastActivationRouter.Resolve(e.Arguments, e.UserInput);
+        if (activation.Kind == ToastActionKind.None)
         {
-            AppLog.Warn(LogCategory.Ui, "Toast activation had no action argument; ignoring.");
+            AppLog.Warn(LogCategory.Ui, "Toast activation had no usable action argument; ignoring.");
             return;
         }
 
-        AppLog.Info(LogCategory.Ui, $"Toast activation: action={action}");
+        AppLog.Info(LogCategory.Ui, $"Toast activation: action={activation.Kind}");
 
-        switch (action)
+        switch (activation.Kind)
         {
-            // Inline actions: send in the background — don't yank the window to the foreground.
-            case NotificationService.ActionReply:
-                HandleReply(args, e.UserInput);
+            // Inline actions: act in the background — don't yank the window to the foreground.
+            case ToastActionKind.Reply:
+                Services.GetRequiredService<IOutgoingMessageService>()
+                    .EnqueueText(activation.ChatGuid, activation.ReplyText);
+                MarkChatActedOn(activation.ChatGuid);
                 break;
-            case NotificationService.ActionReact:
-                HandleReaction(args);
+
+            case ToastActionKind.React:
+                // partIndex 0 mirrors the in-app reaction path; the private-API message/react endpoint
+                // expects a concrete part index (a null index silently no-ops the tapback server-side).
+                _ = Services.GetRequiredService<IOutgoingMessageService>().SendTapbackAsync(
+                    activation.ChatGuid, activation.SelectedText, activation.MessageGuid,
+                    activation.Reaction, partIndex: 0);
+                MarkChatActedOn(activation.ChatGuid);
+                break;
+
+            case ToastActionKind.MarkRead:
+                MarkChatActedOn(activation.ChatGuid);
                 break;
 
             // Body click: surface the window and deep-link to the chat.
-            case NotificationService.ActionOpenChat
-                when args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid):
+            case ToastActionKind.OpenChat:
                 MainWindow.DispatcherQueue.TryEnqueue(() =>
                 {
                     MainWindow.RestoreFromTray();
-                    NavigateToChat(chatGuid);
+                    NavigateToChat(activation.ChatGuid);
                 });
                 break;
-            case NotificationService.ActionOpenApp:
+
+            case ToastActionKind.OpenApp:
                 MainWindow.DispatcherQueue.TryEnqueue(() => MainWindow.RestoreFromTray());
                 break;
         }
-    }
-
-    /// <summary>Inline quick-reply: send straight through the outgoing (private-API) queue. The
-    /// server echo persists the message via the normal incoming path, so the chat need not be open.</summary>
-    private static void HandleReply(IDictionary<string, string> args, IDictionary<string, string> userInput)
-    {
-        if (!args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid)) return;
-        if (!userInput.TryGetValue(NotificationService.ReplyInputId, out var text) ||
-            string.IsNullOrWhiteSpace(text))
-            return;
-
-        Services.GetRequiredService<IOutgoingMessageService>().EnqueueText(chatGuid, text.Trim());
-        MarkChatActedOn(chatGuid);
-    }
-
-    /// <summary>Inline tapback: react to the originating message through the private-API send path.</summary>
-    private static void HandleReaction(IDictionary<string, string> args)
-    {
-        if (!args.TryGetValue(NotificationService.ChatGuidKey, out var chatGuid)) return;
-        if (!args.TryGetValue(NotificationService.MessageGuidKey, out var messageGuid)) return;
-        if (!args.TryGetValue(NotificationService.ReactionKey, out var reaction)) return;
-        args.TryGetValue(NotificationService.SelectedTextKey, out var selectedText);
-
-        // partIndex 0 mirrors the in-app reaction path; the private-API message/react endpoint expects
-        // a concrete part index (a null index silently no-ops the tapback on the server).
-        _ = Services.GetRequiredService<IOutgoingMessageService>()
-            .SendTapbackAsync(chatGuid, selectedText ?? string.Empty, messageGuid, reaction, partIndex: 0);
-        MarkChatActedOn(chatGuid);
     }
 
     /// <summary>Acting on a toast implies the message was seen: clear that chat's toasts and mark it read.</summary>

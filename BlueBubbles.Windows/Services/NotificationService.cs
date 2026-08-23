@@ -8,22 +8,22 @@ namespace BlueBubbles.Windows.Services;
 
 internal sealed class NotificationService : INotificationService
 {
-    // Activation-argument keys, shared with the handler in App.xaml.cs.
-    internal const string ActionKey = "action";
-    internal const string ChatGuidKey = "chatGuid";
-    internal const string MessageGuidKey = "messageGuid";
-    internal const string SelectedTextKey = "selectedText";
-    internal const string ReactionKey = "reaction";
-    internal const string ReplyInputId = "replyText";
-    internal const string ActionOpenChat = "openChat";
-    internal const string ActionOpenApp = "openApp";
-    internal const string ActionReply = "reply";
-    internal const string ActionReact = "react";
+    // Activation-argument keys, shared with the router in Core and the handler in App.xaml.cs.
+    internal const string ActionKey = ToastActivationRouter.ActionKey;
+    internal const string ChatGuidKey = ToastActivationRouter.ChatGuidKey;
+    internal const string MessageGuidKey = ToastActivationRouter.MessageGuidKey;
+    internal const string SelectedTextKey = ToastActivationRouter.SelectedTextKey;
+    internal const string ReactionKey = ToastActivationRouter.ReactionKey;
+    internal const string ReplyInputId = ToastActivationRouter.ReplyInputId;
+    internal const string ActionOpenChat = ToastActivationRouter.ActionOpenChat;
+    internal const string ActionOpenApp = ToastActivationRouter.ActionOpenApp;
+    internal const string ActionReply = ToastActivationRouter.ActionReply;
+    internal const string ActionReact = ToastActivationRouter.ActionReact;
+    internal const string ActionMarkRead = ToastActivationRouter.ActionMarkRead;
 
-    // The quick tapbacks offered on a toast. A toast allows at most five buttons; the inline-reply
-    // send button consumes one, leaving these four. Mirrors iMessage's first four tapbacks.
-    private static readonly string[] ToastReactions =
-        [ReactionTypes.Love, ReactionTypes.Like, ReactionTypes.Dislike, ReactionTypes.Laugh];
+    // The quick tapbacks offered on a toast. A toast allows at most five buttons; Send and
+    // Mark as read consume two, and these are iMessage's first two tapbacks.
+    private static readonly string[] ToastReactions = [ReactionTypes.Love, ReactionTypes.Like];
 
     private readonly AppSettings _settings;
     private readonly IWindowStateService _windowState;
@@ -163,10 +163,10 @@ internal sealed class NotificationService : INotificationService
         }
     }
 
-    /// <summary>Adds the inline quick-reply box and — for real messages, not reactions — the
-    /// quick-tapback buttons. The reply box's send button is bound to the text input so it renders
-    /// inline beside it. The full (untruncated) chat/message GUIDs travel as arguments because the
-    /// toast tag/group are truncated and can't be used to address the send.</summary>
+    /// <summary>Adds the inline quick-reply box, the quick-tapback buttons (real messages only, not
+    /// reactions) and Mark as read. The reply box's send button is bound to the text input so it
+    /// renders inline beside it. The full (untruncated) chat/message GUIDs travel as arguments
+    /// because the toast tag/group are truncated and can't be used to address the send.</summary>
     private static void AddInlineActions(AppNotificationBuilder builder, NewMessageNotification n)
     {
         builder.AddTextBox(ReplyInputId, "Reply", string.Empty);
@@ -175,18 +175,23 @@ internal sealed class NotificationService : INotificationService
             .AddArgument(ChatGuidKey, n.ChatGuid)
             .SetInputId(ReplyInputId));
 
-        if (n.IsReaction) return;
-
-        var selectedText = Truncate(n.MessageText ?? string.Empty, 256);
-        foreach (var reaction in ToastReactions)
+        if (!n.IsReaction)
         {
-            builder.AddButton(new AppNotificationButton(ReactionTypes.ToEmoji(reaction))
-                .AddArgument(ActionKey, ActionReact)
-                .AddArgument(ChatGuidKey, n.ChatGuid)
-                .AddArgument(MessageGuidKey, n.MessageGuid)
-                .AddArgument(ReactionKey, reaction)
-                .AddArgument(SelectedTextKey, selectedText));
+            var selectedText = Truncate(n.MessageText ?? string.Empty, 256);
+            foreach (var reaction in ToastReactions)
+            {
+                builder.AddButton(new AppNotificationButton(ReactionTypes.ToEmoji(reaction))
+                    .AddArgument(ActionKey, ActionReact)
+                    .AddArgument(ChatGuidKey, n.ChatGuid)
+                    .AddArgument(MessageGuidKey, n.MessageGuid)
+                    .AddArgument(ReactionKey, reaction)
+                    .AddArgument(SelectedTextKey, selectedText));
+            }
         }
+
+        builder.AddButton(new AppNotificationButton("Mark as read")
+            .AddArgument(ActionKey, ActionMarkRead)
+            .AddArgument(ChatGuidKey, n.ChatGuid));
     }
 
     private static string Truncate(string value, int max)
