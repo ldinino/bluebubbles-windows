@@ -1,4 +1,3 @@
-using System.Text.Json;
 using BlueBubbles.Core.Data;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
@@ -269,61 +268,9 @@ public class MessagesService : IMessagesService
             handleId = handle.Id;
         }
 
-        var entity = new MessageEntity
-        {
-            Guid = message.Guid,
-            ChatId = chat.Id,
-            HandleId = handleId,
-            OriginalRowId = message.OriginalRowId,
-            OtherHandle = message.OtherHandle,
-            Text = message.Text,
-            Subject = message.Subject,
-            Country = message.Country,
-            Error = message.Error,
-            DateCreated = message.DateCreated,
-            DateRead = message.DateRead,
-            DateDelivered = message.DateDelivered,
-            IsDelivered = message.IsDelivered,
-            IsFromMe = message.IsFromMe,
-            HasDdResults = message.HasDdResults,
-            DatePlayed = message.DatePlayed,
-            ItemType = message.ItemType,
-            GroupTitle = message.GroupTitle,
-            GroupActionType = message.GroupActionType,
-            BalloonBundleId = message.BalloonBundleId,
-            AssociatedMessageGuid = ReactionTypes.NormalizeAssociatedGuid(message.AssociatedMessageGuid),
-            AssociatedMessagePart = message.AssociatedMessageGuid is not null
-                ? ReactionTypes.ResolveAssociatedPart(message.AssociatedMessageGuid, message.AssociatedMessagePart)
-                : message.AssociatedMessagePart,
-            AssociatedMessageType = message.AssociatedMessageType,
-            ExpressiveSendStyleId = message.ExpressiveSendStyleId,
-            HasAttachments = message.HasAttachments,
-            HasReactions = message.HasReactions,
-            DateDeleted = message.DateDeleted,
-            ThreadOriginatorGuid = message.ThreadOriginatorGuid,
-            ThreadOriginatorPart = message.ThreadOriginatorPart,
-            HasApplePayloadData = message.HasApplePayloadData,
-            DateEdited = message.DateEdited,
-            WasDeliveredQuietly = message.WasDeliveredQuietly,
-            DidNotifyRecipient = message.DidNotifyRecipient,
-            IsBookmarked = message.IsBookmarked,
-            MetadataJson = Serialize(message.Metadata),
-            AttributedBodyJson = Serialize(message.AttributedBody),
-            MessageSummaryInfoJson = Serialize(message.MessageSummaryInfo),
-            PayloadDataJson = Serialize(message.PayloadData)
-        };
-
-        db.Messages.Add(entity);
-
-        try
-        {
-            await db.SaveChangesAsync();
-        }
-        catch (DbUpdateException)
-        {
-            // Duplicate GUID — another concurrent save won the race
+        if (!await MessagePersistenceHelper.InsertIncomingAsync(
+                db, chat.Id, handleId, message, CancellationToken.None))
             return;
-        }
 
         // Without this the live socket path stored HasAttachments = true and zero rows, so an
         // image only appeared after a sync re-fetched the window (PUNCHLIST B2).
@@ -336,27 +283,9 @@ public class MessagesService : IMessagesService
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
-            var entity = await db.Messages.FirstOrDefaultAsync(m => m.Guid == message.Guid);
+            var entity = await MessagePersistenceHelper.ApplyUpdateAsync(
+                db, message, CancellationToken.None);
             if (entity is null) return null;
-
-            entity.DateRead = message.DateRead;
-            entity.DateDelivered = message.DateDelivered;
-            entity.IsDelivered = message.IsDelivered;
-            entity.DateDeleted = message.DateDeleted;
-            entity.Subject = message.Subject;
-            entity.Error = message.Error;
-            entity.HasReactions = message.HasReactions;
-
-            // Guard text/dateEdited so a later delivery-only update can't wipe an edit
-            // (mirrors the Flutter merge, which only overwrites when the new value is present).
-            if (message.Text != null) entity.Text = message.Text;
-            if (message.DateEdited != null) entity.DateEdited = message.DateEdited;
-
-            // Persist edit history / retracted parts so an unsend survives a reload.
-            if (message.MessageSummaryInfo is { Count: > 0 })
-                entity.MessageSummaryInfoJson = Serialize(message.MessageSummaryInfo);
-
-            await db.SaveChangesAsync();
 
             return await db.Chats
                 .Where(c => c.Id == entity.ChatId)
@@ -396,7 +325,8 @@ public class MessagesService : IMessagesService
             var entity = await db.Messages.FirstOrDefaultAsync(m => m.Guid == messageGuid);
             if (entity is null) return true;
 
-            entity.DateDeleted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            MessagePersistenceHelper.MarkDeleted(
+                entity, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             await db.SaveChangesAsync();
         }
         finally
@@ -445,12 +375,8 @@ public class MessagesService : IMessagesService
             if (parentGuid is null) return;
 
             await using var db = await _dbFactory.CreateDbContextAsync();
-            var parent = await db.Messages.FirstOrDefaultAsync(m => m.Guid == parentGuid);
-            if (parent is not null && !parent.HasReactions)
-            {
-                parent.HasReactions = true;
-                await db.SaveChangesAsync();
-            }
+            await MessagePersistenceHelper.MarkParentHasReactionsAsync(
+                db, parentGuid, CancellationToken.None);
         }
         finally
         {
@@ -475,7 +401,4 @@ public class MessagesService : IMessagesService
             .Take(limit)
             .ToListAsync();
     }
-
-    private static string? Serialize<T>(T? value) where T : class =>
-        value is null ? null : JsonSerializer.Serialize(value, JsonDefaults.Options);
 }
