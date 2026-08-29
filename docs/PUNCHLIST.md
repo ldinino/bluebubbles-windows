@@ -284,32 +284,40 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   the container in their constructors; `NewChatViewModel` and `SetupViewModel` still hold
   `ISocketService` directly.
 
-#### W3. Dead transport scaffolding — **DECIDED: delete it**
-- **Decision (maintainer, 2026-08-29): FaceTime and Find My are not planned.** So this is dead, not
-  staged. Remove it rather than carrying an unimplemented surface that reads like a roadmap.
-  Re-adding it later is cheap — these are thin wrappers over documented server endpoints, and the
-  Flutter client remains the protocol reference.
-- **The audit's description was wrong in two ways — corrected by measurement, 2026-08-29:**
-  - "Three socket events registered and raised with zero subscribers" — all three *are* registered,
-    but via two different mechanisms: `SocketService.cs:96-97` registers `FtCallStatusChanged` and
-    `IMessageAliasesRemoved` through `RegisterEvent`, while `IncomingFacetime` gets its own explicit
-    `_socket.On` handler at `:104`. Only `IncomingFacetime` and `FtCallStatusChanged` reach
-    `ActionHandler`; `IMessageAliasesRemoved` is a constant with no handler at all.
-  - "Zero subscribers" is not quite true either: **`ActionHandlerTests.cs:186` subscribes to
-    `FaceTimeStatusChanged`**. There is a live test to delete with it.
-- **This is not a pure deletion — it reaches into the test project.** Full measured footprint:
-  - Whole files: `Models/FindMyDevice.cs`, `Models/FindMyFriend.cs`, `IFaceTimeService.cs`,
-    `IFindMyService.cs`
-  - `SocketEvents.cs` 3 constants; `SocketService.cs:96-97,104-114`; `ActionHandler.cs` 2 events +
-    2 `case` arms; `IActionHandler.cs` 2 event declarations
-  - `IBlueBubblesApiService.cs` + `BlueBubblesApiService.cs`: **7 methods** (1 FaceTime
-    availability, 4 Find My, 2 FaceTime answer/leave)
-  - Test stubs implementing those 7: `OutgoingMessageServiceTests.cs:413-423`,
-    `SyncServiceTests.cs:872-882`, plus the `ActionHandlerTests.cs` subscription
-- [ ] **Sequenced after W1b merges.** The stub edits land in `SyncServiceTests.cs`, which W1b is
-  live in right now; doing both at once buys a conflict for no reason. Zero urgency.
-- Nothing else depends on it: no DI registration in `App.xaml.cs`, and no implementation of either
-  interface exists.
+#### W3. Dead transport scaffolding — **DONE, deleted** (`bc30609`, merged `6e58ca1`)
+- **Decision (maintainer, 2026-08-29): FaceTime and Find My are not planned.** Dead, not staged.
+  Re-adding is cheap — thin wrappers over documented server endpoints, with the Flutter client as
+  the protocol reference.
+- [x] Deleted: `Models/FindMyDevice.cs`, `Models/FindMyFriend.cs`, `IFaceTimeService.cs`,
+  `IFindMyService.cs`; 3 `SocketEvents` constants; the `SocketService` registrations and the
+  `_socket.On` block; the `ActionHandler`/`IActionHandler` events and case arms; 7 API methods on
+  `IBlueBubblesApiService`/`BlueBubblesApiService`; and the stub members in two test files.
+  **247 deletions / 2 insertions** — the only additions are two stale comment headers
+  (`// -- iCloud / FindMy (7) --` -> `// -- iCloud (3) --`) that would otherwise have survived the
+  zero-reference check. Verified by me post-rebase: **0 hits** across all three projects, all four
+  files gone, W1c's files untouched, file encoding clean.
+- [x] **Test count 562 -> 560**, accounted for exactly by the two deliberately deleted tests:
+  `ActionHandlerTests.FtCallStatusChanged_FiresEvent` and
+  `ActionHandlerTests.AliasesRemoved_FiresEventWithList`.
+- **MY EARLIER TEXT HERE WAS WRONG — corrected.** This entry previously claimed
+  `IMessageAliasesRemoved` was "a constant with no handler at all". It had a **full chain**:
+  `ActionHandler.cs:74` case arm -> `HandleAliasesRemoved` (`:218`) -> a public `AliasesRemoved`
+  event (`:25`, `IActionHandler.cs:16`) -> a second live test at `ActionHandlerTests.cs:196`. My
+  grep missed it because the handler uses the C# identifier `IMessageAliasesRemoved`, which does not
+  contain the hyphens of the wire name I searched for. **Lesson: when hunting a socket event, grep
+  the constant identifier as well as the wire string.**
+- **Scope decision (head engineer, 2026-08-29): the aliases chain went too, and this is the one
+  judgement call worth flagging.** `imessage-aliases-removed` is *not* FaceTime or Find My, so it
+  sits outside the literal wording of the maintainer's decision. It was removed because it is dead
+  by the same standard — **zero production subscribers**, verified; its only consumer was its own
+  test — and because this entry has scoped all three events together since it was filed. **If the
+  alias-removal notification is wanted later it is a small revert**, and the server still emits the
+  event. Say so and it comes back.
+- Confirmed: no DI registration referenced either interface, and no implementation of either existed.
+- Process note from the agent, worth keeping: `build-and-run.ps1`'s `dotnet run` step can return
+  exit 0 without the app staying up, which reads identically to a crash from the script's output.
+  Distinguish them with a log delta (`Session start` + zero `[ERROR]`/`[FATAL]`) or `HasExited`,
+  not the exit code. Same trap as the "Launch failed." note in repo memory.
 
 #### W4. Sequencing note (supersedes earlier advice)
 - The head engineer previously said B2b (UI testability) must come first, on the grounds that you
