@@ -7,30 +7,44 @@
 
 ## Open bugs
 
-#### B8. Deleting the newest message leaves a stale conversation-list preview
-- **REWRITTEN 2026-08-29 — the original entry was wrong on the symptom.** It claimed the open thread
-  "only updates because the caller happens to refresh". It does not: `ChatViewModel` removes the
-  bubbles itself, synchronously, right after the service call succeeds (`ChatViewModel.cs:1466-1468`,
-  and it removes *both* bubbles of a text+attachment message sharing one GUID). **The thread was
-  never broken.**
-- **The real gap is the conversation list.** The tile preview is derived live from the newest
-  non-deleted message (`ChatsService.cs:91`), so deleting the newest message leaves a stale preview
-  until something else triggers a reload.
-- **W1a-2 (`891224a`) reduced this to a classification question.** The delete path now announces
-  (`MessagesService.cs:331`) but as `ServerTrueUp`, which by design does not touch the list.
-- [ ] **Direction (head engineer): classify by what actually happened, not by which method raised
-  it.** Flipping the delete path to `NewOrUpdated` is one token and fixes it — but the same argument
-  applies to `RefreshLatestFromServerAsync`, whose reconcile can also soft-delete the newest message,
-  and blanket-flipping *that* would cause a full list reload on every refresh, which is exactly the
-  cost the W1a-2 design exists to avoid. `MessageWindowReconciler.ReconcileWindowAsync` already
-  **returns an int** (rows changed), so the caller can announce `NewOrUpdated` only when the
-  reconcile actually changed something and `ServerTrueUp` otherwise. A delete always changes
-  something, so it is unconditionally `NewOrUpdated`.
-- [ ] Needs a test at the data layer that the delete path announces a list-affecting kind. The
-  subscriber link itself is not unit-testable (needs a UI dispatcher) — see B2b.
-- Found during W1a-2: `SyncMockApiService.DeleteMessageFromChatAsync` was
-  `throw new NotImplementedException()`, i.e. **no test in the suite exercised `DeleteMessageAsync`
-  at all** before this. Now returns 200.
+#### B8. Deleting the newest message left a stale conversation-list preview — **FIXED** (`197fe7d`, PR 14, merged `98db324`)
+- **The original entry was wrong on the symptom** and is kept corrected here: it claimed the open
+  thread "only updates because the caller happens to refresh". It does not — `ChatViewModel` removes
+  the bubbles itself, synchronously (`ChatViewModel.cs:1466-1468`, both bubbles of a
+  text+attachment message sharing one GUID). **The thread was never broken.** The real gap was the
+  conversation list, whose tile preview is derived live from the newest non-deleted, non-reaction
+  message (`ChatsService.cs:91-95`).
+- [x] **Fixed by classifying on what actually happened, not on which method raised the event.**
+  `DeleteMessageAsync` announces `NewOrUpdated` unconditionally; the two reconcile paths announce
+  `NewOrUpdated` only when `ReconcileWindowAsync` actually pruned something (its `int` return is the
+  soft-delete count), `ServerTrueUp` otherwise. `SyncService.ReconcileChatWindowAsync` now returns
+  `Task<int>` to carry it. 572/572.
+- **Conservative over-signal chosen deliberately.** `pruned > 0` also fires when a *mid-history*
+  message was pruned, which cannot change the tile. The precise alternative — comparing the newest
+  non-deleted message before and after — costs **2 extra DB round-trips on every reconcile**, i.e. a
+  permanent tax on the frequent path (`RefreshLatestFromServerAsync`, every full-sync chat) to avoid
+  one coalesced reload in a rare case. Conservative is strictly cheaper on the hot path. **Do not
+  "optimise" this into a newest-message comparison without new measurements.**
+- **Span-bound finding, worth keeping:** the reconcile can only prune the newest local message when
+  a server message shares an equal-or-newer `DateCreated`, because pruning is bounded to
+  `[oldest..newest]` of the server page. So `DeleteMessageAsync` is the real B8 vector; the
+  reconcile half is convergence insurance.
+- Verified by me, not accepted from the report: red-first reproduced exactly (**3 fail / 9 pass** on
+  unfixed Core, the three being the new tests); mutating the reconcile to announce `NewOrUpdated`
+  unconditionally — the "simplification" a future maintainer would make — fails
+  `FullSync_WindowReconcile_AnnouncesServerTrueUp` (571/572). The prune tests assert `DateDeleted`
+  *before* asserting the kind, so they cannot pass vacuously.
+- **Existing assertion changed, and it was right to change it.** `DeleteMessage_AnnouncesTheSoftDelete`
+  asserted `ServerTrueUp` — it *pinned the bug*. Rewritten as
+  `DeleteMessage_AnnouncesAListAffectingKind`, asserting through `AffectsConversationList` rather
+  than the enum so it survives a future third kind. Slightly less specific, but mutation-proven not
+  hollow, and `ServerTrueUp` remains pinned by the two reconcile tests.
+- Side effect, accepted: `ChatViewModel.cs:157` passes `NewOrUpdated` through, so a delete now also
+  wakes `AppendPersistedMessagesAsync`. It only appends rows the view lacks, so a delete gives it
+  nothing to do — one wasted DB read on a rare user action.
+- [ ] **Human-only, still pending:** that the tile visibly updates after deleting the newest message.
+  `ConversationListViewModel`'s `if (e.AffectsConversationList)` needs a UI dispatcher, so the
+  subscriber half is verified by compilation and review only (B2b).
 
 #### B9. Class B attachment groups may still double-render — a *different* bug from B7
 - [ ] Carried forward from B7 (archived, shipped 0.24.0). B7 fixed **Class A**: two rows sharing
