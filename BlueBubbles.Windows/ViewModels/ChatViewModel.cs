@@ -1335,21 +1335,17 @@ public partial class ChatViewModel : ObservableObject
     }
 
     private static string BubblePreview(MessageBubbleViewModel b)
-    {
-        if (!string.IsNullOrWhiteSpace(b.Text)) return b.Text!;
-        return b.HasAttachments ? "Attachment" : "Message";
-    }
+        => MessagePreview.Derive(b.Text, b.Attachments?.Select(a => a.MimeType)) ?? "Message";
 
     private string EntitySenderLabel(MessageEntity m)
         => m.IsFromMe ? "You"
             : (m.Handle?.Address is { } addr ? _contacts.GetDisplayName(addr) : ChatDisplayName);
 
+    // Both reply-preview paths go through the same Core helper so a reply renders identically
+    // whether its origin bubble was already loaded or had to be fetched (B11). The stored
+    // HasAttachments column is 0 on every message that owns attachment rows, so it cannot be used.
     private static string EntityPreview(MessageEntity m)
-    {
-        var text = m.Text?.Replace("￼", string.Empty).Trim();
-        if (!string.IsNullOrWhiteSpace(text)) return text!;
-        return m.HasAttachments ? "Attachment" : "Message";
-    }
+        => MessagePreview.Derive(m.Text, m.Attachments?.Select(a => a.MimeType)) ?? "Message";
 
     // ── Message actions: edit, unsend, delete (Phase 15) ──
 
