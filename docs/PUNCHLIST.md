@@ -522,6 +522,53 @@ template.
 - [ ] Scheduling a reply (`selectedMessageGuid` is plumbed through `ScheduledMessageService`, no
       UI yet).
 
+#### F6. Export conversations for archival
+Let a user save their chat history to disk from **Settings > Backup & Restore** — keeping a personal
+record, or producing a readable transcript as evidence. Export only; **no re-import** (restore is a
+much larger problem and bundling them sinks both).
+
+- **The page already exists but does something else.** `BackupSettingsPage` currently backs up *app
+  settings* to the BlueBubbles server (`SettingsBackupName = "BlueBubbles WinUI Settings"`). This is
+  a second, unrelated capability on the same page — do not entangle it with the settings payload.
+- **MEASURED — the honesty problem, and the most important part of this feature.** The local cache
+  is **not** the full history. `ChatEntity.OldestSyncedMessageDate` is a per-chat watermark
+  (`= 0` means synced back to the beginning). `MessagesService.LoadMessagesAsync(chatId, limit,
+  beforeDate)` reads the **local cache only**. So a naive export silently produces a *partial*
+  archive while looking complete — worst case for someone relying on it as a record.
+  **Requirement:** the export must state its own coverage (per-chat oldest synced date, and whether
+  it reaches the beginning), and the UI must not imply completeness. Offer to run the existing
+  older-message sync first rather than silently fetching inside the export.
+- **Format decision (maintainer + head engineer, 2026-08-29): JSONL, one file per conversation**,
+  plus a `manifest.json`. Rejected XML: message text is full of `<`, `>`, `&`, emoji and newlines,
+  where one bad control character invalidates an entire document, and JSONL streams line-by-line so
+  a corrupt line costs one message instead of the file.
+- **Also emit a plain-text transcript (`.txt`) per conversation, selectable.** Nobody reads JSONL,
+  and the archival/evidence use is the documented purpose. Plain text, not HTML — HTML with
+  embedded media means asset copying and relative paths, which is scope creep.
+- **Record shape matters more than the container.** From `Message.cs`, all present already:
+  `isFromMe`; `associatedMessageGuid`/`associatedMessageType` (**tapbacks are separate messages** —
+  fold onto the parent or the transcript fills with `Liked "..."` noise); `threadOriginatorGuid` for
+  real reply structure; `dateCreated`; `itemType`/`groupActionType` non-zero = system event, not
+  speech; `dateEdited` (export the final text); `hasAttachments` -> explicit placeholder, never a
+  silent empty message.
+- **Timestamps as ISO 8601 with offset.** The stored value is a Unix ms epoch; a bare local time in
+  an archive is ambiguous and worthless a year later.
+- **Scope guard (head engineer): attachments are referenced by filename, not fetched.** Copy a
+  cached attachment into `attachments/` when the file is already local; never pull from the server
+  during an export. Record a placeholder for anything uncached so the gap is visible.
+- **Deterministic filenames** (slug + short GUID hash) so a re-export diffs cleanly instead of
+  duplicating.
+- **`FolderPicker` is not used anywhere in this codebase yet.** Unpackaged, it needs the same
+  `InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow))` interop as
+  the 7 existing `FileOpenPicker`/`FileSavePicker` call sites (e.g. `FullscreenMediaPage.xaml.cs:160`).
+  A picker without it throws when unpackaged (CLAUDE.md identity rules).
+- **"Export all" needs progress and cancellation.** On a mature cache this is a lot of rows; without
+  it the window looks hung.
+- [ ] One line on the page stating the export is unencrypted plaintext. No further ceremony.
+- **Testability:** put the record-building and transcript-rendering in `BlueBubbles.Core` as pure
+  functions over messages, following the F5 precedent (`ToastActivationRouter`) — see B2b. The
+  picker and file IO stay in the view.
+
 ---
 
 ## U — Client updater  *(feature → future minor)*
