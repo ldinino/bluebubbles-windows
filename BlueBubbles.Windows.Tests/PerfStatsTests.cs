@@ -42,7 +42,9 @@ public class PerfStatsTests
     {
         var series = new DurationSeries();
         // Deliberately out of order: the median must sort, not take the middle of insertion order.
-        foreach (var ms in new double[] { 90, 10, 50, 70, 30 }) series.Add(ms);
+        // The values are chosen so insertion-order index 2 (30) differs from sorted index 2 (50) —
+        // with {90,10,50,70,30} both are 50, so dropping the sort would still pass.
+        foreach (var ms in new double[] { 90, 10, 30, 70, 50 }) series.Add(ms);
 
         Assert.Equal(50, series.MedianMs, 6);
     }
