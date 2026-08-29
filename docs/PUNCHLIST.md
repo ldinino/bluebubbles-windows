@@ -628,9 +628,11 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   `SystemEventViewModel`, the template-selector arm, the XAML template and the `ChatViewModel`
   branch live in `BlueBubbles.Windows` and are **unreachable by the suite** — compile and launch
   only (B2b's residual gap).
-- [ ] **Human-only:** that the event renders as a centred grey caption naming the right person, the
-  day separator above is correct and not duplicated, the bubble before keeps its tail and the one
-  after starts a new run, and paging up older messages does not duplicate the event.
+- [x] **Human-verified by the maintainer, 2026-08-29 — all five checks pass:** the event renders as
+  a centred line naming the right person, the day separator above is correct and not duplicated, the
+  bubble before keeps its tail and the one after starts a new run, and **paging up through older
+  messages does not duplicate the event** — which is the check that would have caught the
+  shown-GUID regression the agent found and fixed.
 - [ ] Residual, not observed: `OnNewMessageReceived`'s GUID dedupe still scans bubbles only, so a
   doubly-delivered socket group event could double-render. Left alone deliberately.
 - Out of scope: the conversation-list tile preview may look odd when a system event is the newest
