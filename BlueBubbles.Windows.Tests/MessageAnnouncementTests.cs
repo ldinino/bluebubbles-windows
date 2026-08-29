@@ -149,6 +149,41 @@ public class MessageAnnouncementTests
         Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
     }
 
+    [Fact]
+    public async Task FullSync_WindowReconcilePrunes_AnnouncesNewOrUpdated()
+    {
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-a", [handle]);
+        // The server page spans [1000..3000] but omits the local m-2 inside it, so reconcile prunes it.
+        var api = new SyncMockApiService([chat], chatMessages: new()
+        {
+            ["chat-a"] =
+            [
+                MakeMessage("m-1", "one", handle, 1700000001000),
+                MakeMessage("m-3", "three", handle, 1700000003000),
+            ]
+        });
+        var chats = new MockChatsService();
+        var factory = TestDbContextFactory.Create();
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "m-2", ChatId = c.Id, Text = "two", DateCreated = 1700000002000
+            });
+            db.SaveChanges();
+        }
+
+        await CreateSync(api, factory, chats, new AppSettings()).RunFullSyncAsync(skipEmptyChats: false);
+
+        using var db2 = factory.CreateDbContext();
+        Assert.NotNull(db2.Messages.Single(m => m.Guid == "m-2").DateDeleted);
+        Assert.Equal(MessagePersistKind.NewOrUpdated, Assert.Single(chats.PersistedKinds));
+    }
+
     private static (MessagesService Svc, TestDbContextFactory Factory, MockChatsService Chats) CreateMessages(
         SyncMockApiService api)
     {
@@ -230,9 +265,47 @@ public class MessageAnnouncementTests
     }
 
     [Fact]
-    public async Task DeleteMessage_AnnouncesTheSoftDelete()
+    public async Task RefreshLatestFromServer_WhenReconcilePrunes_AnnouncesNewOrUpdated()
     {
-        // PUNCHLIST B8: the soft delete used to be persisted with no announcement at all.
+        var handle = MakeHandle("+15551234567");
+        // Server page spans [1000..3000] and omits m-2, so the refresh soft-deletes it locally.
+        var api = new SyncMockApiService([], chatMessages: new()
+        {
+            ["chat-a"] =
+            [
+                MakeMessage("m-1", "one", handle, 1700000001000),
+                MakeMessage("m-3", "three", handle, 1700000003000),
+            ]
+        });
+        var (svc, factory, chats) = CreateMessages(api);
+
+        int chatId;
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            chatId = c.Id;
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "m-2", ChatId = chatId, Text = "two", DateCreated = 1700000002000
+            });
+            db.SaveChanges();
+        }
+
+        Assert.True(await svc.RefreshLatestFromServerAsync(chatId, "chat-a"));
+
+        using var db2 = factory.CreateDbContext();
+        Assert.NotNull(db2.Messages.Single(m => m.Guid == "m-2").DateDeleted);
+        Assert.Equal(MessagePersistKind.NewOrUpdated, Assert.Single(chats.PersistedKinds));
+    }
+
+    [Fact]
+    public async Task DeleteMessage_AnnouncesAListAffectingKind()
+    {
+        // PUNCHLIST B8: the tile preview is derived from the newest non-deleted message, so deleting
+        // it must reload the list. A user-initiated delete always changed the cache and is rare, so
+        // it is unconditionally NewOrUpdated.
         var api = new SyncMockApiService([]);
         var (svc, factory, chats) = CreateMessages(api);
 
@@ -253,6 +326,7 @@ public class MessageAnnouncementTests
         using var db2 = factory.CreateDbContext();
         Assert.NotNull(db2.Messages.Single(m => m.Guid == "m-1").DateDeleted);
         Assert.Equal("chat-a", Assert.Single(chats.PersistedNotifications));
-        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
+        Assert.True(new MessagesPersistedEventArgs("chat-a", Assert.Single(chats.PersistedKinds))
+            .AffectsConversationList);
     }
 }

@@ -210,6 +210,7 @@ public class MessagesService : IMessagesService
 
         if (messages.Count == 0) return false;
 
+        int pruned;
         await _saveLock.WaitAsync(ct);
         try
         {
@@ -221,14 +222,17 @@ public class MessagesService : IMessagesService
             // server's returned range that the server no longer has is soft-deleted — so a delete we
             // missed over the socket finally converges. See MessageWindowReconciler.
             var handleCache = new Dictionary<string, int>();
-            await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
+            pruned = await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
         }
         finally
         {
             _saveLock.Release();
         }
 
-        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
+        // This runs often, so it stays list-neutral unless the reconcile actually removed a row —
+        // only a removal can change the tile's newest-message preview (PUNCHLIST B8).
+        _chatsService.NotifyMessagesPersisted(chatGuid,
+            pruned > 0 ? MessagePersistKind.NewOrUpdated : MessagePersistKind.ServerTrueUp);
         return true;
     }
 
@@ -328,7 +332,9 @@ public class MessagesService : IMessagesService
             _saveLock.Release();
         }
 
-        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
+        // The tile preview is the newest non-deleted message, so a delete can change it. Deletes are
+        // user-initiated and rare, so signalling unconditionally costs nothing (PUNCHLIST B8).
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.NewOrUpdated);
         return true;
     }
 

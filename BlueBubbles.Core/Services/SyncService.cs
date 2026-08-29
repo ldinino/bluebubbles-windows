@@ -169,8 +169,11 @@ public class SyncService : ISyncService
                     continue;
                 }
 
-                await ReconcileChatWindowAsync(chatId, messages, handleCache, ct);
-                _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
+                var pruned = await ReconcileChatWindowAsync(chatId, messages, handleCache, ct);
+                // List-neutral unless the reconcile actually removed a row: only a removal can change
+                // the tile's newest-message preview (PUNCHLIST B8).
+                _chatsService.NotifyMessagesPersisted(chatGuid,
+                    pruned > 0 ? MessagePersistKind.NewOrUpdated : MessagePersistKind.ServerTrueUp);
 
                 var oldestDate = messages
                     .Where(m => m.DateCreated.HasValue)
@@ -711,13 +714,14 @@ public class SyncService : ISyncService
 
     /// <summary>Full-sync per-chat persistence that is delete-aware: the fetched newest page is
     /// authoritative for its range, so a server-side delete inside it is applied (not just upserts).
-    /// This is what lets the one-time upgrade heal converge caches an older build left stale.</summary>
-    private async Task ReconcileChatWindowAsync(
+    /// This is what lets the one-time upgrade heal converge caches an older build left stale.
+    /// Returns the number of locally soft-deleted messages.</summary>
+    private async Task<int> ReconcileChatWindowAsync(
         int chatId, List<Message> messages,
         Dictionary<string, int> handleCache, CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
+        var pruned = await MessageWindowReconciler.ReconcileWindowAsync(db, chatId, messages, handleCache, ct);
 
         var maxRowId = messages
             .Where(m => m.OriginalRowId.HasValue)
@@ -726,6 +730,8 @@ public class SyncService : ISyncService
             .Max();
         if (maxRowId > _maxSyncedRowId)
             _maxSyncedRowId = maxRowId;
+
+        return pruned;
     }
 
     private async Task EnsureSchemaExtensionsAsync(CancellationToken ct)
