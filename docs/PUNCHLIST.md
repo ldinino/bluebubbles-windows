@@ -168,10 +168,40 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   changes `MessagesPersisted` from per-batch to per-call and adds events to paths that intentionally
   have none, driving `ConversationListViewModel.ScheduleReloadFromDatabase`. Verified: exactly 4
   production `NotifyMessagesPersisted` call sites. **Do this after W1b/W1c**, with its own evidence.
-- [ ] **W1b. HandleEntity (6) and ChatParticipant (6)** — spread across `MessagePersistenceHelper`,
-  `ChatsService`, `MessagesService`, `SyncService`. One removal site total, in `ChatsService`.
-- [ ] **W1c. ChatEntity (13)**, including the two construction sites that bypass
-  `ChatFieldMerge.ApplyServerOwnedFields` — confirmed at `ChatsService.cs:258` and
+- [x] **W1b. HandleEntity and ChatParticipant — DONE** (`e14695b` + `399c0b8`, merged `60dbbaa`).
+  One writer each, in `BlueBubbles.Core/Services/HandlePersistenceHelper.cs`: `ApplyServerFields`
+  is the single field list, with `EnsureHandleAsync`, `LinkParticipantAsync`,
+  `LinkParticipantsAsync` and `RemoveParticipantsMissingFrom` beside it. 507/507, clean build and
+  launch. Verified by me: the only remaining constructions are inside the helper, plus one
+  **transient** `HandleEntity` in `ChatViewModel.cs:888` that is never added to a context.
+  - **Both audit enumerations were over-counted — the third time this has happened.** Actual: **5**
+    persisting HandleEntity writers (6 constructions, one transient) and **5** ChatParticipant
+    writers plus 1 removal site. W1a was wrong the other way (5 stated, 6 actual). **Stop quoting
+    audit counts as settled in briefs.**
+  - **The justification, measured:** the three surviving field lists wrote **2, 4 and 9 of 9**
+    columns. Whether the cache held a contact's `Country`/`Color`/`DefaultEmail` depended on which
+    path saw them first. That is B2's shape already present, not hypothetical.
+  - **No client-owned fields here** — verified column by column: every scalar on `HandleEntity` maps
+    1:1 to a `Handle` property, and `ChatParticipant` is a pure `(ChatId, HandleId)` join. So no
+    `ChatFieldMerge`-style ownership split. What *is* protected is the no-clobber rule, via
+    `refreshExisting`, which only the sync paths pass.
+  - Verified by me, not accepted from the report: mutating `if (isNew || refreshExisting)` to
+    `if (true)` fails `SparsePayloadAfterFullSync_DoesNotBlankStoredHandleMetadata` (506/507) — the
+    B6-shape hazard is defended by a named test. Removing the `.Local` dedup fails
+    `PayloadNamingTheSameParticipantTwice_LinksItOnce`. Restoring Core to pre-refactor `9f3636f`
+    reproduces the agent's control exactly: **6 pass, 2 fail**, the two failures being precisely the
+    two declared deltas.
+  - **Two intentional behaviour deltas:** creating writers now store the full field set (strict
+    superset, create-only); and `LinkParticipantAsync` de-duplicates against `DbSet.Local`, which
+    fixed a **live defect** — a payload naming the same participant twice threw
+    `InvalidOperationException` on a composite-key conflict.
+  - [ ] Not verified: no live-server run, so the real participant-removal path is unexercised.
+  - Carried into W1c: `ChatsService.ApplyChatUpdateAsync` computes stale participants from
+    `entity.ChatParticipants` including rows added moments earlier in the same call, relying on EF
+    fix-up to populate `Handle`. A null guard was added inside `RemoveParticipantsMissingFrom`
+    rather than restructuring the flow. **W1c owns that flow — fix it there.**
+- [ ] **W1c. ChatEntity (13 — treat as unverified, see W1b)**, including the two construction sites
+  that bypass `ChatFieldMerge.ApplyServerOwnedFields` — confirmed at `ChatsService.cs:258` and
   `SyncService.cs:551`. Both are insert paths today; the audit could not determine whether either
   can run against a row that already holds client-only state (e.g. after a soft-delete/resurrect).
   **CLAUDE.md hard rule applies.**
@@ -183,21 +213,42 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
 - [ ] Not measured: whether the unlocked saves actually collide at runtime. SQLite's default
   rollback-journal locking may have been absorbing it. Worth instrumenting, not worth assuming.
 
-#### W2. Transport leakage cleanup — 43 references, 10 files
-- [ ] The genuinely wrong ones, in priority order: `ChatViewModel.cs` emitting **raw wire strings**
-  (`"started-typing"` / `"stopped-typing"`) at ~L668/675/687; the `SocketState` connection-banner
-  cluster in `ConversationListViewModel` + `ConversationListPage.xaml.cs` +
-  `ConnectionSettingsPage.xaml.cs`; `BackupSettingsPage.xaml.cs` taking
-  **`ApiResponse<JsonElement>` in a UI method signature**; `AboutSettingsPage.xaml.cs` resolving
-  `IBlueBubblesApiService` from the container in view code-behind; `ChatDetailsViewModel.cs:343`
-  branching on `SocketEvents.GroupNameChange`; and `ConversationListViewModel` downcasting
-  `_socketService is ObservableObject`.
-- [ ] Excluded deliberately: DI registration in `App.xaml.cs` (a composition root naming concrete
-  transports is what it is for) and the setup / server-management UI (genuinely
-  BlueBubbles-specific).
-- [ ] **Larger, deferred:** wire DTOs are used directly as the domain model — every file in
-  `Core/Models` except `SocketEvents.cs` carries `[JsonPropertyName]`, and `Message`/`Chat`/`Handle`/
-  `Attachment` are what the ViewModels bind against. That is the real portability debt. Not now.
+#### W2. Transport leakage cleanup — **DONE** (`f004462`, rebased `d4792ac`, merged)
+- [x] All 7 named targets cleared. New transport-neutral abstractions live in `BlueBubbles.Core`:
+  `Models/ConnectionStatus.cs` (`ConnectionState`, `ConnectionBanner`, `ConnectionStatusPolicy`),
+  `Models/ChatUpdateKind.cs`, `Models/TypingState.cs`, `Services/ITypingIndicatorService.cs` (which
+  now owns the `started-typing`/`stopped-typing` names). 548/548 = 507 + 41 new tests.
+- **Core-not-Windows was the right call, and for a better reason than mine.** I framed it as
+  "Core gets test coverage". The agent's reason is stronger and already in repo memory: the test
+  project targets `net8.0` and references only Core, so a view-layer type is not *less* tested, it
+  is **unreachable** — and every abstraction added here carries branching logic (a 4-arm state map,
+  a banner policy with a syncing override, an event-name classifier, a status-code boundary).
+- **Measured leakage: 48 refs / 12 files -> 30 / 7.** Verified by me on the branch: exactly 30/7.
+  Of the 30 remaining, **16 are the deliberate exclusions** (`App.xaml.cs` DI 9, `SetupViewModel` 4,
+  `ServerManagementSettingsPage` 3). **The audit's "43 across 10 files" is not reproducible from
+  source** without knowing its exact pattern — do not cite it as a baseline again.
+- Verified by me, not accepted from the report: mutating `IsParticipantChange` to drop
+  `ParticipantLeft` fails `IsParticipantChange_OnlyForMembershipEvents(kind: ParticipantLeft)`
+  (547/548). Confirmed `ChatsService.cs`/`SyncService.cs`/`MessagesService.cs` are untouched, so
+  there was no W1b collision. Clean build 0 warnings / 0 errors and the exe launches and stays up
+  with `.pri` staged.
+- **Two brief corrections from the agent, both accepted:** the `SocketState` banner cluster is
+  **4 files, not 3** (`SettingsViewModel.cs` declared `[ObservableProperty] SocketState
+  ConnectionState`, so the page could not stop naming the type until the VM changed), and the
+  `_socketService is ObservableObject` downcast existed in **two** view models, not one.
+- `SettingsViewModel` went 4 -> 6 references: it absorbed the API dependency out of
+  `AboutSettingsPage` code-behind. That is the trade this entry asked for.
+- [ ] **Human-only, NOT verified — a green suite and a launch prove none of these:** the connection
+  banner rendering (connecting / disconnected / syncing), typing indicators actually transmitting
+  (the send path is behind a new service; only the event-name mapping is unit-tested), the chat
+  details pane updating on a rename or participant change, and the connection-settings status text
+  and colour.
+- [ ] **Still deferred, unchanged:** wire DTOs used directly as the domain model — every
+  `Core/Models` type except `SocketEvents.cs` carries `[JsonPropertyName]` and the ViewModels bind
+  against `Message`/`Chat`/`Handle`/`Attachment`. That is the real portability debt.
+- [ ] Adjacent, left alone: `BackupSettingsPage` and `AboutSettingsPage` still resolve services from
+  the container in their constructors; `NewChatViewModel` and `SetupViewModel` still hold
+  `ISocketService` directly.
 
 #### W3. Dead transport scaffolding — **DECIDED: delete it**
 - **Decision (maintainer, 2026-08-29): FaceTime and Find My are not planned.** So this is dead, not
