@@ -73,7 +73,7 @@ public sealed partial class BackupSettingsPage : Page
         => await RunAsync(SaveSettingsButton, async () =>
         {
             var response = await _api.SetSettingsBackupAsync(SettingsBackupName, BuildSettingsPayload());
-            Report(response, "Settings backed up to the server.");
+            Report(response.IsSuccess, response.FailureMessage, "Settings backed up to the server.");
         });
 
     private async void OnRestoreSettingsClick(object sender, RoutedEventArgs e)
@@ -97,7 +97,7 @@ public sealed partial class BackupSettingsPage : Page
         => await RunAsync(DeleteSettingsButton, async () =>
         {
             var response = await _api.DeleteSettingsBackupAsync(SettingsBackupName);
-            Report(response, "Settings backup deleted from the server.");
+            Report(response.IsSuccess, response.FailureMessage, "Settings backup deleted from the server.");
         });
 
     // ── Helpers ──
@@ -110,12 +110,12 @@ public sealed partial class BackupSettingsPage : Page
         finally { button.IsEnabled = true; }
     }
 
-    private void Report(ApiResponse<JsonElement> response, string successMessage)
+    private void Report(bool succeeded, string failureMessage, string successMessage)
     {
-        if (response.Status is >= 200 and < 300)
+        if (succeeded)
             ShowStatus(successMessage, InfoBarSeverity.Success);
         else
-            ShowStatus(response.Error?.ErrorMessage ?? response.Message, InfoBarSeverity.Warning);
+            ShowStatus(failureMessage, InfoBarSeverity.Warning);
     }
 
     /// <summary>

@@ -12,6 +12,7 @@ namespace BlueBubbles.Windows.ViewModels;
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly ISocketService _socketService;
+    private readonly IBlueBubblesApiService _api;
     private readonly IFirebaseService _firebase;
     private readonly ISettingsService _settings;
     private readonly ServerConfiguration _config;
@@ -25,10 +26,27 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>Sentinel filter value meaning "show every category".</summary>
     public const string AllCategories = "All";
 
+    private ConnectionState CurrentConnectionState =>
+        ConnectionStatusPolicy.FromSocketState(_socketService.State);
+
+    /// <summary>Server version for display, or a placeholder when it can't be read.</summary>
+    public async Task<string> GetServerVersionDisplayAsync()
+    {
+        try
+        {
+            var response = await _api.GetServerInfoAsync();
+            return response.Data?.ServerVersion ?? "Unknown";
+        }
+        catch
+        {
+            return "Unavailable";
+        }
+    }
+
     [ObservableProperty] public partial string LogText { get; set; } = string.Empty;
     [ObservableProperty] public partial string LogCategoryFilter { get; set; } = AllCategories;
 
-    [ObservableProperty] public partial SocketState ConnectionState { get; set; }
+    [ObservableProperty] public partial ConnectionState ConnectionState { get; set; }
     [ObservableProperty] public partial string ServerUrl { get; set; }
     [ObservableProperty] public partial bool IsFetchingUrl { get; set; }
 
@@ -43,6 +61,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(
         ISocketService socketService,
+        IBlueBubblesApiService api,
         IFirebaseService firebase,
         ISettingsService settings,
         ServerConfiguration config,
@@ -54,6 +73,7 @@ public partial class SettingsViewModel : ObservableObject
         AppSettings appSettings)
     {
         _socketService = socketService;
+        _api = api;
         _firebase = firebase;
         _settings = settings;
         _config = config;
@@ -65,26 +85,23 @@ public partial class SettingsViewModel : ObservableObject
         _appSettings = appSettings;
 
         ServerUrl = _config.ServerUrl;
-        ConnectionState = _socketService.State;
+        ConnectionState = CurrentConnectionState;
         UseLocalConnection = _appSettings.UseLocalConnection;
         LocalhostPort = _appSettings.LocalhostPort;
         if (_localhostDetection.ResolvedLocalUrl is not null)
             LocalConnectionStatus = $"Connected: {_localhostDetection.ResolvedLocalUrl}";
 
-        if (_socketService is ObservableObject observable)
+        _socketService.PropertyChanged += (_, e) =>
         {
-            observable.PropertyChanged += (_, e) =>
+            if (e.PropertyName == nameof(ISocketService.State))
             {
-                if (e.PropertyName == nameof(ISocketService.State))
+                RunOnUI(() =>
                 {
-                    RunOnUI(() =>
-                    {
-                        ConnectionState = _socketService.State;
-                        ServerUrl = _config.ServerUrl;
-                    });
-                }
-            };
-        }
+                    ConnectionState = CurrentConnectionState;
+                    ServerUrl = _config.ServerUrl;
+                });
+            }
+        };
 
         RebuildLogText();
         AppLog.EntryAdded += OnLogEntry;

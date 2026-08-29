@@ -16,7 +16,6 @@ public sealed partial class AboutSettingsPage : Page
     private const string GitHubUrl = "https://github.com/ldinino/bluebubbles-windows";
     private const string DocsUrl = "https://bluebubbles.app/install/";
 
-    private readonly IBlueBubblesApiService _api;
     private readonly SettingsViewModel _vm;
     private readonly AppSettings _settings;
     private readonly ISettingsService _settingsService;
@@ -34,7 +33,6 @@ public sealed partial class AboutSettingsPage : Page
 
     public AboutSettingsPage()
     {
-        _api = App.Services.GetRequiredService<IBlueBubblesApiService>();
         _vm = App.Services.GetRequiredService<SettingsViewModel>();
         _settings = App.Services.GetRequiredService<AppSettings>();
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
@@ -68,15 +66,7 @@ public sealed partial class AboutSettingsPage : Page
 
     private async Task LoadServerVersionAsync()
     {
-        try
-        {
-            var response = await _api.GetServerInfoAsync();
-            ServerVersionValue.Text = response.Data?.ServerVersion ?? "Unknown";
-        }
-        catch
-        {
-            ServerVersionValue.Text = "Unavailable";
-        }
+        ServerVersionValue.Text = await _vm.GetServerVersionDisplayAsync();
     }
 
     private async void OnCheckForUpdatesClick(object sender, RoutedEventArgs e)

@@ -334,19 +334,17 @@ public partial class ChatDetailsViewModel : ObservableObject
         var dispatcher = App.MainWindow?.DispatcherQueue;
         if (dispatcher is null) return;
 
-        dispatcher.TryEnqueue(() => _ = ApplyChatUpdateAsync(e.EventType, chat));
+        dispatcher.TryEnqueue(() => _ = ApplyChatUpdateAsync(e.Kind, chat));
     }
 
-    private async Task ApplyChatUpdateAsync(string eventType, Chat chat)
+    private async Task ApplyChatUpdateAsync(ChatUpdateKind kind, Chat chat)
     {
         try
         {
-            if (eventType == SocketEvents.GroupNameChange && chat.DisplayName is not null)
+            if (kind == ChatUpdateKind.GroupNameChanged && chat.DisplayName is not null)
                 ChatDisplayName = chat.DisplayName;
 
-            if (eventType is SocketEvents.ParticipantAdded
-                or SocketEvents.ParticipantRemoved
-                or SocketEvents.ParticipantLeft)
+            if (kind.IsParticipantChange())
             {
                 await RefreshParticipantsAsync();
             }

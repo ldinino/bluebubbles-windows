@@ -387,6 +387,8 @@ public partial class App : Application
                 sp.GetRequiredService<ILocalhostDetectionService>(),
                 sp.GetRequiredService<IBlueBubblesApiService>(),
                 sp.GetRequiredService<AppSettings>()));
+        services.AddSingleton<ITypingIndicatorService>(sp =>
+            new TypingIndicatorService(sp.GetRequiredService<ISocketService>()));
         services.AddSingleton<IServerDiscoveryService>(sp =>
             new ServerDiscoveryService(
                 sp.GetRequiredService<IBlueBubblesApiService>(),
