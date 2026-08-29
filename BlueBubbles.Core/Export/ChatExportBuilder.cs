@@ -45,7 +45,7 @@ public static class ChatExportBuilder
         var records = new List<ExportedMessage>(primary.Count);
         foreach (var m in primary)
         {
-            var isSystemEvent = m.ItemType != 0 || m.GroupActionType != 0;
+            var isSystemEvent = SystemEventDescriber.IsSystemEvent(m);
 
             // The HasAttachments flag is NOT usable: measured against a real cache, all 661
             // messages that owned attachment rows had HasAttachments = 0. Trusting it would drop
@@ -141,33 +141,11 @@ public static class ChatExportBuilder
         return result;
     }
 
-    /// <summary>
-    /// Plain-language description of a group/system event. Measured against a real cache: every
-    /// row with ItemType != 0 had NULL text, so without this they would export as blank lines.
-    /// Item types 1-3 are the well-established Apple group actions; anything else is labelled
-    /// generically rather than guessed at.
-    /// </summary>
+    /// <summary>Plain-language description of a group/system event. The transcript and the in-app
+    /// timeline share one implementation so they can never drift.</summary>
     public static string DescribeEvent(MessageEntity m, Func<string, string>? resolveSender = null)
-    {
-        var actor = m.IsFromMe ? SelfSender : ResolveName(m.Handle?.Address, resolveSender);
-
-        return (m.ItemType, m.GroupActionType) switch
-        {
-            (1, 0) => $"{actor} added someone to the conversation.",
-            (1, 1) => $"{actor} removed someone from the conversation.",
-            (2, _) when !string.IsNullOrWhiteSpace(m.GroupTitle)
-                => $"{actor} named the conversation \"{m.GroupTitle}\".",
-            (2, _) => $"{actor} changed the conversation name.",
-            (3, _) => $"{actor} left the conversation.",
-            _ => $"Unrecognised system event from {actor} (itemType {m.ItemType}, "
-                 + $"groupActionType {m.GroupActionType}).",
-        };
-    }
+        => SystemEventDescriber.Describe(m, resolveSender, SelfSender);
 
     private static string ResolveName(string? address, Func<string, string>? resolveSender)
-    {
-        if (string.IsNullOrWhiteSpace(address)) return "Unknown";
-        var resolved = resolveSender?.Invoke(address);
-        return string.IsNullOrWhiteSpace(resolved) ? address : resolved!;
-    }
+        => SystemEventDescriber.ResolveName(address, resolveSender);
 }

@@ -8,6 +8,7 @@ public class ChatItemTemplateSelector : DataTemplateSelector
 {
     public DataTemplate? MessageTemplate { get; set; }
     public DataTemplate? DateSeparatorTemplate { get; set; }
+    public DataTemplate? SystemEventTemplate { get; set; }
 
     protected override DataTemplate SelectTemplateCore(object item)
     {
@@ -15,6 +16,7 @@ public class ChatItemTemplateSelector : DataTemplateSelector
         {
             MessageBubbleViewModel => MessageTemplate!,
             DateSeparatorViewModel => DateSeparatorTemplate!,
+            SystemEventViewModel => SystemEventTemplate!,
             _ => MessageTemplate!
         };
     }
