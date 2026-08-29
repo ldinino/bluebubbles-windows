@@ -110,7 +110,7 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
             MessagePreview.Derive(e.Message.Text, e.Message.Attachments?.Select(a => a.MimeType)),
             e.Message.DateCreated ?? 0,
             e.Message.IsFromMe, e.Message.Handle?.Address);
-        _chatsService.NotifyMessagesPersisted(chatGuid);
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.NewOrUpdated);
 
         MessageProcessed?.Invoke(this,
             new IncomingMessageProcessedEventArgs(chatGuid, e.Message.IsFromMe));
@@ -132,7 +132,7 @@ public class IncomingMessageProcessor : IIncomingMessageProcessor
         var chatGuid = await _messagesService.UpdateMessageAsync(e.Message)
             ?? e.Message.Chats?.FirstOrDefault()?.Guid;
         if (chatGuid is not null)
-            _chatsService.NotifyMessagesPersisted(chatGuid);
+            _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.NewOrUpdated);
     }
 
     private async Task ProcessReactionAsync(MessageEventArgs e)

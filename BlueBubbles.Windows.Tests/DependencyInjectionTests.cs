@@ -203,7 +203,7 @@ public class DependencyInjectionTests
         public event EventHandler? ChatsChanged;
         public event EventHandler<string>? ChatUpdated;
         public event EventHandler? ArchivedChatsChanged;
-        public event EventHandler<string>? MessagesPersisted;
+        public event EventHandler<MessagesPersistedEventArgs>? MessagesPersisted;
         public Task LoadChatsAsync() => Task.CompletedTask;
         public Task LoadArchivedChatsAsync() => Task.CompletedTask;
         public Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null)
@@ -225,7 +225,7 @@ public class DependencyInjectionTests
         public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
         public Task EnsureChatExistsAsync(Chat chatData) => Task.CompletedTask;
         public Task ApplyChatUpdateAsync(Chat chatData) => Task.CompletedTask;
-        public void NotifyMessagesPersisted(string chatGuid) { }
+        public void NotifyMessagesPersisted(string chatGuid, MessagePersistKind kind) { }
     }
     private class StubMessagesService : IMessagesService
     {

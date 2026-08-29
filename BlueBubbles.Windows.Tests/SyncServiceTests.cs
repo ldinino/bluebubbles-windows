@@ -827,7 +827,8 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<Chat>> AddParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<Chat>> RemoveParticipantAsync(string chatGuid, string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> LeaveChatAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<ApiResponse<JsonElement>> DeleteMessageFromChatAsync(string chatGuid, string messageGuid, CancellationToken ct = default) =>
+        Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null));
     public Task<ApiResponse<List<Message>>> QueryMessagesAsync(List<string>? withQuery = null, List<object>? where = null, string sort = "DESC", long? before = null, long? after = null, string? chatGuid = null, int offset = 0, int limit = 100, bool convertAttachments = true, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -893,12 +894,13 @@ internal class MockSettingsService : ISettingsService
 internal class MockChatsService : IChatsService
 {
     public List<string> PersistedNotifications { get; } = [];
+    public List<MessagePersistKind> PersistedKinds { get; } = [];
     public IReadOnlyList<ChatWithParticipants> Chats => [];
     public IReadOnlyList<ChatWithParticipants> ArchivedChats => [];
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
-    public event EventHandler<string>? MessagesPersisted;
+    public event EventHandler<MessagesPersistedEventArgs>? MessagesPersisted;
     public Task LoadChatsAsync() => Task.CompletedTask;
     public Task LoadArchivedChatsAsync() => Task.CompletedTask;
     public Task HandleNewMessageAsync(string chatGuid, string? messageText, long dateCreated, bool isFromMe, string? senderAddress = null) => Task.CompletedTask;
@@ -919,9 +921,10 @@ internal class MockChatsService : IChatsService
     public Task EnsureChatInDatabaseAsync(Chat chat, string? messageText) => Task.CompletedTask;
     public Task EnsureChatExistsAsync(Chat chatData) => Task.CompletedTask;
     public Task ApplyChatUpdateAsync(Chat chatData) => Task.CompletedTask;
-    public void NotifyMessagesPersisted(string chatGuid)
+    public void NotifyMessagesPersisted(string chatGuid, MessagePersistKind kind)
     {
         PersistedNotifications.Add(chatGuid);
-        MessagesPersisted?.Invoke(this, chatGuid);
+        PersistedKinds.Add(kind);
+        MessagesPersisted?.Invoke(this, new MessagesPersistedEventArgs(chatGuid, kind));
     }
 }

@@ -12,10 +12,12 @@ public interface IChatsService
     event EventHandler<string>? ChatUpdated;
     event EventHandler? ArchivedChatsChanged;
 
-    /// <summary>Raised with a chat GUID whenever messages have just been persisted for that chat —
-    /// from the live socket or a delta sync. The open thread listens to this to append from the DB,
-    /// so the view stays in step with the database regardless of which path wrote the rows.</summary>
-    event EventHandler<string>? MessagesPersisted;
+    /// <summary>Raised whenever messages have just been persisted for a chat, by *every* path that
+    /// writes them — live socket, delta sync, history backfill, window reconcile, soft delete. The
+    /// open thread listens to this to append from the DB, so the view stays in step with the database
+    /// regardless of which path wrote the rows. Subscribers must filter on
+    /// <see cref="MessagesPersistedEventArgs.Kind"/>: a backfill of old history is not a new message.</summary>
+    event EventHandler<MessagesPersistedEventArgs>? MessagesPersisted;
 
     Task LoadChatsAsync();
     Task LoadArchivedChatsAsync();
@@ -48,10 +50,10 @@ public interface IChatsService
     /// list keeps showing the old name/participants.</summary>
     Task ApplyChatUpdateAsync(Chat chatData);
 
-    /// <summary>Announces that messages were just persisted for <paramref name="chatGuid"/> so the
-    /// open thread can append them from the DB. Used by the sync path, which writes straight to the
-    /// database rather than through the live socket event.</summary>
-    void NotifyMessagesPersisted(string chatGuid);
+    /// <summary>Announces that messages were just persisted for <paramref name="chatGuid"/>. Call it
+    /// from the component that owns the transaction, once it has committed — a subscriber reads the
+    /// database back, so announcing mid-write hands it the pre-change state.</summary>
+    void NotifyMessagesPersisted(string chatGuid, MessagePersistKind kind);
 
     // Group management
     Task<bool> RenameChatAsync(string chatGuid, string newName);

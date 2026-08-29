@@ -10,15 +10,20 @@ public class MessagesService : IMessagesService
 {
     private readonly IDbContextFactory<BlueBubblesDbContext> _dbFactory;
     private readonly IBlueBubblesApiService _api;
+    private readonly IChatsService _chatsService;
     private readonly SemaphoreSlim _saveLock = new(1, 1);
 
     private const int MaxSyncHistoryDays = 365;
     private const string MessageWithQuery = "attachment,handle,attributedBody,messageSummaryInfo,payloadData";
 
-    public MessagesService(IDbContextFactory<BlueBubblesDbContext> dbFactory, IBlueBubblesApiService api)
+    public MessagesService(
+        IDbContextFactory<BlueBubblesDbContext> dbFactory,
+        IBlueBubblesApiService api,
+        IChatsService chatsService)
     {
         _dbFactory = dbFactory;
         _api = api;
+        _chatsService = chatsService;
     }
 
     public Task<List<MessageEntity>> LoadMessagesAsync(int chatId, int limit = 50, long? beforeDate = null)
@@ -121,6 +126,8 @@ public class MessagesService : IMessagesService
             _saveLock.Release();
         }
 
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
+
         return await LoadMessagesAsync(chatId, limit, oldestSynced);
     }
 
@@ -177,6 +184,7 @@ public class MessagesService : IMessagesService
             _saveLock.Release();
         }
 
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
         return true;
     }
 
@@ -220,6 +228,7 @@ public class MessagesService : IMessagesService
             _saveLock.Release();
         }
 
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
         return true;
     }
 
@@ -318,6 +327,8 @@ public class MessagesService : IMessagesService
         {
             _saveLock.Release();
         }
+
+        _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
         return true;
     }
 

@@ -11,7 +11,7 @@ public class MessagesServiceTests
     {
         var factory = TestDbContextFactory.Create();
         api ??= new SyncMockApiService([]);
-        return (new MessagesService(factory, api), factory, api);
+        return (new MessagesService(factory, api, new MockChatsService()), factory, api);
     }
 
     private static ChatEntity SeedChat(TestDbContextFactory factory, string guid = "chat;+11234567890")

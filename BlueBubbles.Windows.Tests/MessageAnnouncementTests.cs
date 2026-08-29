@@ -1,4 +1,5 @@
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
 
@@ -95,5 +96,163 @@ public class MessageAnnouncementTests
         await svc.RunIncrementalSyncAsync();
 
         Assert.Empty(chats.PersistedNotifications);
+    }
+
+    // ---- W1a-2: every write path announces, and the kind decides the consequence ----
+
+    [Fact]
+    public void OnlyNewOrUpdated_AffectsTheConversationList()
+    {
+        // The anti-regression pin. ConversationListViewModel reloads the whole list off this flag, so
+        // collapsing the kinds back into one would make every backfilled history page reload the list.
+        Assert.True(new MessagesPersistedEventArgs("c", MessagePersistKind.NewOrUpdated)
+            .AffectsConversationList);
+        Assert.False(new MessagesPersistedEventArgs("c", MessagePersistKind.ServerTrueUp)
+            .AffectsConversationList);
+    }
+
+    [Fact]
+    public async Task IncrementalSync_AnnouncesNewOrUpdated()
+    {
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-a", [handle]);
+        var batch = new List<Message>
+        {
+            MakeMessage("m-1", "hi", handle, 1700000000001) with { OriginalRowId = 1, Chats = [chat] }
+        };
+
+        var api = new SyncMockApiService([], queryMessages: offset => offset == 0 ? batch : []);
+        var chats = new MockChatsService();
+        var svc = CreateSync(api, TestDbContextFactory.Create(), chats,
+            new AppSettings { LastIncrementalSync = 1700000000000 });
+
+        await svc.RunIncrementalSyncAsync();
+
+        Assert.Equal(MessagePersistKind.NewOrUpdated, Assert.Single(chats.PersistedKinds));
+    }
+
+    [Fact]
+    public async Task FullSync_WindowReconcile_AnnouncesServerTrueUp()
+    {
+        var handle = MakeHandle("+15551234567");
+        var chat = MakeChat("chat-a", [handle]);
+        var api = new SyncMockApiService([chat], chatMessages: new()
+        {
+            ["chat-a"] = [MakeMessage("m-1", "hi", handle, 1700000000001)]
+        });
+        var chats = new MockChatsService();
+        var svc = CreateSync(api, TestDbContextFactory.Create(), chats, new AppSettings());
+
+        await svc.RunFullSyncAsync(skipEmptyChats: false);
+
+        // A true-up of the newest window is not a new message: announced, but list-neutral.
+        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
+    }
+
+    private static (MessagesService Svc, TestDbContextFactory Factory, MockChatsService Chats) CreateMessages(
+        SyncMockApiService api)
+    {
+        var factory = TestDbContextFactory.Create();
+        var chats = new MockChatsService();
+        return (new MessagesService(factory, api, chats), factory, chats);
+    }
+
+    [Fact]
+    public async Task FetchOlderMessages_AnnouncesServerTrueUp()
+    {
+        var handle = MakeHandle("+15551234567");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var api = new SyncMockApiService([], chatMessages: new()
+        {
+            ["chat-a"] = [MakeMessage("older-1", "older", handle, now - 200_000)]
+        });
+        var (svc, factory, chats) = CreateMessages(api);
+
+        int chatId;
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a", OldestSyncedMessageDate = now - 100_000 };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            chatId = c.Id;
+        }
+
+        await svc.FetchOlderMessagesFromServerAsync(chatId, "chat-a");
+
+        Assert.Equal("chat-a", Assert.Single(chats.PersistedNotifications));
+        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
+    }
+
+    [Fact]
+    public async Task HydrateEmptyChat_AnnouncesServerTrueUp()
+    {
+        var handle = MakeHandle("+15551234567");
+        var api = new SyncMockApiService([], chatMessages: new()
+        {
+            ["chat-a"] = [MakeMessage("m-1", "hi", handle, 1700000000001)]
+        });
+        var (svc, factory, chats) = CreateMessages(api);
+
+        int chatId;
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            chatId = c.Id;
+        }
+
+        Assert.True(await svc.EnsureChatHydratedAsync(chatId, "chat-a"));
+        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
+    }
+
+    [Fact]
+    public async Task RefreshLatestFromServer_AnnouncesServerTrueUp()
+    {
+        var handle = MakeHandle("+15551234567");
+        var api = new SyncMockApiService([], chatMessages: new()
+        {
+            ["chat-a"] = [MakeMessage("m-1", "hi", handle, 1700000000001)]
+        });
+        var (svc, factory, chats) = CreateMessages(api);
+
+        int chatId;
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            chatId = c.Id;
+        }
+
+        Assert.True(await svc.RefreshLatestFromServerAsync(chatId, "chat-a"));
+        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
+    }
+
+    [Fact]
+    public async Task DeleteMessage_AnnouncesTheSoftDelete()
+    {
+        // PUNCHLIST B8: the soft delete used to be persisted with no announcement at all.
+        var api = new SyncMockApiService([]);
+        var (svc, factory, chats) = CreateMessages(api);
+
+        using (var db = factory.CreateDbContext())
+        {
+            var c = new ChatEntity { Guid = "chat-a" };
+            db.Chats.Add(c);
+            db.SaveChanges();
+            db.Messages.Add(new MessageEntity
+            {
+                Guid = "m-1", ChatId = c.Id, Text = "bye", DateCreated = 1700000000001
+            });
+            db.SaveChanges();
+        }
+
+        Assert.True(await svc.DeleteMessageAsync("chat-a", "m-1"));
+
+        using var db2 = factory.CreateDbContext();
+        Assert.NotNull(db2.Messages.Single(m => m.Guid == "m-1").DateDeleted);
+        Assert.Equal("chat-a", Assert.Single(chats.PersistedNotifications));
+        Assert.Equal(MessagePersistKind.ServerTrueUp, Assert.Single(chats.PersistedKinds));
     }
 }

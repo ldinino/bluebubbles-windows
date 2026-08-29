@@ -67,7 +67,10 @@ public partial class ConversationListViewModel : ObservableObject
         _chatsService.ChatsChanged += (_, _) => RunOnUI(RebuildList);
         _chatsService.ChatUpdated += (_, guid) => RunOnUI(() => RefreshTile(guid));
         _chatsService.ArchivedChatsChanged += (_, _) => RunOnUI(RebuildArchivedList);
-        _chatsService.MessagesPersisted += (_, _) => ScheduleReloadFromDatabase();
+        _chatsService.MessagesPersisted += (_, e) =>
+        {
+            if (e.AffectsConversationList) ScheduleReloadFromDatabase();
+        };
         _contacts.ContactsChanged += (_, _) => RunOnUI(RebuildList);
 
         _incomingProcessor.MessageProcessed += OnIncomingMessageProcessed;

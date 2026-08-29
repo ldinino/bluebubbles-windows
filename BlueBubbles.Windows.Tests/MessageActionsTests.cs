@@ -56,7 +56,7 @@ public class MessageEditsTests
 public class MessagesServiceEditTests
 {
     private static MessagesService CreateService(TestDbContextFactory factory)
-        => new(factory, new SyncMockApiService([]));
+        => new(factory, new SyncMockApiService([]), new MockChatsService());
 
     private static ChatEntity SeedChat(TestDbContextFactory factory, string guid = "chat;+1")
     {
@@ -194,7 +194,7 @@ public class MessagesServiceEditTests
             deleted = (chatGuid, messageGuid);
             return Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null));
         };
-        var svc = new MessagesService(factory, api);
+        var svc = new MessagesService(factory, api, new MockChatsService());
         var chat = SeedChat(factory);
 
         await svc.SaveIncomingMessageAsync(chat.Guid, BaseMessage("m4", "delete me", true, 1000));
@@ -218,7 +218,7 @@ public class MessagesServiceEditTests
             DeleteMessageFunc = (_, _) =>
                 Task.FromResult(new ApiResponse<JsonElement>(500, "error", default, null))
         };
-        var svc = new MessagesService(factory, api);
+        var svc = new MessagesService(factory, api, new MockChatsService());
         var chat = SeedChat(factory);
 
         await svc.SaveIncomingMessageAsync(chat.Guid, BaseMessage("m4", "keep me", true, 1000));
@@ -239,7 +239,7 @@ public class MessagesServiceEditTests
             DeleteMessageFunc = (_, _) =>
                 Task.FromResult(new ApiResponse<JsonElement>(200, "OK", default, null))
         };
-        var svc = new MessagesService(factory, api);
+        var svc = new MessagesService(factory, api, new MockChatsService());
         var chat = SeedChat(factory);
 
         // Server says deleted, no matching local row — should not throw.

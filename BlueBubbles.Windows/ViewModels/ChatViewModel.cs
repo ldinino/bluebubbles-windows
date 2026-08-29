@@ -150,9 +150,13 @@ public partial class ChatViewModel : ObservableObject
         // Direct consequence of the database gaining rows for a chat (socket save or per-batch delta
         // write): if it's the open thread, append the new rows from the DB. This keeps the view in
         // step with the DB on every persist, not just on the single end-of-sync pulse above.
-        _chatsService.MessagesPersisted += (s, guid) =>
+        // Server true-ups are skipped: they write history behind the newest bubble (nothing to
+        // append) and the post-sync reconcile above already covers the window they touch.
+        _chatsService.MessagesPersisted += (s, e) =>
         {
-            if (_chatGuids.Contains(guid)) RunOnUI(() => _ = AppendPersistedMessagesAsync(guid));
+            if (e.Kind != MessagePersistKind.NewOrUpdated) return;
+            if (_chatGuids.Contains(e.ChatGuid))
+                RunOnUI(() => _ = AppendPersistedMessagesAsync(e.ChatGuid));
         };
     }
 
