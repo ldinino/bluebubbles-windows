@@ -108,6 +108,18 @@ public static class ChatExportCoverage
             newestExported, messageCount, reachable, statement);
     }
 
+    /// <summary>Short per-chat coverage label for a selection list, so the user can see which
+    /// conversations will export as partial <b>before</b> choosing them.</summary>
+    public static string ShortLabel(long? oldestSyncedMessageDate, TimeSpan offset)
+    {
+        if (oldestSyncedMessageDate == 0) return "Complete history";
+        if (oldestSyncedMessageDate is null)
+            return "Coverage unknown - older messages likely missing";
+
+        var since = ExportTimestamp.ToIso(oldestSyncedMessageDate.Value, offset);
+        return $"Partial - only back to {since?[..10]}";
+    }
+
     /// <summary>Whether the app's own older-message sync can still page back past the watermark.
     /// Mirrors the guard in <c>MessagesService.FetchOlderMessagesFromServerAsync</c>.</summary>
     public static bool IsOlderHistoryReachable(long oldestSyncedMessageDate, DateTimeOffset now)

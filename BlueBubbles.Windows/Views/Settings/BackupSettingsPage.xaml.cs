@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Export;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,13 +16,26 @@ public sealed partial class BackupSettingsPage : Page
     private readonly IBlueBubblesApiService _api;
     private readonly ISettingsService _settingsService;
     private readonly AppSettings _settings;
+    private readonly IChatsService _chatsService;
+    private readonly IChatExportService _exportService;
+
+    private readonly List<ExportChatRow> _allChats = [];
+    private readonly HashSet<int> _selectedChatIds = [];
+    private CancellationTokenSource? _exportCts;
+
+    /// <summary>A selectable conversation, carrying its coverage up front so a partial history is
+    /// visible before the user picks it rather than only in the finished export.</summary>
+    public sealed record ExportChatRow(int ChatId, string Title, string Coverage);
 
     public BackupSettingsPage()
     {
         _api = App.Services.GetRequiredService<IBlueBubblesApiService>();
         _settingsService = App.Services.GetRequiredService<ISettingsService>();
         _settings = App.Services.GetRequiredService<AppSettings>();
+        _chatsService = App.Services.GetRequiredService<IChatsService>();
+        _exportService = App.Services.GetRequiredService<IChatExportService>();
         InitializeComponent();
+        Loaded += OnLoaded;
     }
 
     private void ShowStatus(string message, InfoBarSeverity severity)
@@ -108,6 +122,192 @@ public sealed partial class BackupSettingsPage : Page
         try { await action(); }
         catch (Exception ex) { ShowStatus($"Request failed: {ex.Message}", InfoBarSeverity.Error); }
         finally { button.IsEnabled = true; }
+    }
+
+    // Conversation export
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_chatsService.Chats.Count == 0) await _chatsService.LoadChatsAsync();
+
+            var offset = DateTimeOffset.Now.Offset;
+            _allChats.Clear();
+            foreach (var c in _chatsService.Chats.Concat(_chatsService.ArchivedChats))
+            {
+                var title = !string.IsNullOrWhiteSpace(c.Chat.DisplayName)
+                    ? c.Chat.DisplayName!
+                    : c.Participants.Count > 0
+                        ? string.Join(", ", c.Participants.Select(p => p.FormattedAddress ?? p.Address))
+                        : c.Chat.ChatIdentifier ?? c.Chat.Guid;
+
+                _allChats.Add(new ExportChatRow(
+                    c.Chat.Id,
+                    title,
+                    ChatExportCoverage.ShortLabel(c.Chat.OldestSyncedMessageDate, offset)));
+            }
+
+            ApplyChatFilter(string.Empty);
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Could not load the conversation list: {ex.Message}", InfoBarSeverity.Error);
+        }
+    }
+
+    private void ApplyChatFilter(string query)
+    {
+        var rows = string.IsNullOrWhiteSpace(query)
+            ? _allChats
+            : _allChats.Where(r => r.Title.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        // Reassigning the source drops the ListView's selection, so re-apply the remembered set.
+        ChatList.SelectionChanged -= OnChatSelectionChanged;
+        ChatList.ItemsSource = rows;
+        foreach (var row in rows.Where(r => _selectedChatIds.Contains(r.ChatId)))
+            ChatList.SelectedItems.Add(row);
+        ChatList.SelectionChanged += OnChatSelectionChanged;
+
+        UpdateSelectionSummary();
+    }
+
+    private void OnChatFilterChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs e)
+    {
+        if (e.Reason == AutoSuggestionBoxTextChangeReason.ProgrammaticChange) return;
+        ApplyChatFilter(sender.Text);
+    }
+
+    private void OnChatSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        foreach (var removed in e.RemovedItems.OfType<ExportChatRow>())
+            _selectedChatIds.Remove(removed.ChatId);
+        foreach (var added in e.AddedItems.OfType<ExportChatRow>())
+            _selectedChatIds.Add(added.ChatId);
+
+        UpdateSelectionSummary();
+    }
+
+    private void OnSelectAllClick(object sender, RoutedEventArgs e)
+    {
+        foreach (var row in _allChats) _selectedChatIds.Add(row.ChatId);
+        ApplyChatFilter(ChatFilterBox.Text);
+    }
+
+    private void OnSelectNoneClick(object sender, RoutedEventArgs e)
+    {
+        _selectedChatIds.Clear();
+        ApplyChatFilter(ChatFilterBox.Text);
+    }
+
+    private void UpdateSelectionSummary()
+    {
+        var partial = _allChats
+            .Where(r => _selectedChatIds.Contains(r.ChatId))
+            .Count(r => r.Coverage != "Complete history");
+
+        ExportExpander.Description = _selectedChatIds.Count == 0
+            ? "Nothing selected"
+            : partial == 0
+                ? $"{_selectedChatIds.Count} selected"
+                : $"{_selectedChatIds.Count} selected - {partial} will be incomplete";
+
+        ExportButton.IsEnabled = _selectedChatIds.Count > 0 && _exportCts is null;
+    }
+
+    private async void OnExportClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedChatIds.Count == 0) return;
+
+        var picker = new global::Windows.Storage.Pickers.FolderPicker
+        {
+            SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+        };
+        picker.FileTypeFilter.Add("*");
+        // Required when running unpackaged: without a parent HWND the picker throws.
+        WinRT.Interop.InitializeWithWindow.Initialize(
+            picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+
+        global::Windows.Storage.StorageFolder? folder;
+        try
+        {
+            folder = await picker.PickSingleFolderAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Could not open the folder picker: {ex.Message}", InfoBarSeverity.Error);
+            return;
+        }
+
+        if (folder is null) return;
+
+        var chatIds = _allChats
+            .Where(r => _selectedChatIds.Contains(r.ChatId))
+            .Select(r => r.ChatId)
+            .ToList();
+
+        _exportCts = new CancellationTokenSource();
+        SetExportRunning(true);
+
+        var progress = new Progress<ChatExportProgress>(p =>
+            ExportProgressText.Text = $"{p.Completed} of {p.Total}: {p.CurrentChatTitle}");
+
+        try
+        {
+            var options = new ChatExportOptions(
+                WriteTranscript: TranscriptToggle.IsOn,
+                CopyAttachments: AttachmentsToggle.IsOn);
+
+            var result = await Task.Run(
+                () => _exportService.ExportAsync(
+                    chatIds, folder.Path, options, progress, _exportCts.Token),
+                _exportCts.Token);
+
+            var summary =
+                $"Exported {result.ChatCount} conversation(s), {result.MessageCount} message(s) to "
+                + $"{result.DestinationFolder}. Attachments included: {result.AttachmentsCopied}; "
+                + $"not downloaded to this PC: {result.AttachmentsMissing}.";
+
+            if (result.IncompleteChatCount > 0)
+            {
+                ShowStatus(
+                    summary + $" {result.IncompleteChatCount} of them do NOT reach the start of the "
+                    + "conversation - see manifest.json and the COVERAGE section of each transcript.",
+                    InfoBarSeverity.Warning);
+            }
+            else
+            {
+                ShowStatus(summary, InfoBarSeverity.Success);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ShowStatus("Export cancelled. Files already written were left in place.",
+                InfoBarSeverity.Informational);
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Export failed: {ex.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _exportCts?.Dispose();
+            _exportCts = null;
+            SetExportRunning(false);
+        }
+    }
+
+    private void OnCancelExportClick(object sender, RoutedEventArgs e) => _exportCts?.Cancel();
+
+    private void SetExportRunning(bool running)
+    {
+        ExportProgressRing.IsActive = running;
+        ExportProgressText.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        CancelExportButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        ExportButton.IsEnabled = !running && _selectedChatIds.Count > 0;
+        SelectAllButton.IsEnabled = !running;
+        SelectNoneButton.IsEnabled = !running;
+        ChatList.IsEnabled = !running;
     }
 
     private void Report(bool succeeded, string failureMessage, string successMessage)

@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Net.NetworkInformation;
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data;
+using BlueBubbles.Core.Export;
 using BlueBubbles.Core.Services;
 using BlueBubbles.Core.Services.Http;
 using BlueBubbles.Windows.Services;
@@ -418,6 +419,9 @@ public partial class App : Application
                 "BlueBubbles", "attachments");
             return new AttachmentCacheService(api, cacheRoot);
         });
+        services.AddSingleton<ICachedAttachmentLookup>(
+            sp => sp.GetRequiredService<IAttachmentCacheService>());
+        services.AddSingleton<IChatExportService, ChatExportService>();
 
         // Link preview metadata fetcher (on-demand "Show preview") — a plain client to the open web,
         // separate from the proxied BlueBubbles-server client.

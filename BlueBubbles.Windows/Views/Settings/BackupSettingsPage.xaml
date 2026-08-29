@@ -36,6 +36,101 @@
                 </StackPanel>
             </tk:SettingsCard>
 
+            <TextBlock Text="Export conversations"
+                       Style="{StaticResource SubtitleTextBlockStyle}"
+                       Margin="0,28,0,4" />
+
+            <TextBlock Style="{StaticResource BodyTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       Text="Save chat history to a folder on this PC as a readable transcript and a machine-readable JSONL file. This is an export only - there is no way to import it back." />
+
+            <InfoBar IsOpen="True"
+                     IsClosable="False"
+                     Severity="Warning"
+                     Title="Exports contain only what this PC has already downloaded"
+                     Margin="0,0,0,8"
+                     Message="Your message history lives on your Mac. This app keeps a local copy of the parts you have scrolled back through, so an export can be missing older messages. Every exported conversation states how far back it actually reaches - read that before relying on one as a record. To include more, open a conversation and scroll back to load older messages first." />
+
+            <InfoBar IsOpen="True"
+                     IsClosable="False"
+                     Severity="Informational"
+                     Margin="0,0,0,8"
+                     Message="Exported files are unencrypted plain text." />
+
+            <tk:SettingsExpander x:Name="ExportExpander"
+                                 Header="Conversations to export"
+                                 Description="Nothing selected">
+                <tk:SettingsExpander.Items>
+                    <tk:SettingsCard>
+                        <tk:SettingsCard.Header>
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <AutoSuggestBox x:Name="ChatFilterBox"
+                                                    PlaceholderText="Filter conversations"
+                                                    QueryIcon="Find"
+                                                    MinWidth="260"
+                                                    TextChanged="OnChatFilterChanged" />
+                                    <Button x:Name="SelectAllButton" Content="Select all" Click="OnSelectAllClick" />
+                                    <Button x:Name="SelectNoneButton" Content="Clear" Click="OnSelectNoneClick" />
+                                </StackPanel>
+                                <ListView x:Name="ChatList"
+                                          SelectionMode="Multiple"
+                                          Height="240"
+                                          MinWidth="420"
+                                          SelectionChanged="OnChatSelectionChanged"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Padding="0,6">
+                                                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Coverage}"
+                                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </tk:SettingsCard.Header>
+                    </tk:SettingsCard>
+                </tk:SettingsExpander.Items>
+            </tk:SettingsExpander>
+
+            <tk:SettingsCard Header="Readable transcript"
+                             Description="Also write a plain-text .txt transcript beside each .jsonl file">
+                <ToggleSwitch x:Name="TranscriptToggle" IsOn="True" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Include attachments"
+                             Description="Copy photos and files that are already downloaded to this PC. Anything not downloaded is listed as missing - the export never fetches from the server.">
+                <ToggleSwitch x:Name="AttachmentsToggle" IsOn="True" />
+            </tk:SettingsCard>
+
+            <tk:SettingsCard Header="Export"
+                             Description="Choose a destination folder and write the selected conversations">
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <ProgressRing x:Name="ExportProgressRing"
+                                  IsActive="False"
+                                  Width="20"
+                                  Height="20" />
+                    <TextBlock x:Name="ExportProgressText"
+                               Visibility="Collapsed"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextBlockStyle}" />
+                    <Button x:Name="ExportButton"
+                            Content="Export..."
+                            Style="{StaticResource AccentButtonStyle}"
+                            Click="OnExportClick" />
+                    <Button x:Name="CancelExportButton"
+                            Content="Cancel"
+                            Visibility="Collapsed"
+                            Click="OnCancelExportClick" />
+                </StackPanel>
+            </tk:SettingsCard>
+
         </StackPanel>
         </Grid>
     </ScrollViewer>

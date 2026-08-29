@@ -108,6 +108,20 @@ public class ChatExportCoverageTests
     }
 
     [Fact]
+    public void ShortLabel_OnlyWatermarkZeroReadsAsComplete()
+    {
+        Assert.Equal("Complete history", ChatExportCoverage.ShortLabel(0, Offset));
+
+        var unknown = ChatExportCoverage.ShortLabel(null, Offset);
+        var partial = ChatExportCoverage.ShortLabel(Recent, Offset);
+
+        Assert.DoesNotContain("Complete", unknown);
+        Assert.DoesNotContain("Complete", partial);
+        Assert.Contains("unknown", unknown);
+        Assert.StartsWith("Partial - only back to 2026-08", partial);
+    }
+
+    [Fact]
     public void Manifest_CountsIncompleteChats()
     {
         var complete = ChatExportBuilder.Build(
