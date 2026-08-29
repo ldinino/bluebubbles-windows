@@ -7,12 +7,30 @@
 
 ## Open bugs
 
-#### B8. `DeleteMessageAsync` persists a soft delete and announces nothing
-- [ ] Found during W1a. It sets `DateDeleted` and saves, but raises no `MessagesPersisted` and no
-  reload — the open thread only updates because the caller happens to refresh afterwards. Same
-  defect class as B1 and B6 (persistence and notification decided in different components), and a
-  concrete instance of the audit's "9 of 25 paths" finding.
-- [ ] Likely resolved by W1a-2 (single announcer). Check there first before writing a point fix.
+#### B8. Deleting the newest message leaves a stale conversation-list preview
+- **REWRITTEN 2026-08-29 — the original entry was wrong on the symptom.** It claimed the open thread
+  "only updates because the caller happens to refresh". It does not: `ChatViewModel` removes the
+  bubbles itself, synchronously, right after the service call succeeds (`ChatViewModel.cs:1466-1468`,
+  and it removes *both* bubbles of a text+attachment message sharing one GUID). **The thread was
+  never broken.**
+- **The real gap is the conversation list.** The tile preview is derived live from the newest
+  non-deleted message (`ChatsService.cs:91`), so deleting the newest message leaves a stale preview
+  until something else triggers a reload.
+- **W1a-2 (`891224a`) reduced this to a classification question.** The delete path now announces
+  (`MessagesService.cs:331`) but as `ServerTrueUp`, which by design does not touch the list.
+- [ ] **Direction (head engineer): classify by what actually happened, not by which method raised
+  it.** Flipping the delete path to `NewOrUpdated` is one token and fixes it — but the same argument
+  applies to `RefreshLatestFromServerAsync`, whose reconcile can also soft-delete the newest message,
+  and blanket-flipping *that* would cause a full list reload on every refresh, which is exactly the
+  cost the W1a-2 design exists to avoid. `MessageWindowReconciler.ReconcileWindowAsync` already
+  **returns an int** (rows changed), so the caller can announce `NewOrUpdated` only when the
+  reconcile actually changed something and `ServerTrueUp` otherwise. A delete always changes
+  something, so it is unconditionally `NewOrUpdated`.
+- [ ] Needs a test at the data layer that the delete path announces a list-affecting kind. The
+  subscriber link itself is not unit-testable (needs a UI dispatcher) — see B2b.
+- Found during W1a-2: `SyncMockApiService.DeleteMessageFromChatAsync` was
+  `throw new NotImplementedException()`, i.e. **no test in the suite exercised `DeleteMessageAsync`
+  at all** before this. Now returns 200.
 
 #### B9. Class B attachment groups may still double-render — a *different* bug from B7
 - [ ] Carried forward from B7 (archived, shipped 0.24.0). B7 fixed **Class A**: two rows sharing
@@ -161,13 +179,41 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   - Good methodology worth copying: the negative control for a refactor was to run the new tests
     against **pre-refactor** `35ab22e` (423/423), proving they are genuine characterization tests,
     *then* mutate the old code to expose the hole.
-- [ ] **W1a-2. Single announcer for messages** — carved out of W1a deliberately. Consolidating
-  announcement into the writer **cannot** be done without a behaviour change: `SaveMessagesAsync`
-  has 4 callers, of which `MessagesService.cs:111` and `:166` announce nothing at all, while
-  `SyncService.cs:344` / `:482` announce once per chat per batch. Moving the call into the writer
-  changes `MessagesPersisted` from per-batch to per-call and adds events to paths that intentionally
-  have none, driving `ConversationListViewModel.ScheduleReloadFromDatabase`. Verified: exactly 4
-  production `NotifyMessagesPersisted` call sites. **Do this after W1b/W1c**, with its own evidence.
+- [x] **W1a-2. Single announcer for messages — DONE** (`724e548` + `90ba5d9`, merged `891224a`).
+  570/570. **The entry's premise — that this could not be done without a behaviour change — was
+  wrong, and the reason is instructive.** The blocker was never the announcement; it was that
+  `MessagesPersisted` carried a chat GUID and nothing else, so a backfill of year-old history and a
+  brand-new message were indistinguishable and every subscriber had to assume the worst. Giving the
+  event a *kind* (`MessagesPersistedEventArgs`, `MessagePersistKind { NewOrUpdated, ServerTrueUp }`,
+  with `AffectsConversationList` as the single definition of "this can change a tile") let **every**
+  write path announce with no visible behaviour change. 9 announce sites now: 4 `NewOrUpdated`,
+  5 `ServerTrueUp`.
+  - **"Raise inside `MessagePersistenceHelper`" was refuted on evidence, and rightly.** The helper
+    is `internal static` with no DI and takes an `int chatId`, not a GUID, so announcing from it
+    needs an extra query per persist purely to feed an event; and three of its entry points
+    (`MarkDeleted`, `MarkParentHasReactionsAsync`, `SaveAttachmentsAsync`) have **no commit
+    boundary** — the caller saves afterwards — so an event raised there hands a subscriber the
+    *pre-change* state. What shipped instead: the **consequence** is decided in exactly one place,
+    while the **raise** stays with whichever component owns the committed transaction.
+  - Also rejected, correctly: folding `IncomingMessageProcessor.cs:113` into
+    `SaveIncomingMessageAsync` would fire before `HandleNewMessageAsync` updates the chat's preview
+    row, so the list would reload against stale chat state. A real ordering regression avoided.
+  - **Enumeration correction — the fourth in this program.** There were **5** silent persist paths,
+    not 4: `MessageWindowReconciler` is reached from two callers (`MessagesService.cs:224` and
+    `SyncService.cs:720` via `:172`). Verified by me.
+  - Verified by me, not accepted from the report: no DI cycle (`ChatsService` takes only
+    dbFactory/api/settings, so `MessagesService -> IChatsService` is one-way); the characterization
+    commit `724e548` is green on unmodified production code at **563/563**, and those same tests
+    still pass at 570 — that is the behaviour-preservation proof; and mutating
+    `AffectsConversationList` to `false` (the B1 regression shape, opposite to the agent's own
+    mutation) fails `OnlyNewOrUpdated_AffectsTheConversationList`. One test pins both directions.
+  - [ ] Not verified, human-only: that the conversation list and open thread still update correctly
+    in real use. **Every message write flows through this event** — the data layer is pinned, the UI
+    is not. `ConversationListViewModel` needs a UI dispatcher, so its one-line
+    `if (e.AffectsConversationList)` filter is verified by compilation and review only (B2b).
+  - Gotcha worth keeping: the agent reverted a mutation with `git checkout -- <file>` and lost the
+    **entire uncommitted refactor** of that file, because the production commit had not been made
+    yet. Caught by reading the file back. **Commit before mutating.**
 - [x] **W1b. HandleEntity and ChatParticipant — DONE** (`e14695b` + `399c0b8`, merged `60dbbaa`).
   One writer each, in `BlueBubbles.Core/Services/HandlePersistenceHelper.cs`: `ApplyServerFields`
   is the single field list, with `EnsureHandleAsync`, `LinkParticipantAsync`,
