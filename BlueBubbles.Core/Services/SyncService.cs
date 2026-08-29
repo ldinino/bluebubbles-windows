@@ -117,23 +117,8 @@ public class SyncService : ISyncService
 
                 if (chat.Participants is not null)
                 {
-                    foreach (var h in chat.Participants)
-                    {
-                        var key = h.Address + "|" + h.Service;
-                        if (handleCache.TryGetValue(key, out var handleId))
-                        {
-                            var exists = await db.ChatParticipants.AnyAsync(
-                                cp => cp.ChatId == chatEntity.Id && cp.HandleId == handleId, ct);
-                            if (!exists)
-                            {
-                                db.ChatParticipants.Add(new ChatParticipant
-                                {
-                                    ChatId = chatEntity.Id,
-                                    HandleId = handleId
-                                });
-                            }
-                        }
-                    }
+                    await HandlePersistenceHelper.LinkParticipantsAsync(
+                        db, chatEntity.Id, chat.Participants, handleCache, refreshExisting: true, ct);
                     await db.SaveChangesAsync(ct);
                 }
 
@@ -528,20 +513,9 @@ public class SyncService : ISyncService
             // created from a sparse payload can land without participants → renders blank).
             if (chat.ChatParticipants.Count == 0 && chatData?.Participants is { Count: > 0 })
             {
-                await SaveHandlesAsync(db, chatData.Participants, handleCache, ct);
-                foreach (var h in chatData.Participants)
-                {
-                    var key = h.Address + "|" + h.Service;
-                    if (handleCache.TryGetValue(key, out var handleId))
-                    {
-                        chat.ChatParticipants.Add(new ChatParticipant
-                        {
-                            ChatId = chat.Id,
-                            HandleId = handleId
-                        });
-                        dirty = true;
-                    }
-                }
+                if (await HandlePersistenceHelper.LinkParticipantsAsync(
+                        db, chat.Id, chatData.Participants, handleCache, refreshExisting: true, ct))
+                    dirty = true;
             }
 
             if (dirty) await db.SaveChangesAsync(ct);
@@ -562,59 +536,22 @@ public class SyncService : ISyncService
 
         if (chatData?.Participants is not null)
         {
-            await SaveHandlesAsync(db, chatData.Participants, handleCache, ct);
-            foreach (var h in chatData.Participants)
-            {
-                var key = h.Address + "|" + h.Service;
-                if (handleCache.TryGetValue(key, out var handleId))
-                {
-                    if (!await db.ChatParticipants.AnyAsync(
-                            cp => cp.ChatId == chat.Id && cp.HandleId == handleId, ct))
-                    {
-                        db.ChatParticipants.Add(new ChatParticipant
-                        {
-                            ChatId = chat.Id,
-                            HandleId = handleId
-                        });
-                    }
-                }
-            }
+            await HandlePersistenceHelper.LinkParticipantsAsync(
+                db, chat.Id, chatData.Participants, handleCache, refreshExisting: true, ct);
             await db.SaveChangesAsync(ct);
         }
 
         return chat.Id;
     }
 
-    private async Task SaveHandlesAsync(
+    private static async Task SaveHandlesAsync(
         BlueBubblesDbContext db, List<Handle>? handles,
         Dictionary<string, int> cache, CancellationToken ct)
     {
         if (handles is null) return;
 
         foreach (var h in handles)
-        {
-            var key = h.Address + "|" + h.Service;
-            if (cache.ContainsKey(key)) continue;
-
-            var entity = await db.Handles.FirstOrDefaultAsync(
-                x => x.Address == h.Address && x.Service == h.Service, ct);
-
-            if (entity is null)
-            {
-                entity = new HandleEntity { Address = h.Address, Service = h.Service };
-                db.Handles.Add(entity);
-            }
-
-            entity.OriginalRowId = h.OriginalRowId;
-            entity.Country = h.Country;
-            entity.FormattedAddress = h.FormattedAddress;
-            entity.Color = h.Color;
-            entity.UniqueAddressAndService = h.UniqueAddressAndService;
-            entity.DefaultPhone = h.DefaultPhone;
-            entity.DefaultEmail = h.DefaultEmail;
-            await db.SaveChangesAsync(ct);
-            cache[key] = entity.Id;
-        }
+            await HandlePersistenceHelper.EnsureHandleAsync(db, h, cache, refreshExisting: true, ct);
     }
 
     private async Task SoftDeleteChatAsync(int chatId, CancellationToken ct)

@@ -198,6 +198,71 @@ public class HandleSingleWriterTests
         Assert.Equal(4711, row.OriginalRowId);
     }
 
+    /// <summary>Creating a handle stores the same field set no matter which writer got there
+    /// first. Before consolidation the chat paths inserted address and service only and the
+    /// message paths four of nine, so which path saw a contact first decided what the cache
+    /// knew about it.</summary>
+    [Fact]
+    public async Task EveryCreatingWriter_StoresTheSameFieldSet()
+    {
+        async Task<HandleEntity> CreatedBy(Func<TestDbContextFactory, Task> write)
+        {
+            var factory = TestDbContextFactory.Create();
+            await write(factory);
+            using var db = factory.CreateDbContext();
+            return db.Handles.Single(h => h.Address == Address);
+        }
+
+        var viaEnsureInDb = await CreatedBy(async f =>
+            await CreateChatsService(f).Svc.EnsureChatInDatabaseAsync(
+                MakeChat("chat-a", [FullyPopulated]), "hi"));
+
+        var viaEnsureExists = await CreatedBy(async f =>
+            await CreateChatsService(f).Svc.EnsureChatExistsAsync(
+                MakeChat("chat-b", [FullyPopulated])));
+
+        var viaLiveMessage = await CreatedBy(async f =>
+        {
+            var api = new SyncMockApiService([MakeChat("chat-c", null)]);
+            await CreateChatsService(f).Svc.EnsureChatInDatabaseAsync(MakeChat("chat-c", null), "hi");
+            await new MessagesService(f, api).SaveIncomingMessageAsync(
+                "chat-c", MakeMessage("msg-c", FullyPopulated));
+        });
+
+        var viaSync = await CreatedBy(async f =>
+            await CreateSyncService(new SyncMockApiService([MakeChat("chat-d", [FullyPopulated])]), f)
+                .Svc.RunFullSyncAsync(skipEmptyChats: false));
+
+        HandleEntity[] rows = [viaEnsureInDb, viaEnsureExists, viaLiveMessage, viaSync];
+        var scalars = typeof(HandleEntity)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.PropertyType.IsValueType || p.PropertyType == typeof(string))
+            .Where(p => p.Name != nameof(HandleEntity.Id))
+            .ToList();
+        Assert.NotEmpty(scalars);
+
+        foreach (var p in scalars)
+            foreach (var row in rows)
+                Assert.Equal($"{p.Name}={p.GetValue(viaSync)}", $"{p.Name}={p.GetValue(row)}");
+    }
+
+    /// <summary>A payload that names the same participant twice is one membership, not two.
+    /// De-duplicating only against the database missed the rows queued in the same unit of work,
+    /// so the save failed on the composite key.</summary>
+    [Fact]
+    public async Task PayloadNamingTheSameParticipantTwice_LinksItOnce()
+    {
+        var factory = TestDbContextFactory.Create();
+        var (chats, _) = CreateChatsService(factory);
+
+        await chats.EnsureChatInDatabaseAsync(
+            MakeChat("chat-dupe", [FullyPopulated, Sparse]), "hi");
+
+        using var db = factory.CreateDbContext();
+        var chat = db.Chats.Single(c => c.Guid == "chat-dupe");
+        Assert.Single(db.ChatParticipants.Where(cp => cp.ChatId == chat.Id));
+    }
+
     /// <summary>The message writers resolve an existing handle rather than inserting a second one,
     /// and the message row points at it.</summary>
     [Fact]

@@ -249,23 +249,8 @@ public class MessagesService : IMessagesService
         int? handleId = null;
         if (message.Handle is not null)
         {
-            var handle = await db.Handles.FirstOrDefaultAsync(
-                h => h.Address == message.Handle.Address && h.Service == message.Handle.Service);
-
-            if (handle is null)
-            {
-                handle = new HandleEntity
-                {
-                    Address = message.Handle.Address,
-                    Service = message.Handle.Service,
-                    Country = message.Handle.Country,
-                    FormattedAddress = message.Handle.FormattedAddress
-                };
-                db.Handles.Add(handle);
-                await db.SaveChangesAsync();
-            }
-
-            handleId = handle.Id;
+            handleId = await HandlePersistenceHelper.EnsureHandleAsync(
+                db, message.Handle, cache: null, refreshExisting: false);
         }
 
         if (!await MessagePersistenceHelper.InsertIncomingAsync(

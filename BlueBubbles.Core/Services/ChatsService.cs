@@ -205,28 +205,7 @@ public class ChatsService : IChatsService
 
         if (chat.Participants is not null)
         {
-            foreach (var h in chat.Participants)
-            {
-                var handle = await db.Handles.FirstOrDefaultAsync(
-                    x => x.Address == h.Address && x.Service == h.Service);
-                if (handle is null)
-                {
-                    handle = new HandleEntity { Address = h.Address, Service = h.Service };
-                    db.Handles.Add(handle);
-                    await db.SaveChangesAsync();
-                }
-
-                var linked = await db.ChatParticipants.AnyAsync(
-                    cp => cp.ChatId == entity.Id && cp.HandleId == handle.Id);
-                if (!linked)
-                {
-                    db.ChatParticipants.Add(new ChatParticipant
-                    {
-                        ChatId = entity.Id,
-                        HandleId = handle.Id
-                    });
-                }
-            }
+            await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, chat.Participants);
             await db.SaveChangesAsync();
         }
     }
@@ -248,7 +227,7 @@ public class ChatsService : IChatsService
                 var participants = await ResolveParticipantsAsync(chatData);
                 if (participants is { Count: > 0 })
                 {
-                    await LinkParticipantsAsync(db, entity, participants);
+                    await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, participants);
                     await db.SaveChangesAsync();
                 }
             }
@@ -270,7 +249,7 @@ public class ChatsService : IChatsService
         var newParticipants = await ResolveParticipantsAsync(chatData);
         if (newParticipants is { Count: > 0 })
         {
-            await LinkParticipantsAsync(db, entity, newParticipants);
+            await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, newParticipants);
             await db.SaveChangesAsync();
         }
 
@@ -301,19 +280,8 @@ public class ChatsService : IChatsService
 
         if (chatData.Participants is { Count: > 0 })
         {
-            await LinkParticipantsAsync(db, entity, chatData.Participants);
-
-            // The server loads participants fresh for these events, so the payload's list is the whole
-            // membership — a handle it omits has left the chat. LinkParticipantsAsync only ever adds,
-            // so removal has to be applied here or a participant-removed event never lands.
-            var keep = chatData.Participants
-                .Select(h => ParticipantKey(h.Address, h.Service))
-                .ToHashSet();
-            var stale = entity.ChatParticipants
-                .Where(cp => !keep.Contains(ParticipantKey(cp.Handle.Address, cp.Handle.Service)))
-                .ToList();
-            if (stale.Count > 0)
-                db.ChatParticipants.RemoveRange(stale);
+            await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, chatData.Participants);
+            HandlePersistenceHelper.RemoveParticipantsMissingFrom(db, entity, chatData.Participants);
         }
 
         await db.SaveChangesAsync();
@@ -322,8 +290,6 @@ public class ChatsService : IChatsService
         // the list renders from this in-memory copy, so a DB-only write would be invisible.
         await LoadChatsAsync();
     }
-
-    private static string ParticipantKey(string address, string? service) => $"{address}|{service}";
 
     /// <summary>Returns the chat's participants, preferring those already on the payload. The live
     /// socket <c>new-message</c> event carries the chat but not its participants, so a chat created
@@ -344,29 +310,6 @@ public class ChatsService : IChatsService
             AppLog.Warn(LogCategory.Api,
                 $"Could not fetch participants for chat {chatData.Guid}: {ex.Message}");
             return [];
-        }
-    }
-
-    /// <summary>Upserts each handle and links it to the chat, skipping links that already exist.
-    /// Caller owns the surrounding <see cref="DbContext.SaveChangesAsync()"/>.</summary>
-    private static async Task LinkParticipantsAsync(
-        BlueBubblesDbContext db, ChatEntity chat, List<Handle> participants)
-    {
-        foreach (var h in participants)
-        {
-            var handle = await db.Handles.FirstOrDefaultAsync(
-                x => x.Address == h.Address && x.Service == h.Service);
-            if (handle is null)
-            {
-                handle = new HandleEntity { Address = h.Address, Service = h.Service };
-                db.Handles.Add(handle);
-                await db.SaveChangesAsync();
-            }
-
-            var linked = await db.ChatParticipants.AnyAsync(
-                cp => cp.ChatId == chat.Id && cp.HandleId == handle.Id);
-            if (!linked)
-                db.ChatParticipants.Add(new ChatParticipant { ChatId = chat.Id, HandleId = handle.Id });
         }
     }
 
