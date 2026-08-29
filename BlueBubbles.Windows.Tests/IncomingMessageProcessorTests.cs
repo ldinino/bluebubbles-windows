@@ -590,6 +590,7 @@ internal class RecordingChatsService : IChatsService
     public List<Chat> AppliedChatUpdates { get; } = [];
     public event Action? ChatUpdateApplied;
     public List<string> PersistedNotifications { get; } = [];
+    public List<MessagePersistKind> PersistedKinds { get; } = [];
 
     public IReadOnlyList<ChatWithParticipants> Chats => [];
     public IReadOnlyList<ChatWithParticipants> ArchivedChats => [];
@@ -597,7 +598,7 @@ internal class RecordingChatsService : IChatsService
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
-    public event EventHandler<string>? MessagesPersisted;
+    public event EventHandler<MessagesPersistedEventArgs>? MessagesPersisted;
 
     public Task LoadChatsAsync() => Task.CompletedTask;
     public Task LoadArchivedChatsAsync() => Task.CompletedTask;
@@ -637,9 +638,10 @@ internal class RecordingChatsService : IChatsService
         return Task.CompletedTask;
     }
 
-    public void NotifyMessagesPersisted(string chatGuid)
+    public void NotifyMessagesPersisted(string chatGuid, MessagePersistKind kind)
     {
         PersistedNotifications.Add(chatGuid);
-        MessagesPersisted?.Invoke(this, chatGuid);
+        PersistedKinds.Add(kind);
+        MessagesPersisted?.Invoke(this, new MessagesPersistedEventArgs(chatGuid, kind));
     }
 }

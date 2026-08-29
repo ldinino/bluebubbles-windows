@@ -186,7 +186,7 @@ public class ReactionSummarizerTests
 public class MessagesServiceReactionTests
 {
     private static MessagesService CreateService(TestDbContextFactory factory)
-        => new(factory, new SyncMockApiService([]));
+        => new(factory, new SyncMockApiService([]), new MockChatsService());
 
     private static ChatEntity SeedChatWithParent(TestDbContextFactory factory, string chatGuid, string parentGuid)
     {

@@ -84,7 +84,7 @@ public class HandleSingleWriterTests
         await chats.EnsureChatExistsAsync(MakeChat("chat-ensure-exists", [Sparse]));
         await chats.ApplyChatUpdateAsync(MakeChat("chat-ensure-exists", [Sparse]));
 
-        var messages = new MessagesService(factory, syncApi);
+        var messages = new MessagesService(factory, syncApi, new MockChatsService());
         await messages.SaveIncomingMessageAsync("chat-ensure-db", MakeMessage("msg-live", Sparse));
 
         using var db = factory.CreateDbContext();
@@ -186,7 +186,7 @@ public class HandleSingleWriterTests
         await chats.EnsureChatExistsAsync(MakeChat("chat-sparse-2", [Sparse]));
         await chats.ApplyChatUpdateAsync(MakeChat("chat-sparse", [Sparse]));
 
-        var messages = new MessagesService(factory, api);
+        var messages = new MessagesService(factory, api, new MockChatsService());
         await messages.SaveIncomingMessageAsync("chat-sparse", MakeMessage("msg-sparse", Sparse));
 
         using var db = factory.CreateDbContext();
@@ -225,7 +225,7 @@ public class HandleSingleWriterTests
         {
             var api = new SyncMockApiService([MakeChat("chat-c", null)]);
             await CreateChatsService(f).Svc.EnsureChatInDatabaseAsync(MakeChat("chat-c", null), "hi");
-            await new MessagesService(f, api).SaveIncomingMessageAsync(
+            await new MessagesService(f, api, new MockChatsService()).SaveIncomingMessageAsync(
                 "chat-c", MakeMessage("msg-c", FullyPopulated));
         });
 
@@ -278,7 +278,7 @@ public class HandleSingleWriterTests
         var (sync, _) = CreateSyncService(api, factory);
         await sync.RunFullSyncAsync(skipEmptyChats: false);
 
-        var messages = new MessagesService(factory, api);
+        var messages = new MessagesService(factory, api, new MockChatsService());
         await messages.SaveIncomingMessageAsync("chat-msg", MakeMessage("msg-live", FullyPopulated, 1700000002000));
 
         using var db = factory.CreateDbContext();

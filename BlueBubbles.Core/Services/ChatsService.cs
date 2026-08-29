@@ -29,10 +29,10 @@ public class ChatsService : IChatsService
     public event EventHandler? ChatsChanged;
     public event EventHandler<string>? ChatUpdated;
     public event EventHandler? ArchivedChatsChanged;
-    public event EventHandler<string>? MessagesPersisted;
+    public event EventHandler<MessagesPersistedEventArgs>? MessagesPersisted;
 
-    public void NotifyMessagesPersisted(string chatGuid) =>
-        MessagesPersisted?.Invoke(this, chatGuid);
+    public void NotifyMessagesPersisted(string chatGuid, MessagePersistKind kind) =>
+        MessagesPersisted?.Invoke(this, new MessagesPersistedEventArgs(chatGuid, kind));
 
     public ChatsService(
         IDbContextFactory<BlueBubblesDbContext> dbFactory,

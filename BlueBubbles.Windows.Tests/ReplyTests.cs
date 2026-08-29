@@ -9,7 +9,7 @@ namespace BlueBubbles.Windows.Tests;
 public class MessagesServiceReplyTests
 {
     private static MessagesService CreateService(TestDbContextFactory factory)
-        => new(factory, new SyncMockApiService([]));
+        => new(factory, new SyncMockApiService([]), new MockChatsService());
 
     private static ChatEntity SeedChat(TestDbContextFactory factory, string guid = "chat;+1")
     {

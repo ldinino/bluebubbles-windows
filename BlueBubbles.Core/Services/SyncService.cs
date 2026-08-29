@@ -170,6 +170,7 @@ public class SyncService : ISyncService
                 }
 
                 await ReconcileChatWindowAsync(chatId, messages, handleCache, ct);
+                _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.ServerTrueUp);
 
                 var oldestDate = messages
                     .Where(m => m.DateCreated.HasValue)
@@ -328,7 +329,7 @@ public class SyncService : ISyncService
 
                     // The delta writes straight to the DB, bypassing the live socket event — tell the
                     // open thread so it can append these rows without waiting for the end-of-sync pulse.
-                    _chatsService.NotifyMessagesPersisted(chatGuid);
+                    _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.NewOrUpdated);
                 }
 
                 // Checkpoint the watermark after every persisted batch, not just at the very
@@ -466,7 +467,7 @@ public class SyncService : ISyncService
             {
                 var chatId = await EnsureChatExistsAsync(chatGuid, chatMessages[0], handleCache, ct);
                 await SaveMessagesAsync(chatId, chatMessages, handleCache, ct);
-                _chatsService.NotifyMessagesPersisted(chatGuid);
+                _chatsService.NotifyMessagesPersisted(chatGuid, MessagePersistKind.NewOrUpdated);
             }
 
             offset += IncrementalBatchSize;
