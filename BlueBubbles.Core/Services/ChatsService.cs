@@ -192,13 +192,15 @@ public class ChatsService : IChatsService
         var entity = await db.Chats.FirstOrDefaultAsync(c => c.Guid == chat.Guid);
         if (entity is null)
         {
-            entity = new ChatEntity { Guid = chat.Guid };
-            db.Chats.Add(entity);
+            entity = ChatFieldMerge.InsertFromServer(db, chat);
+        }
+        else
+        {
+            // Server-owned fields only; client-owned pin/mute/archive are preserved (the server has
+            // no endpoint for them and returns defaults). See ChatFieldMerge.
+            ChatFieldMerge.ApplyServerOwnedFields(entity, chat);
         }
 
-        // Server-owned fields only; client-owned pin/mute/archive are preserved (the server has no
-        // endpoint for them and returns defaults). See ChatFieldMerge.
-        ChatFieldMerge.ApplyServerOwnedFields(entity, chat);
         entity.LatestMessageDate = chat.LastMessage?.DateCreated
             ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await db.SaveChangesAsync();
@@ -234,16 +236,7 @@ public class ChatsService : IChatsService
             return;
         }
 
-        entity = new ChatEntity
-        {
-            Guid = chatData.Guid,
-            ChatIdentifier = chatData.ChatIdentifier,
-            DisplayName = chatData.DisplayName,
-            Service = chatData.Service,
-            Style = chatData.Style,
-            HasUnreadMessage = true
-        };
-        db.Chats.Add(entity);
+        entity = ChatFieldMerge.InsertForLiveMessage(db, chatData.Guid, chatData);
         await db.SaveChangesAsync();
 
         var newParticipants = await ResolveParticipantsAsync(chatData);
@@ -280,8 +273,13 @@ public class ChatsService : IChatsService
 
         if (chatData.Participants is { Count: > 0 })
         {
-            await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, chatData.Participants);
+            // Revoke first, then link. The stale set is decided from entity.ChatParticipants, and
+            // EF fix-up pushes rows added by LinkParticipantsAsync into that same collection with a
+            // null Handle navigation — so linking first makes this call inspect its own additions.
+            // The two sets are disjoint (removal targets handles the payload omits), so ordering
+            // costs nothing and the staleness question is answered against the stored membership.
             HandlePersistenceHelper.RemoveParticipantsMissingFrom(db, entity, chatData.Participants);
+            await HandlePersistenceHelper.LinkParticipantsAsync(db, entity.Id, chatData.Participants);
         }
 
         await db.SaveChangesAsync();
