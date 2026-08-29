@@ -25,9 +25,22 @@
                        Margin="0,12,0,4" />
         </DataTemplate>
 
+        <!-- Group/system event template (name change, add, remove, leave) -->
+        <DataTemplate x:Key="SystemEventTemplate" x:DataType="vm:SystemEventViewModel">
+            <TextBlock Text="{x:Bind Text}"
+                       HorizontalAlignment="Center"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       MaxWidth="420"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Margin="0,8,0,8" />
+        </DataTemplate>
+
         <controls:ChatItemTemplateSelector x:Key="ChatTemplateSelector"
             MessageTemplate="{StaticResource MessageTemplate}"
-            DateSeparatorTemplate="{StaticResource DateSeparatorTemplate}" />
+            DateSeparatorTemplate="{StaticResource DateSeparatorTemplate}"
+            SystemEventTemplate="{StaticResource SystemEventTemplate}" />
     </Page.Resources>
 
     <Grid>

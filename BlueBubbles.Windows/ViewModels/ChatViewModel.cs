@@ -715,9 +715,9 @@ public partial class ChatViewModel : ObservableObject
                 lastDate = msgDate;
             }
 
-            foreach (var bubble in CreateBubbles(msg, _attachmentCache))
+            foreach (var item in CreateTimelineItems(msg, _attachmentCache))
             {
-                Items.Add(bubble);
+                Items.Add(item);
             }
         }
 
@@ -742,16 +742,21 @@ public partial class ChatViewModel : ObservableObject
                 lastDate = msgDate;
             }
 
-            olderItems.AddRange(CreateBubbles(msg, _attachmentCache));
+            olderItems.AddRange(CreateTimelineItems(msg, _attachmentCache));
         }
 
         // Remove duplicate date separator at the beginning of existing items
         if (Items.Count > 0 && Items[0] is DateSeparatorViewModel && lastDate.HasValue)
         {
-            var oldestExistingBubble = Items.OfType<MessageBubbleViewModel>().FirstOrDefault();
-            if (oldestExistingBubble is not null)
+            var oldestExisting = Items.Select(i => i switch
+                {
+                    MessageBubbleViewModel b => b.DateCreated,
+                    SystemEventViewModel s => s.DateCreated,
+                    _ => 0L
+                }).FirstOrDefault(t => t > 0);
+            if (oldestExisting > 0)
             {
-                var existingDate = DateTimeOffset.FromUnixTimeMilliseconds(oldestExistingBubble.DateCreated)
+                var existingDate = DateTimeOffset.FromUnixTimeMilliseconds(oldestExisting)
                     .LocalDateTime.Date;
                 if (existingDate == lastDate)
                     Items.RemoveAt(0);
@@ -775,7 +780,7 @@ public partial class ChatViewModel : ObservableObject
                     prev.ShowTail = prev.IsFromMe != bubble.IsFromMe;
                 prev = bubble;
             }
-            else if (Items[i] is DateSeparatorViewModel)
+            else if (Items[i] is DateSeparatorViewModel or SystemEventViewModel)
             {
                 if (prev is not null) prev.ShowTail = true;
                 prev = null;
@@ -890,6 +895,9 @@ public partial class ChatViewModel : ObservableObject
             HasAttachments = e.Message.HasAttachments,
             BalloonBundleId = e.Message.BalloonBundleId,
             HasApplePayloadData = e.Message.HasApplePayloadData,
+            ItemType = e.Message.ItemType,
+            GroupTitle = e.Message.GroupTitle,
+            GroupActionType = e.Message.GroupActionType,
             PayloadDataJson = e.Message.PayloadData is not null
                 ? JsonSerializer.Serialize(e.Message.PayloadData, JsonDefaults.Options) : null,
             Handle = e.Message.Handle is not null
@@ -931,13 +939,18 @@ public partial class ChatViewModel : ObservableObject
             : (DateTime?)null;
 
         var newestBubble = Items.OfType<MessageBubbleViewModel>().LastOrDefault();
-        var newestBubbleDate = newestBubble?.DateCreated > 0
-            ? DateTimeOffset.FromUnixTimeMilliseconds(newestBubble.DateCreated).LocalDateTime.Date
-            : (DateTime?)null;
+        var newestBubbleDate = NewestTimelineDate();
 
         if (msgDate.HasValue && msgDate != newestBubbleDate)
             Items.Add(new DateSeparatorViewModel(
                 DateTimeOffset.FromUnixTimeMilliseconds(entity.DateCreated!.Value)));
+
+        if (SystemEventDescriber.IsSystemEvent(entity))
+        {
+            if (newestBubble is not null) newestBubble.ShowTail = true;
+            Items.Add(new SystemEventViewModel(entity, _contacts.GetDisplayName));
+            return [];
+        }
 
         if (newestBubble is not null)
             newestBubble.ShowTail = newestBubble.IsFromMe != entity.IsFromMe;
@@ -950,6 +963,24 @@ public partial class ChatViewModel : ObservableObject
             TriggerAutoDownload(bubble);
         }
         return bubbles;
+    }
+
+    /// <summary>Local date of the newest timeline row (bubble or system event), used to decide
+    /// whether an appended row needs a fresh day separator.</summary>
+    private DateTime? NewestTimelineDate()
+    {
+        for (var i = Items.Count - 1; i >= 0; i--)
+        {
+            var ticks = Items[i] switch
+            {
+                MessageBubbleViewModel b => b.DateCreated,
+                SystemEventViewModel s => s.DateCreated,
+                _ => 0L
+            };
+            if (ticks > 0)
+                return DateTimeOffset.FromUnixTimeMilliseconds(ticks).LocalDateTime.Date;
+        }
+        return null;
     }
 
     /// <summary>Brings the open thread fully up to date after a background delta sync, without rebuilding
@@ -1020,8 +1051,12 @@ public partial class ChatViewModel : ObservableObject
 
     private async Task AppendNewerMessagesFromDbAsync(IReadOnlyList<int> chatIds, string chatGuid)
     {
-        var newest = Items.OfType<MessageBubbleViewModel>()
-            .Select(b => b.DateCreated)
+        var newest = Items.Select(i => i switch
+            {
+                MessageBubbleViewModel b => b.DateCreated,
+                SystemEventViewModel s => s.DateCreated,
+                _ => 0L
+            })
             .DefaultIfEmpty(0)
             .Max();
         if (newest <= 0) return;   // nothing loaded yet — open/hydrate paths cover the empty case
@@ -1029,9 +1064,16 @@ public partial class ChatViewModel : ObservableObject
         var newer = await _messagesService.LoadMessagesAfterAsync(chatIds, newest);
         if (newer.Count == 0 || _chatGuid != chatGuid) return;
 
-        var shownGuids = Items.OfType<MessageBubbleViewModel>()
-            .Select(b => b.MessageGuid)
-            .ToHashSet();
+        // System events materialise as SystemEventViewModel, so the shown set must span both types
+        // or every reconcile would re-append the same event.
+        var shownGuids = Items.Select(i => i switch
+            {
+                MessageBubbleViewModel b => b.MessageGuid,
+                SystemEventViewModel s => s.MessageGuid,
+                _ => null
+            })
+            .Where(g => g is not null)
+            .ToHashSet()!;
 
         var appended = false;
         foreach (var msg in newer)
@@ -1181,6 +1223,13 @@ public partial class ChatViewModel : ObservableObject
             WireBubble(bubble);
         return bubbles;
     }
+
+    /// <summary>Timeline items for one row: a group/system event renders as a single centred line
+    /// (it has no sender side, tail, avatar, reactions or attachments), anything else as bubbles.</summary>
+    private List<object> CreateTimelineItems(MessageEntity entity, IAttachmentCacheService? cache)
+        => SystemEventDescriber.IsSystemEvent(entity)
+            ? [new SystemEventViewModel(entity, _contacts.GetDisplayName)]
+            : CreateBubbles(entity, cache).Cast<object>().ToList();
 
     /// <summary>Attaches the per-bubble reaction/reply/scroll/edit/unsend/delete callbacks.</summary>
     private void WireBubble(MessageBubbleViewModel bubble)
@@ -1474,14 +1523,15 @@ public partial class ChatViewModel : ObservableObject
         UpdateTails();
     }
 
-    /// <summary>Removes any date separator left without a following message bubble (e.g. after a delete).</summary>
+    /// <summary>Removes any date separator left without a following timeline row (e.g. after a delete).</summary>
     private void PruneOrphanDateSeparators()
     {
         for (var i = Items.Count - 1; i >= 0; i--)
         {
             if (Items[i] is not DateSeparatorViewModel) continue;
-            var hasBubbleAfter = i + 1 < Items.Count && Items[i + 1] is MessageBubbleViewModel;
-            if (!hasBubbleAfter) Items.RemoveAt(i);
+            var hasRowAfter = i + 1 < Items.Count
+                && Items[i + 1] is MessageBubbleViewModel or SystemEventViewModel;
+            if (!hasRowAfter) Items.RemoveAt(i);
         }
     }
 
