@@ -39,30 +39,8 @@ internal static class MessagePersistenceHelper
             int? msgHandleId = null;
             if (msg.Handle is not null)
             {
-                var key = msg.Handle.Address + "|" + msg.Handle.Service;
-                if (!handleCache.TryGetValue(key, out var hId) || hId <= 0)
-                {
-                    var existing = await db.Handles.FirstOrDefaultAsync(
-                        h => h.Address == msg.Handle.Address && h.Service == msg.Handle.Service, ct);
-                    if (existing is not null)
-                    {
-                        hId = existing.Id;
-                    }
-                    else
-                    {
-                        var newHandle = new HandleEntity
-                        {
-                            Address = msg.Handle.Address,
-                            Service = msg.Handle.Service,
-                            Country = msg.Handle.Country,
-                            FormattedAddress = msg.Handle.FormattedAddress
-                        };
-                        db.Handles.Add(newHandle);
-                        await db.SaveChangesAsync(ct);
-                        hId = newHandle.Id;
-                    }
-                    handleCache[key] = hId;
-                }
+                var hId = await HandlePersistenceHelper.EnsureHandleAsync(
+                    db, msg.Handle, handleCache, refreshExisting: false, ct);
                 msgHandleId = hId > 0 ? hId : null;
             }
 
