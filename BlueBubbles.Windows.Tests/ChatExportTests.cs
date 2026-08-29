@@ -303,8 +303,8 @@ public class ChatExportTests
     public void FileName_DistinguishesChatsWithTheSameTitle()
     {
         Assert.NotEqual(
-            ExportFileNames.ForChat("iMessage;+;chatAAA", "Into the light"),
-            ExportFileNames.ForChat("iMessage;+;chatBBB", "Into the light"));
+            ExportFileNames.ForChat("iMessage;+;chatAAA", "Book Club"),
+            ExportFileNames.ForChat("iMessage;+;chatBBB", "Book Club"));
     }
 
     [Fact]
