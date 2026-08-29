@@ -538,52 +538,62 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
 - [ ] Scheduling a reply (`selectedMessageGuid` is plumbed through `ScheduledMessageService`, no
       UI yet).
 
-#### F6. Export conversations for archival
-Let a user save their chat history to disk from **Settings > Backup & Restore** — keeping a personal
-record, or producing a readable transcript as evidence. Export only; **no re-import** (restore is a
-much larger problem and bundling them sinks both).
+#### F6. Export conversations for archival — **DONE** (`813b909` + `904ab1d` + `11968fa`, PR 16, merged `64bc2ba`)
+- [x] Shipped in `BlueBubbles.Core/Export/` — builder, serializer, transcript, coverage, filenames,
+  timestamps and the runner (`ChatExportService`), plus the Settings > Backup & Restore UI. JSONL +
+  optional `.txt` transcript per chat, manifest, deterministic filenames. 636/636 (38 new).
+- **THREE of my brief's premises were refuted by measurement. I re-verified all of them against the
+  real 483-chat cache with a read-only probe, and the agent was right on every count:**
+  - **`hasAttachments` is a lie.** **661** messages own attachment rows and **all 661 have
+    `HasAttachments = 0`**; 0 rows are stale the other way. My brief said to drive the export off
+    that column, which would have **silently dropped every attachment**, and since **325** of those
+    messages have empty text they would have exported as **blank lines**. The builder uses the
+    `Attachments` navigation instead.
+  - **The watermark has THREE states, not two.** `long?`: `0` = beginning, `>0` = partial,
+    **`null` = never paged back = unknown**. Measured: **381 of 483 chats are `null`, and exactly
+    ZERO are `0`** — not one chat in the cache is provably complete. `FetchOlderMessagesFromServerAsync`
+    reads `null` and `0` identically, so reusing that reading would have reported unknown chats as
+    complete — the precise dishonesty this entry existed to prevent.
+  - **"Offer sync first" is partly unachievable.** `MessagesService.MaxSyncHistoryDays = 365` hard-stops
+    paging, so for older chats "load more history" is false hope. The export discloses the limit
+    instead, and the constant was made `public` so the disclosure cannot drift from the guard.
+- Tapbacks confirmed separate, with a trap the brief missed: `LoadMessagesAsync` already filters
+  `AssociatedMessageGuid == null`, so the export needs its own query — and real data holds types
+  `2006`(44), `4000`(4) and `sticker`(4) that `ReactionTypes.IsReaction()` rejects, so folding keys
+  on GUID **presence**, not on `IsReaction`.
+- Verified by me: mutating the unknown-coverage branch so a `null` watermark reads as complete —
+  the case covering 381 of 483 chats — fails 4 tests including
+  `WatermarkNull_IsUnknownCoverage_NotCompleteness` (632/636). The honesty requirement is real.
+- **Better than specified:** `ICachedAttachmentLookup` (read-only) was introduced so the export
+  **structurally cannot** download mid-run, rather than relying on discipline. Keep that shape.
+- **Deviation, accepted:** the brief said file IO stays in the view; the runner lives in
+  `BlueBubbles.Core` (`ChatExportService`) instead, matching `AttachmentCacheService` and making it
+  reachable by the suite. Only the picker and status reporting are in the view. Right call.
+- Two real defects the agent's own real-data export exposed and then fixed: JSON over-escaped `+`
+  and `’`, and transcripts carried no encoding marker.
+- [ ] **Human-only, not verified:** that the `FolderPicker` actually opens (interop matches the 7
+  existing call sites, but `FolderPicker` is new to this codebase and nothing automated covers it);
+  export UI usability; and the attachment **copy** path against real data — the sample run hit 1
+  uncached and 0 cached attachments, so copying is unit-tested only.
 
-- **The page already exists but does something else.** `BackupSettingsPage` currently backs up *app
-  settings* to the BlueBubbles server (`SettingsBackupName = "BlueBubbles WinUI Settings"`). This is
-  a second, unrelated capability on the same page — do not entangle it with the settings payload.
-- **MEASURED — the honesty problem, and the most important part of this feature.** The local cache
-  is **not** the full history. `ChatEntity.OldestSyncedMessageDate` is a per-chat watermark
-  (`= 0` means synced back to the beginning). `MessagesService.LoadMessagesAsync(chatId, limit,
-  beforeDate)` reads the **local cache only**. So a naive export silently produces a *partial*
-  archive while looking complete — worst case for someone relying on it as a record.
-  **Requirement:** the export must state its own coverage (per-chat oldest synced date, and whether
-  it reaches the beginning), and the UI must not imply completeness. Offer to run the existing
-  older-message sync first rather than silently fetching inside the export.
-- **Format decision (maintainer + head engineer, 2026-08-29): JSONL, one file per conversation**,
-  plus a `manifest.json`. Rejected XML: message text is full of `<`, `>`, `&`, emoji and newlines,
-  where one bad control character invalidates an entire document, and JSONL streams line-by-line so
-  a corrupt line costs one message instead of the file.
-- **Also emit a plain-text transcript (`.txt`) per conversation, selectable.** Nobody reads JSONL,
-  and the archival/evidence use is the documented purpose. Plain text, not HTML — HTML with
-  embedded media means asset copying and relative paths, which is scope creep.
-- **Record shape matters more than the container.** From `Message.cs`, all present already:
-  `isFromMe`; `associatedMessageGuid`/`associatedMessageType` (**tapbacks are separate messages** —
-  fold onto the parent or the transcript fills with `Liked "..."` noise); `threadOriginatorGuid` for
-  real reply structure; `dateCreated`; `itemType`/`groupActionType` non-zero = system event, not
-  speech; `dateEdited` (export the final text); `hasAttachments` -> explicit placeholder, never a
-  silent empty message.
-- **Timestamps as ISO 8601 with offset.** The stored value is a Unix ms epoch; a bare local time in
-  an archive is ambiguous and worthless a year later.
-- **Scope guard (head engineer): attachments are referenced by filename, not fetched.** Copy a
-  cached attachment into `attachments/` when the file is already local; never pull from the server
-  during an export. Record a placeholder for anything uncached so the gap is visible.
-- **Deterministic filenames** (slug + short GUID hash) so a re-export diffs cleanly instead of
-  duplicating.
-- **`FolderPicker` is not used anywhere in this codebase yet.** Unpackaged, it needs the same
-  `InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow))` interop as
-  the 7 existing `FileOpenPicker`/`FileSavePicker` call sites (e.g. `FullscreenMediaPage.xaml.cs:160`).
-  A picker without it throws when unpackaged (CLAUDE.md identity rules).
-- **"Export all" needs progress and cancellation.** On a mature cache this is a lot of rows; without
-  it the window looks hung.
-- [ ] One line on the page stating the export is unencrypted plaintext. No further ceremony.
-- **Testability:** put the record-building and transcript-rendering in `BlueBubbles.Core` as pure
-  functions over messages, following the F5 precedent (`ToastActivationRouter`) — see B2b. The
-  picker and file IO stay in the view.
+#### B11. Reply previews to attachment-only messages always say "Message"
+- [ ] **Found while verifying F6, 2026-08-29.** `ChatViewModel.EntityPreview` (`:1351`) returns
+  `m.HasAttachments ? "Attachment" : "Message"` — but the probe above proves that column is **0 on
+  all 661** messages that actually own attachments. So a reply-context preview to a photo always
+  reads "Message".
+- **Bubbles are unaffected:** `MessageBubbleViewModel.HasAttachments` (`:27`) computes from
+  `Attachments is { Count: > 0 }`, so only the `MessageEntity` read path is wrong.
+- **This corrects my own B2c closure**, which reasoned "EntityPreview reads the `HasAttachments`
+  scalar, so nothing was reading zero attachments" — true, but the scalar is itself unreliable.
+- [ ] Now a one-line fix, because **B2c already added `.Include(m => m.Attachments)`** to
+  `GetMessagesByGuidsAsync`, which is what feeds this: use `m.Attachments.Count > 0`.
+
+#### B12. Group and system events never render — 37 rows show as empty bubbles
+- [ ] Found during F6. `ItemType <> 0 OR GroupActionType <> 0` matches **37 rows in the real cache**
+  and **all have NULL text**; a grep found **no group-event renderer anywhere** in the codebase. So
+  "X named the conversation", joins and leaves currently display as blank bubbles.
+- F6's transcript renders them (`* +1555… named the conversation "…"`), which is the format to copy.
+- Low severity, high visibility — an empty bubble looks like a bug to a user.
 
 ---
 
