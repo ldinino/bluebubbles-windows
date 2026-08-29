@@ -51,6 +51,9 @@ public sealed class ChatExportService : IChatExportService
         _attachmentCache = attachmentCache;
     }
 
+    private static readonly System.Text.UTF8Encoding NoBom = new(encoderShouldEmitUTF8Identifier: false);
+    private static readonly System.Text.UTF8Encoding WithBom = new(encoderShouldEmitUTF8Identifier: true);
+
     public async Task<ChatExportResult> ExportAsync(
         IReadOnlyList<int> chatIds,
         string destinationFolder,
@@ -137,15 +140,18 @@ public sealed class ChatExportService : IChatExportService
             var jsonlName = $"{baseName}.jsonl";
             string? transcriptName = options.WriteTranscript ? $"{baseName}.txt" : null;
 
+            // No BOM on the JSONL: a BOM is part of the first line and breaks strict parsers.
             await File.WriteAllLinesAsync(
                 Path.Combine(destinationFolder, jsonlName),
-                ChatExportSerializer.ToJsonl(export), ct);
+                ChatExportSerializer.ToJsonl(export), NoBom, ct);
 
             if (transcriptName is not null)
             {
+                // BOM on the transcript: it is the file a person opens in a Windows text editor,
+                // and without one non-ASCII message text is liable to be decoded as ANSI.
                 await File.WriteAllLinesAsync(
                     Path.Combine(destinationFolder, transcriptName),
-                    ChatExportTranscript.Render(export), ct);
+                    ChatExportTranscript.Render(export), WithBom, ct);
             }
 
             entries.Add(ChatExportSerializer.ToManifestEntry(export, jsonlName, transcriptName));
@@ -161,7 +167,7 @@ public sealed class ChatExportService : IChatExportService
 
         await File.WriteAllTextAsync(
             Path.Combine(destinationFolder, "manifest.json"),
-            ChatExportSerializer.ToManifestJson(entries, now), ct);
+            ChatExportSerializer.ToManifestJson(entries, now), NoBom, ct);
 
         return new ChatExportResult(
             entries.Count, totalMessages, copied, missing,

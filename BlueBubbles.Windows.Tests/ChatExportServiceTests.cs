@@ -166,6 +166,25 @@ public class ChatExportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Export_WritesTranscriptWithBomAndJsonlWithout()
+    {
+        var (factory, chatId) = await SeedAsync(0,
+            new MessageEntity { Guid = "m1", Text = "caf\u00e9", DateCreated = T0, OriginalRowId = 1 });
+
+        var svc = new ChatExportService(factory, new FakeAttachmentCache());
+        await svc.ExportAsync([chatId], _dir, new ChatExportOptions());
+
+        var baseName = ExportFileNames.ForChat("iMessage;+;chat999", "Beach Trip");
+        var txt = await File.ReadAllBytesAsync(Path.Combine(_dir, $"{baseName}.txt"));
+        var jsonl = await File.ReadAllBytesAsync(Path.Combine(_dir, $"{baseName}.jsonl"));
+
+        Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, txt.Take(3));
+        // A BOM would be part of the first JSONL line and break a strict parser.
+        Assert.NotEqual(0xEF, jsonl[0]);
+        Assert.Contains("caf\u00e9", await File.ReadAllTextAsync(Path.Combine(_dir, $"{baseName}.txt")));
+    }
+
+    [Fact]
     public async Task Export_IsDeterministic_ReExportProducesIdenticalFiles()
     {
         var (factory, chatId) = await SeedAsync(0,

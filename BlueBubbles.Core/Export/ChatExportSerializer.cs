@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -47,6 +48,11 @@ public static class ChatExportSerializer
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false,
+        // These files are an archive read by humans, never injected into HTML. The default
+        // encoder turns every '+' into \u002B and every curly quote or emoji into a \uXXXX
+        // escape, which makes a "readable record" unreadable. Control characters - including
+        // the newlines that would break the one-object-per-line contract - are still escaped.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
@@ -55,6 +61,7 @@ public static class ChatExportSerializer
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 

@@ -333,4 +333,27 @@ public class ChatExportTests
         Assert.Equal(2, lines.Count);
         Assert.Contains("line one\\nline two", lines[1]);
     }
+
+    [Fact]
+    public void Jsonl_KeepsCommonPunctuationLiteralAndStaysLossless()
+    {
+        // The default encoder turns every '+' into \u002B and every curly quote into \u2019,
+        // which makes a "readable record" unreadable; the relaxed encoder must not be undone.
+        // Astral-plane emoji ARE still emitted as escaped surrogate pairs - measured, not
+        // assumed - which is valid JSON and round-trips exactly, so it is left alone.
+        const string body = "it\u2019s +1 \uD83C\uDFD6\uFE0F\rtail";
+        var export = BuildExport([Msg("m1", body, rowId: 1)]);
+        var line = ChatExportSerializer.ToJsonl(export).Last();
+
+        Assert.Contains("it\u2019s +1 ", line);
+        Assert.DoesNotContain("\\u002B", line);
+        Assert.DoesNotContain("\\u2019", line);
+
+        // The line contract: a real carriage return would split one message across two lines.
+        Assert.Contains("\\r", line);
+        Assert.DoesNotContain("\r", line);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(line);
+        Assert.Equal(body, doc.RootElement.GetProperty("text").GetString());
+    }
 }
