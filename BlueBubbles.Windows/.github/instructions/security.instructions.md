@@ -19,6 +19,12 @@ These rules apply to **every feature and change**. They are not optional add-ons
 - The app is distributed **unsigned** via the Inno Setup installer (`publish.ps1`). There is no MSIX, no certificate, and no code-signing step — do not reintroduce one. (MSIX signing is what previously broke toast-notification activation.)
 - When using `HttpClient`, always validate TLS certificates and use HTTPS.
 - Never log sensitive data (PII, tokens, passwords).
+- **The maintainer's local cache is real personal data. Never let it reach the repo or GitHub.**
+  Reading `%LOCALAPPDATA%\BlueBubbles\bluebubbles.db` to settle a question is encouraged — but
+  **test fixtures, sample data and commit messages must use invented values**, and anything pasted
+  into a PR body, issue or report must be **redacted**. This includes chat titles and display names,
+  not just phone numbers and message bodies. If a made-up string proves the same thing, use it.
+  The repository is **public**; a PR body is as exposed as the code.
 
 ## Anti-patterns
 
@@ -26,6 +32,8 @@ These rules apply to **every feature and change**. They are not optional add-ons
 - Disabling TLS validation for debugging and forgetting to re-enable it.
 - Using `Process.Start` with unsanitized user input.
 - Broad `try { } catch (Exception) { }` that swallows errors silently without any logging.
+- Copying a real value out of the local cache into a test fixture because it was the one in front of
+  you. Happened 2026-08-29 with a real group-chat title; a synthetic one proved the same assertion.
 
 ## Validation
 
