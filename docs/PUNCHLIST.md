@@ -576,24 +576,36 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   export UI usability; and the attachment **copy** path against real data — the sample run hit 1
   uncached and 0 cached attachments, so copying is unit-tested only.
 
-#### B11. Reply previews to attachment-only messages always say "Message"
-- [ ] **Found while verifying F6, 2026-08-29.** `ChatViewModel.EntityPreview` (`:1351`) returns
-  `m.HasAttachments ? "Attachment" : "Message"` — but the probe above proves that column is **0 on
-  all 661** messages that actually own attachments. So a reply-context preview to a photo always
-  reads "Message".
-- **Bubbles are unaffected:** `MessageBubbleViewModel.HasAttachments` (`:27`) computes from
-  `Attachments is { Count: > 0 }`, so only the `MessageEntity` read path is wrong.
+#### B11. Reply previews to attachment-only messages said "Message" — **FIXED** (`10e9cc4`, merged `6ac90ae`)
+- **Root cause, measured:** `ChatViewModel.EntityPreview` branched on
+  `MessageEntity.HasAttachments`, and a read-only probe of the real cache proved that column is **0
+  on all 661** messages that actually own attachment rows. So a reply-context preview to a photo
+  always read "Message".
+- **A second defect found while fixing it:** `BubblePreview` had the same shape and *disagreed* with
+  `EntityPreview`, so **the same reply rendered differently** depending on whether its origin bubble
+  happened to still be loaded or had to be fetched.
+- [x] Both now call `MessagePreview.Derive(text, mimeTypes)` — which already existed in Core, is
+  already tested, strips U+FFFC, and names the kind ("Image", "2 Images") instead of the generic
+  "Attachment". The hand-rolled duplicates are gone. 636/636.
 - **This corrects my own B2c closure**, which reasoned "EntityPreview reads the `HasAttachments`
-  scalar, so nothing was reading zero attachments" — true, but the scalar is itself unreliable.
-- [ ] Now a one-line fix, because **B2c already added `.Include(m => m.Attachments)`** to
-  `GetMessagesByGuidsAsync`, which is what feeds this: use `m.Attachments.Count > 0`.
+  scalar, so nothing was reading zero attachments" — true, but the scalar is itself unreliable. B2c's
+  `.Include(m => m.Attachments)` is what made this fix a one-liner.
+- **Coverage, stated honestly:** the fix routes to already-tested Core logic, but the wiring itself
+  lives in `BlueBubbles.Windows` and is **not reachable by the suite** — B2b's residual gap. No new
+  test claims otherwise.
 
 #### B12. Group and system events never render — 37 rows show as empty bubbles
-- [ ] Found during F6. `ItemType <> 0 OR GroupActionType <> 0` matches **37 rows in the real cache**
-  and **all have NULL text**; a grep found **no group-event renderer anywhere** in the codebase. So
-  "X named the conversation", joins and leaves currently display as blank bubbles.
-- F6's transcript renders them (`* +1555… named the conversation "…"`), which is the format to copy.
-- Low severity, high visibility — an empty bubble looks like a bug to a user.
+- [ ] **Measured in the real cache:** `ItemType <> 0 OR GroupActionType <> 0` matches **37 rows** and
+  **all have NULL text**; a grep found **no group-event renderer anywhere** in the app. So "X named
+  the conversation", adds, removes and leaves currently display as blank bubbles.
+- **Most of the work already exists.** `ChatExportBuilder.DescribeEvent(entity, resolveSender)` is
+  **public, in Core, and tested** (F6) — it maps `(ItemType, GroupActionType)` to plain language and
+  labels anything unrecognised generically rather than guessing.
+- **The right shape is a separator, not a bubble.** `ChatPage.xaml` already template-switches on item
+  type (`MessageTemplate` for `MessageBubbleViewModel`, `DateSeparatorTemplate` for
+  `DateSeparatorViewModel`), so a system event should be its own centred item in that list — not a
+  chat bubble with an avatar and a tail. That is why this is not a two-line fix.
+- Low severity, high visibility: an empty bubble reads as a broken app.
 
 ---
 
