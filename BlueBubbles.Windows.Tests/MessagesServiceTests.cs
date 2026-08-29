@@ -789,4 +789,38 @@ public class MessagesServiceTests
             Assert.Equal(0, chat.OldestSyncedMessageDate);
         }
     }
+
+    [Fact]
+    public async Task GetMessagesByGuids_IncludesAttachments()
+    {
+        // PUNCHLIST B2c: this query returns entities that look like LoadMessagesAsync's but silently
+        // carried an empty Attachments collection, so any caller reading them would see zero
+        // attachments rather than fail.
+        var (service, factory, _) = CreateService();
+        var chat = SeedChat(factory);
+
+        using (var db = factory.CreateDbContext())
+        {
+            var msg = new MessageEntity
+            {
+                Guid = "msg-with-attachment",
+                ChatId = chat.Id,
+                Text = null,
+                DateCreated = 1700000000000,
+                HasAttachments = true
+            };
+            db.Messages.Add(msg);
+            db.SaveChanges();
+
+            db.Attachments.Add(new AttachmentEntity
+            {
+                Guid = "att-1", MessageId = msg.Id, OriginalRowId = 4711, TransferName = "photo.jpg"
+            });
+            db.SaveChanges();
+        }
+
+        var loaded = Assert.Single(await service.GetMessagesByGuidsAsync(["msg-with-attachment"]));
+        var attachment = Assert.Single(loaded.Attachments);
+        Assert.Equal("att-1", attachment.Guid);
+    }
 }

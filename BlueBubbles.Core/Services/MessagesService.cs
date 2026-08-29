@@ -362,6 +362,7 @@ public class MessagesService : IMessagesService
 
         return await db.Messages
             .Include(m => m.Handle)
+            .Include(m => m.Attachments)
             .Where(m => guids.Contains(m.Guid))
             .ToListAsync();
     }
