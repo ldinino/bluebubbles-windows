@@ -388,7 +388,7 @@ predates it), but agents must not run migrations against live user data before r
 
 ### F5. Toast actions: two reactions plus Mark as read
 
-`38dc7c8` (PR 12). Message toast is now Send + Love + Like + Mark as read (4 buttons); reaction
+`38dc7c8` (PR 12). Message toast is now Send + Love + Like + Mark as read; reaction
 toast is Send + Mark as read. Mark as read does **not** foreground the app: the routing decision was
 lifted into `BlueBubbles.Core/Services/ToastActivationRouter.cs` as a pure `Resolve(args, userInput)`
 with `ActivatesWindow => Kind is OpenChat or OpenApp`. Mutation adding `MarkRead` to that rule fails

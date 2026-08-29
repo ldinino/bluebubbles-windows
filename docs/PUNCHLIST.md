@@ -42,9 +42,10 @@
 - Side effect, accepted: `ChatViewModel.cs:157` passes `NewOrUpdated` through, so a delete now also
   wakes `AppendPersistedMessagesAsync`. It only appends rows the view lacks, so a delete gives it
   nothing to do — one wasted DB read on a rare user action.
-- [ ] **Human-only, still pending:** that the tile visibly updates after deleting the newest message.
-  `ConversationListViewModel`'s `if (e.AffectsConversationList)` needs a UI dispatcher, so the
-  subscriber half is verified by compilation and review only (B2b).
+- [x] **Human-verified by the maintainer, 2026-08-29:** deleting the newest message updates the
+  chat-list preview to the older message. The `AffectsConversationList` subscriber link is now
+  confirmed by observation, not just by compilation — which also closes the same standing gap for
+  W1a-2.
 
 #### B9. Class B attachment groups — **CLOSED 2026-08-29: not reproducible in the field**
 - **Closed on the maintainer's observation:** running 0.24.0 across several machines over an extended
@@ -69,7 +70,7 @@
   so an open details pane can lag one beat behind the now-correct persisted state. Small, and only
   visible with the pane open while a rename or participant change arrives.
 
-#### B2g. Images decode oldest-first — mechanism fixed, **effect not yet measured**
+#### B2g. Images decoded oldest-first — **CLOSED 2026-08-29: fix measured working**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
   container is realized (`AttachmentHolder`, `NotDownloaded` case), so it follows what is on or near
   screen instead of walking the loaded window oldest-first. The new-message append path still
@@ -77,18 +78,19 @@
 - **Measured before the fix:** `BuildMessageList` fired 19 auto-downloads within 20 ms in strictly
   ascending `DateCreated` order, and decodes then arrived in download-completion order — so the
   on-screen newest images sat behind the whole page.
-- [ ] **The improvement itself is unverified.** Every post-fix run had all attachments already
-  cached, so no auto-download fired and there is no after-order list and no time-to-first-visible
-  number.
-- [ ] **Repro (maintainer, 2026-08-29): reset the local cache, then open a thread fresh with verbose
-  logging on.** That forces every attachment back to `NotDownloaded`, which is the state the fix
-  changes behaviour in — and it is why every previous attempt measured nothing.
-- [x] **No longer blocked — B2b (`6dd6534`) shipped the instrumentation.** A thread open now emits
-  `thread.open->first-image` as a duration and each download is numbered, so both the ordering
-  evidence and the time-to-first-visible fall out of the rollup with no line counting.
-- [ ] **B2b's own capture settles nothing here** — it was an all-cached run: `attach.download`
-  recorded **0** samples and only 3 decodes fired. This needs the cache reset to produce a real
-  before/after against the pre-fix baseline below.
+- [x] **Measured after the fix, 2026-08-29, on a genuinely cold cache** (the maintainer's 456-file
+  attachment folder was moved aside, then restored). B2b's instrumentation supplied the numbers:
+  - **Downloads now follow the viewport, not the page.** #1-#3 arrived seconds apart as containers
+    realized (14:01:06 / :08 / :09); a later burst of 7 landed inside 130 ms at 14:07:18 when a
+    scroll brought them on screen at once. That is container-driven, structurally unlike the old
+    single 19-in-20 ms page-order burst.
+  - **`thread.open->first-image`: n=3, median 698.5 ms, max 934.6 ms.** The number that did not
+    exist before this week.
+  - 53 auto-downloads, `attach.download` n=35 (median 77 ms, max 475 ms), `attach.decode.image`
+    n=43 (median 158 ms).
+- **Not exhaustively checked:** individual GUIDs in the 130 ms burst were not mapped back to their
+  `DateCreated`, so "ordering within a burst" is inferred from the trigger mechanism rather than
+  measured. Good enough to close; noted rather than glossed.
 - [ ] **Behaviour changes to watch for in use:** attachments in messages never scrolled to are no
   longer prefetched (intended), and scroll-back pages now auto-download where they never did before
   (`PrependMessages` never called `TriggerAutoDownload`). If fast scrolling now feels worse, this is
@@ -115,6 +117,13 @@
 - [ ] **Did not reproduce during B2b's capture:** 54 relayouts, all attributed, none unattributed,
   none during idle. The machinery works; the churn needs a longer or different window. Reproduce
   first, then read the attribution bucket — do not theorise ahead of a capture.
+- [ ] **Did not reproduce a SECOND time, 2026-08-29 (maintainer ran a deliberate idle window).** Last
+  relayout 14:09:25, app closed 14:11:13 — **108 seconds of true idle with zero relayouts**. The 31
+  relayouts logged at 14:09 are accounted for by the group-rename test immediately before, which is
+  supposed to refresh tiles. Session total 85, `by:Loaded` 21.
+- **Two clean non-reproductions now.** Treat the original `gen=13` observation as unexplained rather
+  than ongoing, and **do not spend more time hunting it without a fresh sighting.** If it recurs, the
+  attribution bucket names the culprit immediately.
 
 #### B2b. Draw timing for verbose logging — **DONE** (`f650eb2` + `6e07472`, merged `6dd6534`)
 - **Reframed by the maintainer 2026-08-29 and the evidence backed it:** every UI defect this project
@@ -150,6 +159,26 @@
 - Out of scope, still open: this does **not** make the `AffectsConversationList` subscriber link
   testable. W1a-2 and B8 both depend on that one line and it remains compilation-and-review only.
 
+#### B2n. Attachment downloads fail silently — 19 of 53 in one session
+- [ ] **Found 2026-08-29 by B2b's instrumentation, on the first cold-cache run.** The rollup reported
+  `attach.autodownload 53` and **`attach.download.error 19`** — a 36% failure rate — while the log
+  contained **zero `[WARN]`, `[ERROR]` or `[FATAL]` lines for the entire session**.
+- **Mechanism:** `AttachmentViewModel.cs:165-171` catches the exception, increments the counter, sets
+  `State = AttachmentState.Error` and `ErrorMessage = Describe(ex, force)` — and **never logs**. The
+  user sees a broken bubble if they happen to look at it; nothing else records that it happened.
+- **This is the first thing B2b made visible that nobody knew about**, and it is the argument for
+  that instrumentation existing.
+- [ ] **First step is to log the failure reason, then re-run the cold-cache test.** Do NOT design a
+  fix first — the cause is genuinely unknown.
+- **Leading hypothesis, explicitly UNVERIFIED:** the server returns **500 "Attachment does not exist
+  in disk!"** when the record exists but the file has been purged to iCloud (see repo memory /
+  archived B2 notes), for which the remedy is `attachment/:guid/download/force`. `force=False` on
+  every observed download line is consistent with that, but consistent is not confirmed — the
+  exception text was never captured. Measure before believing it.
+- Related and probably informative: `attach.decode.cache-hit 7` and `attach.download` n=**35**
+  against 53 auto-downloads. 35 + 19 = 54, so essentially every auto-download either completed or
+  errored; there is no third silent bucket.
+
 #### B2m. Avatar decodes are far slower than anyone assumed — newly measurable
 - [ ] **First real numbers, from B2b's rollup on a normal launch:** `avatar.decode` n=14,
   **total 6530 ms**, median 233.8 ms, **p95 1047.7 ms, max 1077.9 ms**. For cached contact photos
@@ -160,7 +189,15 @@
 - `avatar.decode.stale` = 4, which **matches B2j's "four discarded decodes per launch" exactly**,
   now measured rather than hand-counted — a good cross-check that the instrumentation agrees with
   the earlier manual analysis.
-- Do not act on this without a second capture: one session, one machine, cache state unknown.
+- [x] **Second capture, 2026-08-29, different session and a cold attachment cache — it holds.**
+  n=14, **total 6096 ms**, median 301.0 ms, p95 973.2 ms, max 982.0 ms. Two independent sessions
+  agree within ~7% on the total, so this is a real, repeatable cost, not a one-off. `stale` was 3
+  this time (4 previously).
+- **This is the largest single measured cost at startup** — 6.1 s of decode work for 14 avatars,
+  against `thread.open->messages-built` at 9.8 ms median. Worth acting on; act on the numbers, not
+  on a theory about why.
+- `avatar.relayout.by:Loaded` was 21 of 85 this session (25%) vs 25 of 54 (46%) previously — the
+  ratio moves with usage, the pattern does not.
 #### B2c. `GetMessagesByGuidsAsync` omitted `.Include(m => m.Attachments)` — **FIXED** (`93713a9`, merged `a84354f`)
 - [x] One line, plus `GetMessagesByGuids_IncludesAttachments`. 573/573. Negative control run:
   removing the `.Include` again fails that test and only that test (572/573).
@@ -267,10 +304,10 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
     still pass at 570 — that is the behaviour-preservation proof; and mutating
     `AffectsConversationList` to `false` (the B1 regression shape, opposite to the agent's own
     mutation) fails `OnlyNewOrUpdated_AffectsTheConversationList`. One test pins both directions.
-  - [ ] Not verified, human-only: that the conversation list and open thread still update correctly
-    in real use. **Every message write flows through this event** — the data layer is pinned, the UI
-    is not. `ConversationListViewModel` needs a UI dispatcher, so its one-line
-    `if (e.AffectsConversationList)` filter is verified by compilation and review only (B2b).
+  - [x] **Human-verified, 2026-08-29:** the conversation list and open thread both update correctly
+    in real use — a live inbound message, a delete, a group rename and typing indicators were all
+    exercised in one session. Every message write flows through this event, so this was the standing
+    risk; it is now closed by observation.
   - Gotcha worth keeping: the agent reverted a mutation with `git checkout -- <file>` and lost the
     **entire uncommitted refactor** of that file, because the production commit had not been made
     yet. Caught by reading the file back. **Commit before mutating.**
@@ -378,11 +415,11 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   `_socketService is ObservableObject` downcast existed in **two** view models, not one.
 - `SettingsViewModel` went 4 -> 6 references: it absorbed the API dependency out of
   `AboutSettingsPage` code-behind. That is the trade this entry asked for.
-- [ ] **Human-only, NOT verified — a green suite and a launch prove none of these:** the connection
-  banner rendering (connecting / disconnected / syncing), typing indicators actually transmitting
-  (the send path is behind a new service; only the event-name mapping is unit-tested), the chat
-  details pane updating on a rename or participant change, and the connection-settings status text
-  and colour.
+- [x] **Human-verified by the maintainer, 2026-08-29:** typing indicators transmit (seen on the
+  phone while typing on the PC), a group rename from the phone reaches the details pane and the
+  chat list, and the app connects and renders normally throughout. The connection banner's
+  disconnected/syncing states were not deliberately forced, so those specific visuals remain
+  unexercised — the `Connected` path is confirmed.
 - [ ] **Still deferred, unchanged:** wire DTOs used directly as the domain model — every
   `Core/Models` type except `SocketEvents.cs` carries `[JsonPropertyName]` and the ViewModels bind
   against `Message`/`Chat`/`Handle`/`Attachment`. That is the real portability debt.
