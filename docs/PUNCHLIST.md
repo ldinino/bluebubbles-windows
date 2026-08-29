@@ -200,11 +200,45 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
     `entity.ChatParticipants` including rows added moments earlier in the same call, relying on EF
     fix-up to populate `Handle`. A null guard was added inside `RemoveParticipantsMissingFrom`
     rather than restructuring the flow. **W1c owns that flow — fix it there.**
-- [ ] **W1c. ChatEntity (13 — treat as unverified, see W1b)**, including the two construction sites
-  that bypass `ChatFieldMerge.ApplyServerOwnedFields` — confirmed at `ChatsService.cs:258` and
-  `SyncService.cs:551`. Both are insert paths today; the audit could not determine whether either
-  can run against a row that already holds client-only state (e.g. after a soft-delete/resurrect).
-  **CLAUDE.md hard rule applies.**
+- [x] **W1c. ChatEntity — DONE** (`0e6a31c` + `033a67a`, merged `0a247d0`). One writer, in
+  `ChatFieldMerge.cs`, split into two named entry points rather than one flag-driven method:
+  `InsertFromServer` (server record in hand, no client opinion) and `InsertForLiveMessage` (a
+  message just arrived, so the client owns unread and delete state). 562/562.
+  - **Constructions: 4, not 13** — `ChatsService.cs:195/:237`, `SyncService.cs:108/:525`. The
+    audit's 13 counted *field-assignment* sites, a different and less useful unit for a
+    single-writer refactor. Verified by me: the only remaining `new ChatEntity` in production are
+    the two inside `ChatFieldMerge` itself.
+  - **The defect, confirmed and now closed:** `ApplyServerOwnedFields` writes 11 fields; the two
+    bypasses wrote 5. Chats created on those paths landed without `AutoSendReadReceipts`,
+    `AutoSendTypingIndicators`, `DateDeleted`, `LockChatName`, `LockChatIcon` and
+    `LastReadMessageGuid`. B2's shape. Characterization control reproduced by me against
+    `e589504`: **560 pass / 2 fail**, the failures being exactly the two bypass paths.
+  - **The B6 trap was not flattened.** Both bypasses hardcoded `HasUnreadMessage = true` — a
+    *client* decision — while the merge deliberately treats a missing `hasUnreadMessage` as "no
+    opinion" (`if (server.HasUnreadMessage is { } hasUnread)`), which **is** the B6 fix. Routing the
+    inserts naively through the merge would have left the column at its `false` default and stopped
+    new chats showing as unread. `InsertForLiveMessage` applies it after the merge instead.
+    Verified by me: deleting that line fails 4 tests, named
+    `LiveMessageChatCreate_IsUnread_EvenWhenThePayloadIsSilent(payloadUnread: null/False)` and the
+    delta equivalent. Adding a client-only field to the merge fails 3 pre-existing tests.
+  - **Resurrect question answered — no hazard.** Zero `HasQueryFilter` matches in the codebase, so
+    the `Guid` lookups already see soft-deleted rows, and `Chat.Guid` is uniquely indexed
+    (`BlueBubblesDbContext.cs:40`). The insert branch cannot run against a live row holding
+    client-only state. **This closes the audit's open question — do not re-open it.**
+  - **A report claim I checked and had to reject:** the agent reported that the `SyncService`
+    bypass also seeded `OldestSyncedMessageDate`, and recommended recording "insert-time client-only
+    field initialisation" as a category. **It does not.** `git show e589504:...SyncService.cs` shows
+    that insert setting exactly Guid, ChatIdentifier, DisplayName, Service, Style and
+    HasUnreadMessage — the same six as the `ChatsService` one. The two bypasses *were* structurally
+    identical. `OldestSyncedMessageDate` is written elsewhere (`SyncService.cs:182`,
+    `MessagesService.cs`), never at insert. The shipped code is correct and matches prior behaviour;
+    only the report was wrong. **No such category exists — do not create one.**
+  - [x] **Participant staleness fixed properly** (handed over from W1b): `ApplyChatUpdateAsync` now
+    computes the stale set from the server participant list *before* any rows are added, so it no
+    longer depends on EF fix-up having populated `Handle` on rows created in the same call. W1b's
+    null guard remains as cheap defence but is no longer load-bearing.
+  - [ ] Not verified: visual confirmation that a newly created chat renders with an unread badge.
+    Proven at the data layer only.
 - Note from W1a for W1b/W1c: `MessageWindowReconciler` is now *policy* over the writer (which rows
   are gone), not a field writer. The same split should fall out for chats.
 - [ ] Expected side effect: the locking exposure largely dissolves. "Which of three writers needs the
