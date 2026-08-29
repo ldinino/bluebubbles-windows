@@ -20,9 +20,6 @@ public class ActionHandler : IActionHandler
     public event EventHandler<TypingIndicatorPayload>? TypingIndicatorChanged;
     public event EventHandler<ChatReadStatusPayload>? ChatReadStatusChanged;
     public event EventHandler<ChatUpdatedEventArgs>? ChatUpdated;
-    public event EventHandler<JsonElement>? IncomingFaceTime;
-    public event EventHandler<JsonElement>? FaceTimeStatusChanged;
-    public event EventHandler<List<string>>? AliasesRemoved;
     public event EventHandler<ScheduledMessagesEventArgs>? ScheduledMessagesChanged;
 
     public bool ShouldNotifyForNewMessageGuid(string guid)
@@ -64,15 +61,6 @@ public class ActionHandler : IActionHandler
             case SocketEvents.ParticipantRemoved:
             case SocketEvents.ParticipantLeft:
                 ChatUpdated?.Invoke(this, new ChatUpdatedEventArgs(eventName, data, ExtractChat(data)));
-                break;
-            case SocketEvents.IncomingFacetime:
-                IncomingFaceTime?.Invoke(this, data);
-                break;
-            case SocketEvents.FtCallStatusChanged:
-                FaceTimeStatusChanged?.Invoke(this, data);
-                break;
-            case SocketEvents.IMessageAliasesRemoved:
-                HandleAliasesRemoved(data);
                 break;
             case SocketEvents.ScheduledMessageCreated:
             case SocketEvents.ScheduledMessageUpdated:
@@ -213,14 +201,5 @@ public class ActionHandler : IActionHandler
         if (chatGuid is null) return;
 
         ChatReadStatusChanged?.Invoke(this, new ChatReadStatusPayload(chatGuid, readEl.GetBoolean()));
-    }
-
-    private void HandleAliasesRemoved(JsonElement data)
-    {
-        if (!data.TryGetProperty("aliases", out var aliasesEl)) return;
-
-        var aliases = aliasesEl.Deserialize<List<string>>();
-        if (aliases is not null)
-            AliasesRemoved?.Invoke(this, aliases);
     }
 }

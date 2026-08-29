@@ -149,33 +149,16 @@ public interface IBlueBubblesApiService
         CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> GetIMessageAvailabilityAsync(string address,
         CancellationToken ct = default);
-    Task<ApiResponse<JsonElement>> GetFaceTimeAvailabilityAsync(string address,
-        CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> GetHandleCountAsync(
         CancellationToken ct = default);
 
-    // ── iCloud / FindMy ──
+    // ── iCloud ──
 
-    Task<ApiResponse<List<FindMyDevice>>> GetFindMyDevicesAsync(
-        CancellationToken ct = default);
-    Task<ApiResponse<List<FindMyDevice>>> RefreshFindMyDevicesAsync(
-        CancellationToken ct = default);
-    Task<ApiResponse<List<FindMyFriend>>> GetFindMyFriendsAsync(
-        CancellationToken ct = default);
-    Task<ApiResponse<List<FindMyFriend>>> RefreshFindMyFriendsAsync(
-        CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> GetAccountInfoAsync(
         CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> GetAccountContactAsync(
         CancellationToken ct = default);
     Task<ApiResponse<JsonElement>> SetAccountAliasAsync(string alias,
-        CancellationToken ct = default);
-
-    // ── FaceTime ──
-
-    Task<ApiResponse<JsonElement>> AnswerFaceTimeAsync(string callUuid,
-        CancellationToken ct = default);
-    Task<ApiResponse<JsonElement>> LeaveFaceTimeAsync(string callUuid,
         CancellationToken ct = default);
 
     // ── Backup ──

@@ -12,9 +12,6 @@ public static class SocketEvents
     public const string ParticipantAdded = "participant-added";
     public const string ParticipantRemoved = "participant-removed";
     public const string ParticipantLeft = "participant-left";
-    public const string IncomingFacetime = "incoming-facetime";
-    public const string FtCallStatusChanged = "ft-call-status-changed";
-    public const string IMessageAliasesRemoved = "imessage-aliases-removed";
     public const string ScheduledMessageCreated = "scheduled-message-created";
     public const string ScheduledMessageUpdated = "scheduled-message-updated";
     public const string ScheduledMessageDeleted = "scheduled-message-deleted";
