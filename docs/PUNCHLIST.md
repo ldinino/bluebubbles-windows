@@ -41,7 +41,12 @@
   on-screen newest images sat behind the whole page.
 - [ ] **The improvement itself is unverified.** Every post-fix run had all attachments already
   cached, so no auto-download fired and there is no after-order list and no time-to-first-visible
-  number. To settle it: open a thread containing undownloaded images with verbose logging on.
+  number.
+- [ ] **Repro (maintainer, 2026-08-29): reset the local cache, then open a thread fresh with verbose
+  logging on.** That forces every attachment back to `NotDownloaded`, which is the state the fix
+  changes behaviour in — and it is why every previous attempt measured nothing. Capture the
+  auto-download order and the time-to-first-visible, and compare against the pre-fix baseline below.
+  Depends on the draw-timing instrumentation in B2b to produce a time-to-first-visible number at all.
 - [ ] **Behaviour changes to watch for in use:** attachments in messages never scrolled to are no
   longer prefetched (intended), and scroll-back pages now auto-download where they never did before
   (`PrependMessages` never called `TriggerAutoDownload`). If fast scrolling now feels worse, this is
@@ -63,21 +68,26 @@
   control's dependency properties. Not investigated. Worth finding out *what* is republishing tile
   properties while idle — the answer may not be about avatars at all.
 
-#### B2b. No UI-layer logic in this codebase is testable
-- [ ] `BlueBubbles.Windows.Tests` references only `BlueBubbles.Core`, so `ChatViewModel`,
-  `MessageBubbleViewModel`, `AttachmentHolder` and `ImageLoader` are unreachable from any test. This
-  is what turned B2 from a fix into a research task, and it will do the same to the next UI bug.
-  Decide whether to add a `net8.0-windows` test project or accept human-only verification for the
-  view layer.
-- **Preferred approach, established by F5 (`38dc7c8`): lift the decision into Core, leave the
-  rendering in the view.** F5 needed "does this action raise the window?" to be testable. Rather
-  than reaching into `App.xaml.cs`, it extracted `ToastActivationRouter` — a pure function over
-  toast args returning an `ActivatesWindow` flag — into `BlueBubbles.Core`, where the existing suite
-  already runs. 19 tests, and a mutation of the rule fails. **This is the recommended pattern over a
-  `net8.0-windows` test project**, because it needs no new infrastructure and it moves the part
-  worth testing to where tests already are. Apply it per-bug rather than as a big-bang migration.
-- Residual gap the pattern does *not* close: the builder/rendering half stays human-only. F5's
-  button count had to be verified by reading source at review.
+#### B2b. UI verification is instrumentation-based — give verbose logging draw timing
+- **Reframed by the maintainer, 2026-08-29, and the evidence supports it.** This entry used to ask
+  whether to add a `net8.0-windows` test project. That is the wrong question: **every UI defect this
+  project has actually settled was settled by log counts, not tests** — B2f (10 decode starts / 5
+  stranded -> 4 / 0), B2h (discarded decode work 50% -> 21%, from a caller-breakdown table), B2g
+  (19 auto-downloads inside 20 ms in ascending date order). The missing capability is *measurement*,
+  not a test host.
+- [ ] **Add draw/decode timing to verbose logging.** Enough to answer "what did this cost and in what
+  order": decode start -> landed duration, relayout counts per control with the caller, and a
+  time-to-first-visible for a thread open. Aggregate it into a dumpable per-session summary rather
+  than leaving the reader to count lines in a log by hand, which is how B2f/B2h/B2g were each read.
+- Two consumers already waiting on it: **B2g** cannot produce a time-to-first-visible number without
+  it, and **B2k** (an idle avatar reaching `gen=13` with nobody touching the app) is exactly the
+  "what is republishing these properties" question this instrumentation answers.
+- **The logic half is already handled, and differently.** F5 (`38dc7c8`) established the pattern:
+  lift the *decision* into `BlueBubbles.Core` as a pure function (`ToastActivationRouter`, with
+  `ActivatesWindow`), where the existing suite already reaches it, and leave rendering in the view.
+  Apply that per-bug. **Do not** add a `net8.0-windows` test project on the strength of this entry;
+  between the Core-decision pattern and draw timing, the residual gap is rendering itself, which is
+  eyeball work regardless.
 
 #### B2c. `GetMessagesByGuidsAsync` omits `.Include(m => m.Attachments)`
 - [ ] `LoadMessagesAsync` and `LoadMessagesAfterAsync` include it; this one doesn't. Harmless today
@@ -116,6 +126,17 @@ B2 (a writer that didn't write attachments), B6 (a writer that didn't write chat
 writers, two identity schemes) — are all the same shape. The one entity with a single writer through
 a shared helper is Attachments, which is also the one just proven correct in B7. That is the
 template.
+
+**Execution plan (head engineer, 2026-08-29) — measured, not assumed.** Counting construction sites
+by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHelper.cs` 1,
+`MessagesService.cs` 1 — all in `BlueBubbles.Core`. Every W2 target is in `BlueBubbles.Windows`
+(7 files, ViewModels/Views). So:
+- **W1b and W2 run in parallel — zero file overlap.** Separate worktrees under `..\scratch\`.
+- **W1b and W1c must be sequential**: they concentrate in the *same two files*
+  (`ChatsService.cs`, `SyncService.cs`). Two agents there would fight over every hunk.
+- **W1a-2 last**, as its own entry already requires.
+- W3 is a decision, not a diff — the head engineer settles "dead vs staged" with the maintainer.
+- Whoever lands second rebases on `main` before the PR.
 
 #### W1. One writer per entity, in Core
 - [x] **W1a. MessageEntity persistence — DONE** (`2c28e00`, merged `0e21ecc`). All field assignment
