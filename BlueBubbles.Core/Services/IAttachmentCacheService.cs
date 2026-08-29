@@ -1,9 +1,16 @@
 namespace BlueBubbles.Core.Services;
 
-public interface IAttachmentCacheService
+/// <summary>Read-only view of the attachment cache: can answer "is this already on disk" and
+/// nothing else. An export depends on this rather than on <see cref="IAttachmentCacheService"/>
+/// so that fetching from the server mid-export is impossible by construction.</summary>
+public interface ICachedAttachmentLookup
 {
     bool IsCached(string attachmentGuid);
     string? GetCachedPath(string attachmentGuid);
+}
+
+public interface IAttachmentCacheService : ICachedAttachmentLookup
+{
     /// <summary>Fetches and caches the attachment. Set <paramref name="force"/> to route through the
     /// server's force-download endpoint, which first pulls an iCloud-purged file down onto the Mac.</summary>
     Task<string> DownloadAsync(string attachmentGuid, string? transferName,
