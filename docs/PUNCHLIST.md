@@ -46,17 +46,23 @@
   `ConversationListViewModel`'s `if (e.AffectsConversationList)` needs a UI dispatcher, so the
   subscriber half is verified by compilation and review only (B2b).
 
-#### B9. Class B attachment groups may still double-render — a *different* bug from B7
-- [ ] Carried forward from B7 (archived, shipped 0.24.0). B7 fixed **Class A**: two rows sharing
-  `(MessageId, OriginalRowId)`, caused by Apple rewriting the GUID mid-transfer. The pre-sync
-  snapshot also held **41 groups / 82 rows** with *distinct* `OriginalRowId`s — two genuine server
-  rows for the same file. Those are legitimate and must survive; collapsing them client-side would
-  fight the server. **If photos still double after 0.24.0, this is the remaining cause** and it
-  needs a server-side answer, not another dedupe rule.
-- Maintainer's 2026-08-23 pass saw no doubling, but Class B was not specifically hunted for.
-- [ ] **Unexplained, worth knowing before assuming the write-side fix is sufficient:** Class A begins
-  abruptly at `OriginalRowId` 9022 / 2026-06-08 in a cache reaching back to 2025-08-02. Something
-  changed then and it was not this codebase.
+#### B9. Class B attachment groups — **CLOSED 2026-08-29: not reproducible in the field**
+- **Closed on the maintainer's observation:** running 0.24.0 across several machines over an extended
+  period with no double render seen.
+- **This is field evidence, not a proof of impossibility — and it is stronger than plain absence.**
+  The 41 Class B groups (82 rows with *distinct* `OriginalRowId`s for the same file) were measured
+  as present in the real cache during B7. So the hazard population exists and is **not** rendering
+  twice, rather than the population having gone away. That is what makes the closure honest.
+- **What B7 actually fixed was Class A** — two rows sharing `(MessageId, OriginalRowId)`, caused by
+  Apple rewriting the GUID mid-transfer. Class B rows are two genuine server rows for the same file;
+  collapsing them client-side would fight the server and is still the wrong fix.
+- [ ] **If photos ever double again, start here**, and check Class B *before* touching dedupe: group
+  `Attachments` by `(MessageId, TransferName)` having distinct `OriginalRowId`s, and confirm whether
+  the duplicate pair is one of those groups. If it is, the answer is server-side, not another
+  client-side identity rule.
+- **Still unexplained, kept because it was never accounted for:** Class A began abruptly at
+  `OriginalRowId` 9022 / 2026-06-08 in a cache reaching back to 2025-08-02. Something changed then
+  and it was not this codebase.
 
 #### B10. `ChatDetailsViewModel.RefreshParticipantsAsync` reads stale in-memory chats
 - [ ] Carried forward from B6 (archived). It reads `_chatsService.Chats` rather than the database,
