@@ -1,9 +1,12 @@
+using System.ComponentModel;
 using System.Text.Json;
 using BlueBubbles.Core.Models;
 
 namespace BlueBubbles.Core.Services;
 
-public interface ISocketService
+// INotifyPropertyChanged is part of the contract so consumers can observe State without
+// downcasting the implementation to a concrete MVVM base type.
+public interface ISocketService : INotifyPropertyChanged
 {
     SocketState State { get; }
     string LastError { get; }

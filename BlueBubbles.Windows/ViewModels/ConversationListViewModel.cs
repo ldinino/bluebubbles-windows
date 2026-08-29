@@ -16,6 +16,9 @@ public partial class ConversationListViewModel : ObservableObject
     private readonly ISyncService _syncService;
     private readonly IWindowStateService _windowState;
 
+    private ConnectionState CurrentConnectionState =>
+        ConnectionStatusPolicy.FromSocketState(_socketService.State);
+
     private List<ConversationTileViewModel> _allTiles = [];
     private List<ConversationTileViewModel> _archivedTiles = [];
 
@@ -30,7 +33,7 @@ public partial class ConversationListViewModel : ObservableObject
     [ObservableProperty] public partial string SearchQuery { get; set; }
     [ObservableProperty] public partial bool IsLoading { get; set; }
     [ObservableProperty] public partial bool IsShowingArchived { get; set; }
-    [ObservableProperty] public partial SocketState ConnectionState { get; set; }
+    [ObservableProperty] public partial ConnectionState ConnectionState { get; set; }
     [ObservableProperty] public partial bool IsSyncing { get; set; }
 
     public ConversationListViewModel(
@@ -72,15 +75,12 @@ public partial class ConversationListViewModel : ObservableObject
         _actionHandler.ChatReadStatusChanged += OnChatReadStatusChanged;
         _actionHandler.ChatUpdated += OnChatUpdated;
 
-        if (_socketService is ObservableObject observable)
+        _socketService.PropertyChanged += (_, e) =>
         {
-            observable.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(ISocketService.State))
-                    RunOnUI(() => ConnectionState = _socketService.State);
-            };
-        }
-        ConnectionState = _socketService.State;
+            if (e.PropertyName == nameof(ISocketService.State))
+                RunOnUI(() => ConnectionState = CurrentConnectionState);
+        };
+        ConnectionState = CurrentConnectionState;
 
         _syncService.SyncStateChanged += (_, syncing) =>
             RunOnUI(() => IsSyncing = syncing);
@@ -118,7 +118,7 @@ public partial class ConversationListViewModel : ObservableObject
             IsLoading = false;
         }
 
-        if (_socketService.State != SocketState.Connected)
+        if (CurrentConnectionState != Core.Models.ConnectionState.Connected)
         {
             try { await _socketService.ConnectAsync(); }
             catch { /* socket will retry via built-in reconnection */ }

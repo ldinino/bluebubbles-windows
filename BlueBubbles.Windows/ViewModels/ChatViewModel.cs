@@ -17,7 +17,7 @@ public partial class ChatViewModel : ObservableObject
     private readonly IActionHandler _actionHandler;
     private readonly IOutgoingMessageService _outgoingService;
     private readonly IChatsService _chatsService;
-    private readonly ISocketService _socketService;
+    private readonly ITypingIndicatorService _typingIndicators;
     private readonly IAttachmentCacheService _attachmentCache;
     private readonly ISyncService _syncService;
     private readonly IScheduledMessageService _scheduledMessages;
@@ -46,7 +46,7 @@ public partial class ChatViewModel : ObservableObject
     // to the load's completion so it never mutates the message list concurrently.
     private bool _reapplyMergePending;
     private readonly HashSet<string> _pendingTempGuids = [];
-    private Timer? _typingDebounce;   // send-side: throttles our "started/stopped-typing" emits
+    private Timer? _typingDebounce;   // send-side: throttles our typing-state emits
     private Timer? _typingExpiry;     // receive-side: auto-clears a stuck "… is typing" bubble
 
     private const int PageSize = 50;
@@ -104,7 +104,7 @@ public partial class ChatViewModel : ObservableObject
         IActionHandler actionHandler,
         IOutgoingMessageService outgoingService,
         IChatsService chatsService,
-        ISocketService socketService,
+        ITypingIndicatorService typingIndicators,
         IAttachmentCacheService attachmentCache,
         ISyncService syncService,
         IScheduledMessageService scheduledMessages,
@@ -116,7 +116,7 @@ public partial class ChatViewModel : ObservableObject
         _actionHandler = actionHandler;
         _outgoingService = outgoingService;
         _chatsService = chatsService;
-        _socketService = socketService;
+        _typingIndicators = typingIndicators;
         _attachmentCache = attachmentCache;
         _syncService = syncService;
         _scheduledMessages = scheduledMessages;
@@ -665,15 +665,13 @@ public partial class ChatViewModel : ObservableObject
 
         if (_typingDebounce is null)
         {
-            _ = _socketService.SendMessageAsync("started-typing",
-                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+            _ = _typingIndicators.SetTypingStateAsync(_chatGuid, TypingState.Started);
         }
 
         _typingDebounce?.Dispose();
         _typingDebounce = new Timer(_ =>
         {
-            _ = _socketService.SendMessageAsync("stopped-typing",
-                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+            _ = _typingIndicators.SetTypingStateAsync(_chatGuid, TypingState.Stopped);
             _typingDebounce = null;
         }, null, 3000, Timeout.Infinite);
     }
@@ -684,8 +682,7 @@ public partial class ChatViewModel : ObservableObject
         {
             _typingDebounce.Dispose();
             _typingDebounce = null;
-            _ = _socketService.SendMessageAsync("stopped-typing",
-                new Dictionary<string, object?> { ["chatGuid"] = _chatGuid });
+            _ = _typingIndicators.SetTypingStateAsync(_chatGuid, TypingState.Stopped);
         }
     }
 

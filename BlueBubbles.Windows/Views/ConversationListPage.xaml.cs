@@ -107,25 +107,24 @@ public sealed partial class ConversationListPage : Page
 
     private void UpdateConnectionBar()
     {
-        switch (_vm.ConnectionState)
+        switch (ConnectionStatusPolicy.ResolveBanner(_vm.ConnectionState, _vm.IsSyncing))
         {
-            case SocketState.Connected when _vm.IsSyncing:
+            case ConnectionBanner.Syncing:
                 ShowConnectionBar("Syncing new messages…", spinner: true, glyph: null,
                     background: "SystemFillColorAttentionBackgroundBrush",
                     foreground: "TextFillColorPrimaryBrush");
                 break;
-            case SocketState.Connecting:
+            case ConnectionBanner.Connecting:
                 ShowConnectionBar("Connecting…", spinner: true, glyph: null,
                     background: "SystemFillColorAttentionBackgroundBrush",
                     foreground: "TextFillColorPrimaryBrush");
                 break;
-            case SocketState.Error:
-            case SocketState.Disconnected:
+            case ConnectionBanner.Disconnected:
                 ShowConnectionBar("Disconnected from server", spinner: false, glyph: "",
                     background: "SystemFillColorCautionBackgroundBrush",
                     foreground: "SystemFillColorCautionBrush");
                 break;
-            case SocketState.Connected:
+            case ConnectionBanner.Hidden:
             default:
                 ConnectionBar.Visibility = Visibility.Collapsed;
                 ConnectionBarRing.IsActive = false;

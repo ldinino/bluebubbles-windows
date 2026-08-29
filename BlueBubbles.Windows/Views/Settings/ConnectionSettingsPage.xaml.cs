@@ -61,21 +61,13 @@ public sealed partial class ConnectionSettingsPage : Page
         UrlText.Text = string.IsNullOrEmpty(_vm.ServerUrl) ? "Not configured" : _vm.ServerUrl;
         ProxyText.Text = string.IsNullOrEmpty(_config.ProxyService) ? "Unknown" : _config.ProxyService;
 
-        switch (_vm.ConnectionState)
+        StatusText.Text = ConnectionStatusPolicy.DescribeStatus(_vm.ConnectionState);
+        StatusText.Foreground = new SolidColorBrush(_vm.ConnectionState switch
         {
-            case SocketState.Connected:
-                StatusText.Text = "Connected";
-                StatusText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
-                break;
-            case SocketState.Connecting:
-                StatusText.Text = "Connecting...";
-                StatusText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Orange);
-                break;
-            default:
-                StatusText.Text = "Disconnected";
-                StatusText.Foreground = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
-                break;
-        }
+            ConnectionState.Connected => Microsoft.UI.Colors.LimeGreen,
+            ConnectionState.Connecting => Microsoft.UI.Colors.Orange,
+            _ => Microsoft.UI.Colors.OrangeRed
+        });
     }
 
     private void UpdateVCardDisplay()
