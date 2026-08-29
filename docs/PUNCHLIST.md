@@ -65,30 +65,40 @@
   `OriginalRowId` 9022 / 2026-06-08 in a cache reaching back to 2025-08-02. Something changed then
   and it was not this codebase.
 
-#### B10. Chat details pane races the persistence path on participant changes
-- **Upgraded from "reads stale in-memory chats" after tracing it properly, 2026-08-29. It is a
-  RACE, not a one-beat lag**, and that changes the fix.
-- **Measured fan-out:** one `_actionHandler.ChatUpdated` event feeds **two independent async paths**.
-  `IncomingMessageProcessor.cs:44-48` writes the event to a **channel drained on a background task**,
-  which eventually calls `ChatsService.ApplyChatUpdateAsync` — and that only refreshes the in-memory
-  list at its very **last** line (`ChatsService.cs:289`, `await LoadChatsAsync()`). Meanwhile
-  `ChatDetailsViewModel.cs:327-337` enqueues straight onto the UI dispatcher and refreshes
-  immediately. Nothing orders the two.
-- **`RefreshParticipantsAsync` (`ChatDetailsViewModel.cs:301-318`) reads `_chatsService.Chats`**, so
-  with an open details pane it will usually render the *pre-update* participant set.
-- **Why the 2026-08-29 rename test passed anyway:** the display name is applied straight from the
-  payload in the view model's own `ApplyChatUpdateAsync(kind, chat)`. Only the participant list goes
-  through the stale in-memory read. **Renames look fine; add/remove participant is the broken case.**
-- [ ] Fix direction (head engineer, open to argument): prefer the payload's own participants — the
-  same source the name already uses — with the in-memory list only as a fallback. Note
-  `ChatsService.ResolveParticipantsAsync` (`:292-310`) documents that the payload's participants are
-  preferred but **can be absent**, returning an empty list on failure, so the fallback is load-bearing
-  and must not blank a populated pane.
-- Alternative worth measuring against it: give the pane an ordering signal so it refreshes *after*
-  persistence. Cleaner, but `ApplyChatUpdateAsync` currently raises no event at all, so it means
-  adding one — larger blast radius.
-- Related, already handled: W1b left a null guard inside `RemoveParticipantsMissingFrom` and W1c
-  restructured the stale-set computation. Neither touches this read.
+#### B10. Chat details pane raced the persistence path on participant changes — **FIXED** (`6a94524`, PR 15, merged `2004380`)
+- **It is a RACE, not a one-beat lag.** One `_actionHandler.ChatUpdated` event fans out to two
+  independent async paths: `IncomingMessageProcessor.cs:43-48` only writes to a channel drained on a
+  background `Task.Run(ProcessAsync)`, while `ChatDetailsViewModel.cs:326-337` goes straight to the
+  UI dispatcher. `ChatsService.ApplyChatUpdateAsync` refreshes the in-memory list only on its **last**
+  line (`:289`). Nothing orders them, so the pane usually rendered the pre-update set.
+- **The asymmetry that hid it for so long:** `ChatDisplayName = chat.DisplayName` is applied inline
+  from the payload, participants were not. **A passing rename test proves nothing here** — add/remove
+  participant was the broken case.
+- [x] Fixed by `BlueBubbles.Core/Utils/DetailsParticipants.Resolve(payload, cached)` — a pure
+  function in Core so the suite can reach it. Payload preferred, cached list as fallback, and a
+  cached entity is reused when the address matches so rows keep DB identity. 596/596.
+- **The ordering-signal alternative was rejected on evidence, and the agent's argument is better than
+  my brief's.** `ApplyChatUpdateAsync` only touches participants when
+  `chatData.Participants is { Count: > 0 }` (`ChatsService.cs:274`) — I checked, and it does **not**
+  route through `ResolveParticipantsAsync`, so there is no API-fallback that would rescue an empty
+  payload. Therefore an "after persistence" refresh would re-read an unchanged cache and gain
+  nothing exactly when the payload is empty, while firing for every socket chat update. Strictly
+  more blast radius for strictly less coverage.
+- Verified by me: mutating away the cached-entity reuse fails
+  `Resolve_ReusesCachedEntity_ForKnownAddress` (595/596). The agent's own negative control reduced
+  the resolver to cache-only — literal pre-fix behaviour — and failed 3 tests.
+- **Honest gap, and the agent said so rather than papering over it: NOT REPRODUCED.** An in-process
+  attempt failed because `TestDbContextFactory`'s awaits complete synchronously, so
+  `ApplyChatUpdateAsync` ran to completion before yielding. The timing-dependent test was removed
+  rather than kept. The bug is source-verified, not observed.
+- [ ] **THE ONE ASSUMPTION THE FIX RESTS ON:** that a `participant-added` / `participant-removed`
+  payload actually carries a participant list. If the server omits it, `Resolve` falls back to the
+  cache and the bug survives unchanged. **Cannot be checked without a live participant event** — no
+  regression risk either way, since the fallback is exactly today's behaviour, but the fix is
+  unproven until someone adds or removes a group member from another device with the pane open.
+- [ ] Out of scope, worth its own look: the **local** `AddParticipantAsync` / `RemoveParticipantAsync`
+  paths refresh from the cache with no payload, so if `ChatsService.AddParticipantAsync` does not
+  reload chats the pane is stale there too, by a different route.
 
 #### B2g. Images decoded oldest-first — **CLOSED 2026-08-29: fix measured working**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
