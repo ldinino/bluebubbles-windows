@@ -82,9 +82,13 @@
   number.
 - [ ] **Repro (maintainer, 2026-08-29): reset the local cache, then open a thread fresh with verbose
   logging on.** That forces every attachment back to `NotDownloaded`, which is the state the fix
-  changes behaviour in — and it is why every previous attempt measured nothing. Capture the
-  auto-download order and the time-to-first-visible, and compare against the pre-fix baseline below.
-  Depends on the draw-timing instrumentation in B2b to produce a time-to-first-visible number at all.
+  changes behaviour in — and it is why every previous attempt measured nothing.
+- [x] **No longer blocked — B2b (`6dd6534`) shipped the instrumentation.** A thread open now emits
+  `thread.open->first-image` as a duration and each download is numbered, so both the ordering
+  evidence and the time-to-first-visible fall out of the rollup with no line counting.
+- [ ] **B2b's own capture settles nothing here** — it was an all-cached run: `attach.download`
+  recorded **0** samples and only 3 decodes fired. This needs the cache reset to produce a real
+  before/after against the pre-fix baseline below.
 - [ ] **Behaviour changes to watch for in use:** attachments in messages never scrolled to are no
   longer prefetched (intended), and scroll-back pages now auto-download where they never did before
   (`PrependMessages` never called `TriggerAutoDownload`). If fast scrolling now feels worse, this is
@@ -103,30 +107,60 @@
 #### B2k. An idle avatar control relayouts repeatedly with no user interaction
 - [ ] `Avatar[14]` reached `gen=13` during a ~90-second idle window with nobody touching the app.
   Every relayout was a `cache HIT`, so it costs no decodes, but something is churning that
-  control's dependency properties. Not investigated. Worth finding out *what* is republishing tile
-  properties while idle — the answer may not be about avatars at all.
+  control's dependency properties. Worth finding out *what* is republishing tile properties while
+  idle — the answer may not be about avatars at all.
+- [x] **Now answerable — B2b (`6dd6534`) added trigger attribution.** `QueueRelayout` accumulates the
+  dependency-property names behind each coalesced relayout and the rollup buckets them as
+  `avatar.relayout.by:<names>`, with anything unattributed labelled as such.
+- [ ] **Did not reproduce during B2b's capture:** 54 relayouts, all attributed, none unattributed,
+  none during idle. The machinery works; the churn needs a longer or different window. Reproduce
+  first, then read the attribution bucket — do not theorise ahead of a capture.
 
-#### B2b. UI verification is instrumentation-based — give verbose logging draw timing
-- **Reframed by the maintainer, 2026-08-29, and the evidence supports it.** This entry used to ask
-  whether to add a `net8.0-windows` test project. That is the wrong question: **every UI defect this
-  project has actually settled was settled by log counts, not tests** — B2f (10 decode starts / 5
-  stranded -> 4 / 0), B2h (discarded decode work 50% -> 21%, from a caller-breakdown table), B2g
-  (19 auto-downloads inside 20 ms in ascending date order). The missing capability is *measurement*,
-  not a test host.
-- [ ] **Add draw/decode timing to verbose logging.** Enough to answer "what did this cost and in what
-  order": decode start -> landed duration, relayout counts per control with the caller, and a
-  time-to-first-visible for a thread open. Aggregate it into a dumpable per-session summary rather
-  than leaving the reader to count lines in a log by hand, which is how B2f/B2h/B2g were each read.
-- Two consumers already waiting on it: **B2g** cannot produce a time-to-first-visible number without
-  it, and **B2k** (an idle avatar reaching `gen=13` with nobody touching the app) is exactly the
-  "what is republishing these properties" question this instrumentation answers.
-- **The logic half is already handled, and differently.** F5 (`38dc7c8`) established the pattern:
-  lift the *decision* into `BlueBubbles.Core` as a pure function (`ToastActivationRouter`, with
-  `ActivatesWindow`), where the existing suite already reaches it, and leave rendering in the view.
-  Apply that per-bug. **Do not** add a `net8.0-windows` test project on the strength of this entry;
-  between the Core-decision pattern and draw timing, the residual gap is rendering itself, which is
-  eyeball work regardless.
+#### B2b. Draw timing for verbose logging — **DONE** (`f650eb2` + `6e07472`, merged `6dd6534`)
+- **Reframed by the maintainer 2026-08-29 and the evidence backed it:** every UI defect this project
+  has settled was settled by log counts, not tests — B2f (10 decode starts / 5 stranded -> 4 / 0),
+  B2h (discarded decode work 50% -> 21%), B2g (19 auto-downloads inside 20 ms). The missing
+  capability was *measurement*, not a test host.
+- **Two gaps measured before building, both confirmed by the agent:** `Stopwatch|ElapsedMilliseconds`
+  had **zero matches across the whole solution** — every before/after ever produced here was a
+  *count*, never a duration — and the image path (`ImageLoader`, `AttachmentHolder`, `ChatBubble`,
+  `AttachmentViewModel`) had **zero `AppLog` calls**, dark since B2e deleted `[attach-diag]`.
+- [x] Shipped: `BlueBubbles.Core/Diagnostics/` — `DurationSeries` (count/total/min/max/percentiles),
+  `PerfSession`, `PerfSummaryFormatter`, `PerfStats` facade. All maths in **Core** so it is reachable
+  by the suite (the F5 pattern); the view layer only supplies samples. Call sites in
+  `AttachmentHolder`, `AvatarControl`, `ChatViewModel`, `AttachmentViewModel`. Dumped from
+  Settings > About and automatically on window close. 590/590 (573 + 17).
+- **Free when off, which was the non-negotiable.** `PerfStats.Timestamp()` returns a raw `long` 0
+  sentinel rather than allocating a `Stopwatch`; every recorder returns early. Verified by me:
+  removing the `!IsEnabled` guard from `Count` fails `Facade_IsInertWhileVerboseLoggingIsOff`
+  (589/590).
+- **B2h's fix survived the refactor** — checked, because `AvatarControl` is where it lives:
+  `OnLoaded` still calls `QueueRelayout`, not `RefreshLayout` directly. The split into a timing
+  wrapper + `RefreshLayoutCore` is behaviour-neutral, and with logging off `NoteTrigger` returns
+  early so no trigger string is ever built. Whole diff is 716 insertions / **6 deletions**.
+- **A coverage hole I found and closed (`9963d59`).** My own mutation — deleting `Array.Sort` from
+  `Percentile` — **survived at 590/590**. Cause was a too-kind fixture, not a code bug: the median
+  test used `{90,10,50,70,30}`, which puts **50 at both insertion index 2 and sorted index 2**, so
+  the assertion passed either way *while carrying a comment claiming it pinned the sort*. Changed to
+  `{90,10,30,70,50}`; the same mutation now fails `DurationSeries_MedianOfOddCountIsTheMiddleSample`.
+  **A test whose comment claims coverage it does not have is worse than no test** — it stops anyone
+  looking.
+- [ ] Human-only: the Settings > About "Perf Summary" button has never been clicked. The on-close
+  dump exercises the identical `PerfStats.Dump()` path and is proven.
+- Out of scope, still open: this does **not** make the `AffectsConversationList` subscriber link
+  testable. W1a-2 and B8 both depend on that one line and it remains compilation-and-review only.
 
+#### B2m. Avatar decodes are far slower than anyone assumed — newly measurable
+- [ ] **First real numbers, from B2b's rollup on a normal launch:** `avatar.decode` n=14,
+  **total 6530 ms**, median 233.8 ms, **p95 1047.7 ms, max 1077.9 ms**. For cached contact photos
+  that is much larger than expected, and nobody has ever had this number before.
+- [ ] Also measured: `avatar.relayout.by:Loaded` = **25 of 54** relayouts. Nearly half are triggered
+  by container realization with **no property change at all** — a coalescing opportunity the current
+  one-tick window does not catch.
+- `avatar.decode.stale` = 4, which **matches B2j's "four discarded decodes per launch" exactly**,
+  now measured rather than hand-counted — a good cross-check that the instrumentation agrees with
+  the earlier manual analysis.
+- Do not act on this without a second capture: one session, one machine, cache state unknown.
 #### B2c. `GetMessagesByGuidsAsync` omitted `.Include(m => m.Attachments)` — **FIXED** (`93713a9`, merged `a84354f`)
 - [x] One line, plus `GetMessagesByGuids_IncludesAttachments`. 573/573. Negative control run:
   removing the `.Include` again fails that test and only that test (572/573).
