@@ -91,11 +91,12 @@
   attempt failed because `TestDbContextFactory`'s awaits complete synchronously, so
   `ApplyChatUpdateAsync` ran to completion before yielding. The timing-dependent test was removed
   rather than kept. The bug is source-verified, not observed.
-- [ ] **THE ONE ASSUMPTION THE FIX RESTS ON:** that a `participant-added` / `participant-removed`
-  payload actually carries a participant list. If the server omits it, `Resolve` falls back to the
-  cache and the bug survives unchanged. **Cannot be checked without a live participant event** — no
-  regression risk either way, since the fallback is exactly today's behaviour, but the fix is
-  unproven until someone adds or removes a group member from another device with the pane open.
+- [x] **THE ASSUMPTION IS CONFIRMED — maintainer verified live, 2026-08-29.** With the details pane
+  open, a participant change made from another device updated the member list **on its own, without
+  reopening the pane**. So a `participant-added` / `participant-removed` payload *does* carry a
+  participant list, and the payload-preferred resolver is doing real work rather than silently
+  falling through to the cache. **This also closes the only reproduction nobody had managed** — the
+  pre-fix behaviour is what used to leave that list stale.
 - [ ] Out of scope, worth its own look: the **local** `AddParticipantAsync` / `RemoveParticipantAsync`
   paths refresh from the cache with no payload, so if `ChatsService.AddParticipantAsync` does not
   reload chats the pane is stale there too, by a different route.
@@ -571,10 +572,13 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   reachable by the suite. Only the picker and status reporting are in the view. Right call.
 - Two real defects the agent's own real-data export exposed and then fixed: JSON over-escaped `+`
   and `’`, and transcripts carried no encoding marker.
-- [ ] **Human-only, not verified:** that the `FolderPicker` actually opens (interop matches the 7
-  existing call sites, but `FolderPicker` is new to this codebase and nothing automated covers it);
-  export UI usability; and the attachment **copy** path against real data — the sample run hit 1
-  uncached and 0 cached attachments, so copying is unit-tested only.
+- [x] **Human-verified by the maintainer, 2026-08-29:** the `FolderPicker` **does** open (it was new
+  to this codebase and the unpackaged HWND interop was the risk), a single-chat export completed,
+  and the resulting `.txt` transcript reads as a conversation. `.jsonl` + `.txt` + `manifest.json`
+  all produced.
+- [ ] **Still unverified:** the attachment **copy** path against real data. The agent's sample run
+  hit 1 uncached and 0 cached attachments, so copying is unit-tested only — an export of a chat with
+  photos already downloaded would close it.
 
 #### B11. Reply previews to attachment-only messages said "Message" — **FIXED** (`10e9cc4`, merged `6ac90ae`)
 - **Root cause, measured:** `ChatViewModel.EntityPreview` branched on
