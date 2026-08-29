@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Diagnostics;
 using BlueBubbles.Core.Services;
 using BlueBubbles.Windows.Services;
 using BlueBubbles.Windows.Views;
@@ -401,6 +402,10 @@ public sealed partial class MainWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         var appSettings = App.Services.GetRequiredService<AppSettings>();
+
+        // Draw-timing rollup (B2b) — written on the way out so a session that was never dumped by
+        // hand still leaves its numbers in the log. Inert when verbose logging is off.
+        if (PerfStats.IsEnabled) PerfStats.Dump("Perf summary (session, at close)");
 
         if (appSettings.CloseToTray && _trayService is not null && !_isClosingForReal)
         {

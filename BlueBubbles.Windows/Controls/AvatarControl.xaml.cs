@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.CompilerServices;
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Diagnostics;
 using BlueBubbles.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -73,6 +74,11 @@ public sealed partial class AvatarControl : UserControl
     private AppSettings? _settings;
     private bool _relayoutQueued;
 
+    // What asked for the pending relayout. Populated only while verbose logging is on (B2b): B2k
+    // needs to know *which* dependency property keeps republishing on an idle control, and the
+    // coalescing window means a single relayout can have several causes.
+    private readonly HashSet<string> _pendingTriggers = new(StringComparer.Ordinal);
+
     // Stable per-control id so the (Debug-only) flicker diagnostics can correlate log lines across a
     // recycled container's lifetime: which generation cleared the source, which async decode landed,
     // and which got dropped as stale. Silent unless log verbosity is raised to Debug (B3).
@@ -98,7 +104,7 @@ public sealed partial class AvatarControl : UserControl
         // Queued, not direct: the binding's property sets have usually already queued a relayout
         // that has not run yet. Calling RefreshLayout here instead would run it twice on one bind,
         // and the second run would re-decode the avatar because the first decode is still in flight.
-        QueueRelayout();
+        QueueRelayout("Loaded");
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -117,19 +123,42 @@ public sealed partial class AvatarControl : UserControl
     private void OnSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(AppSettings.ColorfulAvatars))
-            DispatcherQueue.TryEnqueue(RefreshLayout);
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                NoteTrigger("ColorfulAvatarsSetting");
+                RefreshLayout();
+            });
     }
 
     private static void OnPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (d is AvatarControl ctrl) ctrl.QueueRelayout();
+        if (d is AvatarControl ctrl) ctrl.QueueRelayout(PerfStats.IsEnabled ? TriggerName(e.Property) : null);
+    }
+
+    private static string TriggerName(DependencyProperty property) =>
+        property == AvatarImageProperty ? nameof(AvatarImage)
+        : property == InitialsProperty ? nameof(Initials)
+        : property == SizeProperty ? nameof(Size)
+        : property == IsGroupProperty ? nameof(IsGroup)
+        : property == GroupInitials1Property ? nameof(GroupInitials1)
+        : property == GroupInitials2Property ? nameof(GroupInitials2)
+        : property == GroupAvatarImage1Property ? nameof(GroupAvatarImage1)
+        : property == GroupAvatarImage2Property ? nameof(GroupAvatarImage2)
+        : "Unknown";
+
+    private void NoteTrigger(string? trigger)
+    {
+        if (trigger is null || !PerfStats.IsEnabled) return;
+        _pendingTriggers.Add(trigger);
     }
 
     // A single Refresh on the bound tile flips several dependency properties (initials, image, group
     // faces, …); without coalescing each one would run a full RefreshLayout. Collapse them into one
     // relayout per frame.
-    private void QueueRelayout()
+    private void QueueRelayout(string? trigger = null)
     {
+        NoteTrigger(trigger);
+
         if (_relayoutQueued) return;
         _relayoutQueued = true;
         if (!DispatcherQueue.TryEnqueue(() =>
@@ -145,6 +174,26 @@ public sealed partial class AvatarControl : UserControl
 
     private void RefreshLayout()
     {
+        // Measurement wrapper (B2b). Free when verbose logging is off: Timestamp() returns the 0
+        // sentinel and every recorder below returns before touching the session.
+        var startedAt = PerfStats.Timestamp();
+        var triggers = _pendingTriggers.Count == 0 ? null : string.Join("+", _pendingTriggers.OrderBy(t => t, StringComparer.Ordinal));
+        _pendingTriggers.Clear();
+
+        try
+        {
+            RefreshLayoutCore(triggers);
+        }
+        finally
+        {
+            PerfStats.Duration("avatar.relayout", startedAt);
+            PerfStats.Count("avatar.relayout");
+            if (triggers is not null) PerfStats.Count($"avatar.relayout.by:{triggers}");
+        }
+    }
+
+    private void RefreshLayoutCore(string? triggers)
+    {
         var generation = ++_loadGeneration;
 
         // Flicker tracing (B3). Dormant by default — the "Verbose logging" toggle is hidden and the
@@ -152,7 +201,7 @@ public sealed partial class AvatarControl : UserControl
         // hot path. Re-light it (un-hide the toggle) when debugging avatar issues again.
         if (AppLog.IsEnabled(LogLevel.Debug))
             AppLog.Debug(LogCategory.Ui,
-                $"Avatar[{_instanceId}] RefreshLayout gen={generation} group={IsGroup} " +
+                $"Avatar[{_instanceId}] RefreshLayout gen={generation} by={triggers ?? "unattributed"} group={IsGroup} " +
                 $"img={(AvatarImage?.Length ?? 0)}B initials='{Initials}'");
 
         // "Colorful avatars" toggles the tinted fallback.
@@ -236,9 +285,11 @@ public sealed partial class AvatarControl : UserControl
 
     private async Task SetPersonPicImageAsync(byte[] imageData, int generation)
     {
+        var startedAt = PerfStats.Timestamp();
         try
         {
             var bitmap = await DecodeAndCacheAsync(imageData);
+            PerfStats.Duration("avatar.decode", startedAt);
             var current = _loadGeneration;
             if (current == generation)
             {
@@ -247,6 +298,7 @@ public sealed partial class AvatarControl : UserControl
             }
             else
             {
+                PerfStats.Count("avatar.decode.stale");
                 if (AppLog.IsEnabled(LogLevel.Debug)) AppLog.Debug(LogCategory.Ui, $"Avatar[{_instanceId}] gen={generation} single decode STALE (now {current}) -> drop");
             }
         }
