@@ -127,10 +127,16 @@
   between the Core-decision pattern and draw timing, the residual gap is rendering itself, which is
   eyeball work regardless.
 
-#### B2c. `GetMessagesByGuidsAsync` omits `.Include(m => m.Attachments)`
-- [ ] `LoadMessagesAsync` and `LoadMessagesAfterAsync` include it; this one doesn't. Harmless today
-  (reconcile and reply snippets don't read attachments) but it is exactly the query a B2 fix would
-  reuse, and it would silently return zero attachments.
+#### B2c. `GetMessagesByGuidsAsync` omitted `.Include(m => m.Attachments)` — **FIXED** (`93713a9`, merged `a84354f`)
+- [x] One line, plus `GetMessagesByGuids_IncludesAttachments`. 573/573. Negative control run:
+  removing the `.Include` again fails that test and only that test (572/573).
+- **Confirmed latent, not live — checked rather than assumed.** Both production callers are in
+  `ChatViewModel` (`:1053` reconcile/soft-delete sweep, `:1320` reply-context backfill). The reply
+  path feeds `EntityPreview`, which reads the **`HasAttachments` scalar column**, not the navigation
+  collection — so nothing was reading zero attachments. The trap was that this query returned
+  entities *shaped like* `LoadMessagesAsync`'s (which includes at `:37-38`, as does
+  `LoadMessagesAfterAsync` at `:66-67`) while silently carrying an empty collection.
+  `LoadReactionsAsync` (`:348`) omits it correctly — reactions have no attachments.
 
 #### B2d. `ChatBubble.Unloaded` nulls `_currentVm` but not `_renderedContentForVm`
 - [ ] The two fields are meant to move together; no misrender case was constructed. Low confidence
