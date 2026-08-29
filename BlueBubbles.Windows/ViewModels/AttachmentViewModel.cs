@@ -165,6 +165,14 @@ public partial class AttachmentViewModel : ObservableObject
         catch (Exception ex)
         {
             PerfStats.Count("attach.download.error");
+
+            // Logged at Warn, not behind verbose: a third of downloads failing left no trace at all
+            // (B2n). The raw exception type and message are what identify the cause — Describe()
+            // deliberately rewrites them for the user and would hide it.
+            AppLog.Warn(LogCategory.Ui,
+                $"Attach download FAILED guid={_attachmentGuid} name='{DisplayName}' "
+                + $"force={force} bytes={TotalBytes} {ex.GetType().Name}: {ex.Message}");
+
             if (Interlocked.Read(ref _generationCounter) == generation)
             {
                 State = AttachmentState.Error;
