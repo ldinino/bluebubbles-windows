@@ -105,13 +105,15 @@ public class SyncService : ISyncService
 
                 if (chatEntity is null)
                 {
-                    chatEntity = new ChatEntity { Guid = chat.Guid };
-                    db.Chats.Add(chatEntity);
+                    chatEntity = ChatFieldMerge.InsertFromServer(db, chat);
+                }
+                else
+                {
+                    // Server-owned fields only; client-owned pin/mute/archive are preserved (the
+                    // server has no endpoint for them and returns defaults). See ChatFieldMerge.
+                    ChatFieldMerge.ApplyServerOwnedFields(chatEntity, chat);
                 }
 
-                // Server-owned fields only; client-owned pin/mute/archive are preserved (the server
-                // has no endpoint for them and returns defaults). See ChatFieldMerge.
-                ChatFieldMerge.ApplyServerOwnedFields(chatEntity, chat);
                 chatEntity.LatestMessageDate = chat.LastMessage?.DateCreated;
                 await db.SaveChangesAsync(ct);
 
@@ -522,16 +524,7 @@ public class SyncService : ISyncService
             return chat.Id;
         }
 
-        chat = new ChatEntity
-        {
-            Guid = chatGuid,
-            ChatIdentifier = chatData?.ChatIdentifier,
-            DisplayName = chatData?.DisplayName,
-            Service = chatData?.Service,
-            Style = chatData?.Style,
-            HasUnreadMessage = true
-        };
-        db.Chats.Add(chat);
+        chat = ChatFieldMerge.InsertForLiveMessage(db, chatGuid, chatData);
         await db.SaveChangesAsync(ct);
 
         if (chatData?.Participants is not null)

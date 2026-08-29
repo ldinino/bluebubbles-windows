@@ -1,10 +1,12 @@
+using BlueBubbles.Core.Data;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
 
 namespace BlueBubbles.Core.Services;
 
 /// <summary>
-/// The single authority on chat field ownership for the server-authoritative sync model.
+/// The single writer of <see cref="ChatEntity"/> columns, and the single authority on chat field
+/// ownership for the server-authoritative sync model.
 ///
 /// <para>The server is the source of truth for everything it actually stores, so every chat
 /// upsert (full sync, new-chat insert, delta) must funnel through <see cref="ApplyServerOwnedFields"/>
@@ -31,6 +33,14 @@ namespace BlueBubbles.Core.Services;
 /// that silence to <c>false</c> and clear the user's unread badge on every rename. Silence means
 /// "no opinion", not "read". Any future field the server sometimes omits belongs here too, guarded
 /// the same way — never preserved by an inline exception at a call site.</para>
+///
+/// <para><b>Inserts go through <see cref="InsertFromServer"/> or
+/// <see cref="InsertForLiveMessage"/>, never a hand-written object initializer.</b> Two of the four
+/// insert paths used to construct the row inline with a five-field subset, so a chat first seen via
+/// a live message or an incremental delta landed without its read-receipt/typing preferences, its
+/// name/icon locks or its last-read marker. The two entry points differ only in the one decision an
+/// insert is entitled to make, which is why the split is in the signature rather than in a
+/// boolean the callers each interpret.</para>
 /// </summary>
 internal static class ChatFieldMerge
 {
@@ -50,5 +60,41 @@ internal static class ChatFieldMerge
         target.LockChatName = server.LockChatName;
         target.LockChatIcon = server.LockChatIcon;
         target.LastReadMessageGuid = server.LastReadMessageGuid;
+    }
+
+    /// <summary>Inserts a chat the server told us about, with no client opinion of its own: read
+    /// state and delete stamp are the server's. Used by the sync paths and by local chat creation,
+    /// which have a server record in hand and no live message. Caller owns the save.</summary>
+    public static ChatEntity InsertFromServer(BlueBubblesDbContext db, Chat server)
+    {
+        var entity = new ChatEntity { Guid = server.Guid };
+        ApplyServerOwnedFields(entity, server);
+        db.Chats.Add(entity);
+        return entity;
+    }
+
+    /// <summary>Inserts a chat that exists because a message for it just arrived. The server fields
+    /// still come from <paramref name="server"/> when the payload carries one — the socket's
+    /// <c>new-message</c> event and the delta's embedded chat can both be absent or sparse — but two
+    /// columns are the client's call here and are applied last, on purpose:
+    /// <list type="bullet">
+    /// <item><c>HasUnreadMessage</c> is <c>true</c>. These payloads routinely omit
+    /// <c>hasUnreadMessage</c>, and the merge (correctly) treats that silence as "no opinion", so
+    /// leaving it to the merge would leave the column at its <c>false</c> default and new chats
+    /// would stop showing as unread. That decision belongs to the insert, not to a weakened
+    /// guard in the merge — the nullable guard is the B6 fix and must stay.</item>
+    /// <item><c>DateDeleted</c> is cleared. We are holding a live message for this chat right now,
+    /// so it is not deleted however stale the embedded record is — the same reasoning the
+    /// existing-row branches already apply when they resurrect a soft-deleted chat.</item>
+    /// </list>
+    /// Caller owns the save.</summary>
+    public static ChatEntity InsertForLiveMessage(BlueBubblesDbContext db, string guid, Chat? server)
+    {
+        var entity = new ChatEntity { Guid = guid };
+        if (server is not null) ApplyServerOwnedFields(entity, server);
+        entity.HasUnreadMessage = true;
+        entity.DateDeleted = null;
+        db.Chats.Add(entity);
+        return entity;
     }
 }
