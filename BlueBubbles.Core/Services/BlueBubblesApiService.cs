@@ -579,33 +579,11 @@ public class BlueBubblesApiService : IBlueBubblesApiService
         => GetAsync<JsonElement>("handle/availability/imessage",
             new Dictionary<string, string?> { ["address"] = address }, ct: ct);
 
-    public Task<ApiResponse<JsonElement>> GetFaceTimeAvailabilityAsync(
-        string address, CancellationToken ct = default)
-        => GetAsync<JsonElement>("handle/availability/facetime",
-            new Dictionary<string, string?> { ["address"] = address }, ct: ct);
-
     public Task<ApiResponse<JsonElement>> GetHandleCountAsync(
         CancellationToken ct = default)
         => GetAsync<JsonElement>("handle/count", ct: ct);
 
-    // ── iCloud / FindMy (7) ──
-
-    public Task<ApiResponse<List<FindMyDevice>>> GetFindMyDevicesAsync(
-        CancellationToken ct = default)
-        => GetAsync<List<FindMyDevice>>("icloud/findmy/devices", ct: ct);
-
-    public Task<ApiResponse<List<FindMyDevice>>> RefreshFindMyDevicesAsync(
-        CancellationToken ct = default)
-        => PostAsync<List<FindMyDevice>>("icloud/findmy/devices/refresh",
-            timeout: LongTimeout, ct: ct);
-
-    public Task<ApiResponse<List<FindMyFriend>>> GetFindMyFriendsAsync(
-        CancellationToken ct = default)
-        => GetAsync<List<FindMyFriend>>("icloud/findmy/friends", ct: ct);
-
-    public Task<ApiResponse<List<FindMyFriend>>> RefreshFindMyFriendsAsync(
-        CancellationToken ct = default)
-        => PostAsync<List<FindMyFriend>>("icloud/findmy/friends/refresh", ct: ct);
+    // ── iCloud (3) ──
 
     public Task<ApiResponse<JsonElement>> GetAccountInfoAsync(
         CancellationToken ct = default)
@@ -619,18 +597,6 @@ public class BlueBubblesApiService : IBlueBubblesApiService
         string alias, CancellationToken ct = default)
         => PostAsync<JsonElement>("icloud/account/alias",
             new { alias }, ct: ct);
-
-    // ── FaceTime (2) ──
-
-    public Task<ApiResponse<JsonElement>> AnswerFaceTimeAsync(
-        string callUuid, CancellationToken ct = default)
-        => PostAsync<JsonElement>($"facetime/answer/{callUuid}",
-            new { }, ct: ct);
-
-    public Task<ApiResponse<JsonElement>> LeaveFaceTimeAsync(
-        string callUuid, CancellationToken ct = default)
-        => PostAsync<JsonElement>($"facetime/leave/{callUuid}",
-            new { }, ct: ct);
 
     // ── Backup (3) ──
 

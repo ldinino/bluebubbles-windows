@@ -869,17 +869,10 @@ internal class SyncMockApiService : IBlueBubblesApiService
     public Task<ApiResponse<Handle>> GetHandleAsync(string guid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetHandleFocusStateAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetIMessageAvailabilityAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> GetFaceTimeAvailabilityAsync(string address, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetHandleCountAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<FindMyDevice>>> GetFindMyDevicesAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<FindMyDevice>>> RefreshFindMyDevicesAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<FindMyFriend>>> GetFindMyFriendsAsync(CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<List<FindMyFriend>>> RefreshFindMyFriendsAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetAccountInfoAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetAccountContactAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> SetAccountAliasAsync(string alias, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> AnswerFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<ApiResponse<JsonElement>> LeaveFaceTimeAsync(string callUuid, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> GetSettingsBackupAsync(CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> SetSettingsBackupAsync(string name, Dictionary<string, object?> data, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ApiResponse<JsonElement>> DeleteSettingsBackupAsync(string name, CancellationToken ct = default) => throw new NotImplementedException();

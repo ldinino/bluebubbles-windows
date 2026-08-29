@@ -93,27 +93,11 @@ public partial class SocketService : ObservableObject, ISocketService
         RegisterEvent(SocketEvents.ParticipantAdded);
         RegisterEvent(SocketEvents.ParticipantRemoved);
         RegisterEvent(SocketEvents.ParticipantLeft);
-        RegisterEvent(SocketEvents.FtCallStatusChanged);
-        RegisterEvent(SocketEvents.IMessageAliasesRemoved);
         RegisterEvent(SocketEvents.ScheduledMessageCreated);
         RegisterEvent(SocketEvents.ScheduledMessageUpdated);
         RegisterEvent(SocketEvents.ScheduledMessageDeleted);
         RegisterEvent(SocketEvents.ScheduledMessageSent);
         RegisterEvent(SocketEvents.ScheduledMessageError);
-
-        _socket.On(SocketEvents.IncomingFacetime, response =>
-        {
-            try
-            {
-                var raw = response.GetValue<string>();
-                var data = JsonSerializer.Deserialize<JsonElement>(raw);
-                _actionHandler.HandleEvent(SocketEvents.IncomingFacetime, data, "Socket");
-            }
-            catch (Exception ex)
-            {
-                AppLog.Error(LogCategory.Socket, $"Error handling IncomingFacetime: {ex}");
-            }
-        });
 
         UpdateState(SocketState.Connecting);
         await _socket.ConnectAsync();

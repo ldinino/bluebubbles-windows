@@ -179,36 +179,6 @@ public class ActionHandlerTests
     }
 
     [Fact]
-    public void FtCallStatusChanged_FiresEvent()
-    {
-        var handler = new ActionHandler();
-        JsonElement? received = null;
-        handler.FaceTimeStatusChanged += (_, e) => received = e;
-
-        var json = Parse("""{"status_id": 4, "uuid": "call-123"}""");
-
-        handler.HandleEvent(SocketEvents.FtCallStatusChanged, json, "Test");
-
-        Assert.NotNull(received);
-    }
-
-    [Fact]
-    public void AliasesRemoved_FiresEventWithList()
-    {
-        var handler = new ActionHandler();
-        List<string>? received = null;
-        handler.AliasesRemoved += (_, e) => received = e;
-
-        var json = Parse("""{"aliases": ["alias1@icloud.com", "alias2@icloud.com"]}""");
-
-        handler.HandleEvent(SocketEvents.IMessageAliasesRemoved, json, "Test");
-
-        Assert.NotNull(received);
-        Assert.Equal(2, received!.Count);
-        Assert.Contains("alias1@icloud.com", received);
-    }
-
-    [Fact]
     public void ShouldNotifyForNewMessageGuid_FirstCall_ReturnsTrue()
     {
         var handler = new ActionHandler();
