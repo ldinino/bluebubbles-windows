@@ -598,18 +598,43 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   lives in `BlueBubbles.Windows` and is **not reachable by the suite** — B2b's residual gap. No new
   test claims otherwise.
 
-#### B12. Group and system events never render — 37 rows show as empty bubbles
-- [ ] **Measured in the real cache:** `ItemType <> 0 OR GroupActionType <> 0` matches **37 rows** and
-  **all have NULL text**; a grep found **no group-event renderer anywhere** in the app. So "X named
-  the conversation", adds, removes and leaves currently display as blank bubbles.
-- **Most of the work already exists.** `ChatExportBuilder.DescribeEvent(entity, resolveSender)` is
-  **public, in Core, and tested** (F6) — it maps `(ItemType, GroupActionType)` to plain language and
-  labels anything unrecognised generically rather than guessing.
-- **The right shape is a separator, not a bubble.** `ChatPage.xaml` already template-switches on item
-  type (`MessageTemplate` for `MessageBubbleViewModel`, `DateSeparatorTemplate` for
-  `DateSeparatorViewModel`), so a system event should be its own centred item in that list — not a
-  chat bubble with an avatar and a tail. That is why this is not a two-line fix.
-- Low severity, high visibility: an empty bubble reads as a broken app.
+#### B12. Group and system events never rendered — **FIXED** (`38ffde8`, PR 17, merged `1ea44e0`)
+- **Measured in the real cache:** `ItemType <> 0 OR GroupActionType <> 0` matched **37 rows**, all
+  with NULL text, and no renderer existed anywhere — so name changes, adds, removes and leaves drew
+  as blank bubbles.
+- [x] Now a `SystemEventViewModel` with its own centred template alongside `DateSeparatorViewModel`,
+  emitted by `CreateTimelineItems`. Not a bubble: no sender side, tail, avatar, reactions or
+  attachments. 647/647 (636 + 11).
+- **One implementation, not two:** `ChatExportBuilder.DescribeEvent` was **moved** to
+  `BlueBubbles.Core/Utils/SystemEventDescriber.cs` and the export delegates to it, so the transcript
+  and the in-app timeline cannot drift. A `selfLabel` parameter keeps the transcript saying "Me"
+  while the UI says "You"; export output is unchanged (verified — the export passes `SelfSender`
+  explicitly).
+- **The agent found three knock-ons its own change would have introduced**, none of which were in my
+  brief, and all of which would have been subtle in use:
+  - `PruneOrphanDateSeparators` would have deleted a separator whose only follower is an event.
+  - `UpdateTails` would not have broken the tail run around one.
+  - **`AppendNewerMessagesFromDbAsync` derived both its watermark and its shown-GUID set from
+    bubbles only**, so every post-sync reconcile would have re-appended the same event *forever*.
+  All three fixed by spanning both item types; verified in the diff.
+- Nothing depended on system events being bubbles: every GUID lookup (reaction hosting, reply
+  resolution on both paths, delete, edit, unsend, scroll-to-message) already filters with
+  `OfType<MessageBubbleViewModel>()`, and export reads entities, not view models. **A system event
+  was never a valid reply origin or reaction host, so excluding it is correct, not lossy.**
+- Verified by me: mutating `IsSystemEvent` to ignore `GroupActionType` — a plausible partial
+  implementation — fails `NonZeroGroupActionTypeAloneIsASystemEvent` (646/647). The agent's own
+  mutation (`IsSystemEvent => false`) failed 9.
+- **Coverage stated honestly:** the new tests cover the Core decision and wording only.
+  `SystemEventViewModel`, the template-selector arm, the XAML template and the `ChatViewModel`
+  branch live in `BlueBubbles.Windows` and are **unreachable by the suite** — compile and launch
+  only (B2b's residual gap).
+- [ ] **Human-only:** that the event renders as a centred grey caption naming the right person, the
+  day separator above is correct and not duplicated, the bubble before keeps its tail and the one
+  after starts a new run, and paging up older messages does not duplicate the event.
+- [ ] Residual, not observed: `OnNewMessageReceived`'s GUID dedupe still scans bubbles only, so a
+  doubly-delivered socket group event could double-render. Left alone deliberately.
+- Out of scope: the conversation-list tile preview may look odd when a system event is the newest
+  row.
 
 ---
 
