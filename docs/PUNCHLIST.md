@@ -199,11 +199,32 @@ by file: `ChatsService.cs` **6**, `SyncService.cs` **6**, `MessagePersistenceHel
   `Core/Models` except `SocketEvents.cs` carries `[JsonPropertyName]`, and `Message`/`Chat`/`Handle`/
   `Attachment` are what the ViewModels bind against. That is the real portability debt. Not now.
 
-#### W3. Dead or staged transport scaffolding
-- [ ] Three socket events are registered and raised with **zero subscribers**:
-  `incoming-facetime`, `ft-call-status-changed`, `imessage-aliases-removed`.
-- [ ] `IFaceTimeService` and `IFindMyService` exist with **no implementation registered** in
-  `App.xaml.cs`. Dead or staged is currently indistinguishable from source — decide and record which.
+#### W3. Dead transport scaffolding — **DECIDED: delete it**
+- **Decision (maintainer, 2026-08-29): FaceTime and Find My are not planned.** So this is dead, not
+  staged. Remove it rather than carrying an unimplemented surface that reads like a roadmap.
+  Re-adding it later is cheap — these are thin wrappers over documented server endpoints, and the
+  Flutter client remains the protocol reference.
+- **The audit's description was wrong in two ways — corrected by measurement, 2026-08-29:**
+  - "Three socket events registered and raised with zero subscribers" — all three *are* registered,
+    but via two different mechanisms: `SocketService.cs:96-97` registers `FtCallStatusChanged` and
+    `IMessageAliasesRemoved` through `RegisterEvent`, while `IncomingFacetime` gets its own explicit
+    `_socket.On` handler at `:104`. Only `IncomingFacetime` and `FtCallStatusChanged` reach
+    `ActionHandler`; `IMessageAliasesRemoved` is a constant with no handler at all.
+  - "Zero subscribers" is not quite true either: **`ActionHandlerTests.cs:186` subscribes to
+    `FaceTimeStatusChanged`**. There is a live test to delete with it.
+- **This is not a pure deletion — it reaches into the test project.** Full measured footprint:
+  - Whole files: `Models/FindMyDevice.cs`, `Models/FindMyFriend.cs`, `IFaceTimeService.cs`,
+    `IFindMyService.cs`
+  - `SocketEvents.cs` 3 constants; `SocketService.cs:96-97,104-114`; `ActionHandler.cs` 2 events +
+    2 `case` arms; `IActionHandler.cs` 2 event declarations
+  - `IBlueBubblesApiService.cs` + `BlueBubblesApiService.cs`: **7 methods** (1 FaceTime
+    availability, 4 Find My, 2 FaceTime answer/leave)
+  - Test stubs implementing those 7: `OutgoingMessageServiceTests.cs:413-423`,
+    `SyncServiceTests.cs:872-882`, plus the `ActionHandlerTests.cs` subscription
+- [ ] **Sequenced after W1b merges.** The stub edits land in `SyncServiceTests.cs`, which W1b is
+  live in right now; doing both at once buys a conflict for no reason. Zero urgency.
+- Nothing else depends on it: no DI registration in `App.xaml.cs`, and no implementation of either
+  interface exists.
 
 #### W4. Sequencing note (supersedes earlier advice)
 - The head engineer previously said B2b (UI testability) must come first, on the grounds that you
