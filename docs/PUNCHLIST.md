@@ -65,10 +65,30 @@
   `OriginalRowId` 9022 / 2026-06-08 in a cache reaching back to 2025-08-02. Something changed then
   and it was not this codebase.
 
-#### B10. `ChatDetailsViewModel.RefreshParticipantsAsync` reads stale in-memory chats
-- [ ] Carried forward from B6 (archived). It reads `_chatsService.Chats` rather than the database,
-  so an open details pane can lag one beat behind the now-correct persisted state. Small, and only
-  visible with the pane open while a rename or participant change arrives.
+#### B10. Chat details pane races the persistence path on participant changes
+- **Upgraded from "reads stale in-memory chats" after tracing it properly, 2026-08-29. It is a
+  RACE, not a one-beat lag**, and that changes the fix.
+- **Measured fan-out:** one `_actionHandler.ChatUpdated` event feeds **two independent async paths**.
+  `IncomingMessageProcessor.cs:44-48` writes the event to a **channel drained on a background task**,
+  which eventually calls `ChatsService.ApplyChatUpdateAsync` — and that only refreshes the in-memory
+  list at its very **last** line (`ChatsService.cs:289`, `await LoadChatsAsync()`). Meanwhile
+  `ChatDetailsViewModel.cs:327-337` enqueues straight onto the UI dispatcher and refreshes
+  immediately. Nothing orders the two.
+- **`RefreshParticipantsAsync` (`ChatDetailsViewModel.cs:301-318`) reads `_chatsService.Chats`**, so
+  with an open details pane it will usually render the *pre-update* participant set.
+- **Why the 2026-08-29 rename test passed anyway:** the display name is applied straight from the
+  payload in the view model's own `ApplyChatUpdateAsync(kind, chat)`. Only the participant list goes
+  through the stale in-memory read. **Renames look fine; add/remove participant is the broken case.**
+- [ ] Fix direction (head engineer, open to argument): prefer the payload's own participants — the
+  same source the name already uses — with the in-memory list only as a fallback. Note
+  `ChatsService.ResolveParticipantsAsync` (`:292-310`) documents that the payload's participants are
+  preferred but **can be absent**, returning an empty list on failure, so the fallback is load-bearing
+  and must not blank a populated pane.
+- Alternative worth measuring against it: give the pane an ordering signal so it refreshes *after*
+  persistence. Cleaner, but `ApplyChatUpdateAsync` currently raises no event at all, so it means
+  adding one — larger blast radius.
+- Related, already handled: W1b left a null guard inside `RemoveParticipantsMissingFrom` and W1c
+  restructured the stale-set computation. Neither touches this read.
 
 #### B2g. Images decoded oldest-first — **CLOSED 2026-08-29: fix measured working**
 - [x] `TriggerAutoDownload` removed from `BuildMessageList`; the download now starts when the
@@ -218,9 +238,21 @@
   `LoadMessagesAfterAsync` at `:66-67`) while silently carrying an empty collection.
   `LoadReactionsAsync` (`:348`) omits it correctly — reactions have no attachments.
 
-#### B2d. `ChatBubble.Unloaded` nulls `_currentVm` but not `_renderedContentForVm`
-- [ ] The two fields are meant to move together; no misrender case was constructed. Low confidence
-  that this is real, recorded so it isn't rediscovered.
+#### B2d. `ChatBubble.Unloaded` nulls `_currentVm` but not `_renderedContentForVm` — **CLOSED: not a bug, and "fixing" it would cause one**
+- **Traced properly 2026-08-29 instead of being carried forward on low confidence.**
+  `_renderedContentForVm` guards "build attachments / URL preview **once per message VM**"
+  (`ChatBubble.xaml.cs:165-169`). `Unloaded` (`:62-72`) nulls `_currentVm` and unsubscribes, but
+  **does not destroy the visual tree** — the built content is still there.
+- **Recycled to a DIFFERENT vm:** `DataContextChanged` sets `_currentVm = newVm`, and
+  `_renderedContentForVm != newVm`, so `BuildContent` runs. Correct.
+- **Re-bound to the SAME vm:** `_renderedContentForVm == vm`, so `BuildContent` is skipped — and
+  that is exactly right, because the content was never torn down. **Nulling the field on unload
+  would force a rebuild and re-load the image, reintroducing the "appear, disappear, appear"
+  flicker the guard was added to prevent** (see the comment at `:162-164`).
+- The only path that must clear it — `DataContext` becoming a non-VM — already clears **both**
+  fields together (`:58-59`).
+- **Do not re-open without a constructed misrender case.** The two fields are deliberately not
+  symmetric.
 
 ---
 
