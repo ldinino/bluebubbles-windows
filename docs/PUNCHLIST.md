@@ -159,25 +159,29 @@
 - Out of scope, still open: this does **not** make the `AffectsConversationList` subscriber link
   testable. W1a-2 and B8 both depend on that one line and it remains compilation-and-review only.
 
-#### B2n. Attachment downloads fail silently — 19 of 53 in one session
-- [ ] **Found 2026-08-29 by B2b's instrumentation, on the first cold-cache run.** The rollup reported
-  `attach.autodownload 53` and **`attach.download.error 19`** — a 36% failure rate — while the log
-  contained **zero `[WARN]`, `[ERROR]` or `[FATAL]` lines for the entire session**.
-- **Mechanism:** `AttachmentViewModel.cs:165-171` catches the exception, increments the counter, sets
-  `State = AttachmentState.Error` and `ErrorMessage = Describe(ex, force)` — and **never logs**. The
-  user sees a broken bubble if they happen to look at it; nothing else records that it happened.
-- **This is the first thing B2b made visible that nobody knew about**, and it is the argument for
-  that instrumentation existing.
-- [ ] **First step is to log the failure reason, then re-run the cold-cache test.** Do NOT design a
-  fix first — the cause is genuinely unknown.
-- **Leading hypothesis, explicitly UNVERIFIED:** the server returns **500 "Attachment does not exist
-  in disk!"** when the record exists but the file has been purged to iCloud (see repo memory /
-  archived B2 notes), for which the remedy is `attachment/:guid/download/force`. `force=False` on
-  every observed download line is consistent with that, but consistent is not confirmed — the
-  exception text was never captured. Measure before believing it.
-- Related and probably informative: `attach.decode.cache-hit 7` and `attach.download` n=**35**
-  against 53 auto-downloads. 35 + 19 = 54, so essentially every auto-download either completed or
-  errored; there is no third silent bucket.
+#### B2n. Attachment downloads failed silently — **CLOSED 2026-08-29: logging gap, not a download bug**
+- [x] **Fixed the actual defect** (`8ae0c85`, merged `7cff53d`): `AttachmentViewModel` caught the
+  exception, counted it, set an error state and **never logged**. Now logs the exception type and
+  raw message at **Warn** (not behind verbose) — `Describe()` rewrites the text for the user and
+  would have hidden the cause.
+- **Cause measured on a second cold-cache run, 2026-08-29 — all 8 failures identical:**
+  `HttpRequestException: Response status code does not indicate success: 500`, 8 distinct
+  attachments. That is the documented iCloud-purged case (the record exists, the file is not on the
+  Mac).
+- **The app already handles it correctly, end to end** — verified in source rather than assumed:
+  `Describe()` matches the 500 specifically and says *"This attachment isn't on the Mac yet. Retry to
+  pull it down from iCloud."*; `AttachmentHolder.xaml:133` shows a **Retry** button; `OnRetryClick`
+  -> `RetryAsync()` -> `DownloadInternalAsync(force: true)` -> `ForceDownloadAttachmentAsync`, which
+  is the server's force endpoint that makes the Mac fetch from iCloud first.
+- **So this was never a broken feature — only an invisible one.** Recorded as a negative result
+  rather than turned into work.
+- **Rate tracks scroll depth**, not health: 19 of 53 (36%) on the first run, **8 of 65 (12%)** on the
+  second. Older photos are likelier to have been offloaded to iCloud.
+- [ ] **Open product decision (maintainer's call): should auto-download force automatically on a
+  500?** Head-engineer recommendation is **no** — force makes the Mac pull from iCloud, and
+  auto-download fires for anything scrolled past, so it would haul down photos the user never looked
+  at. The current design puts that cost behind a deliberate click. Middle ground if it becomes
+  annoying: auto-force only when the user opens an attachment full-screen.
 
 #### B2m. Avatar decodes are far slower than anyone assumed — newly measurable
 - [ ] **First real numbers, from B2b's rollup on a normal launch:** `avatar.decode` n=14,
@@ -193,9 +197,14 @@
   n=14, **total 6096 ms**, median 301.0 ms, p95 973.2 ms, max 982.0 ms. Two independent sessions
   agree within ~7% on the total, so this is a real, repeatable cost, not a one-off. `stale` was 3
   this time (4 previously).
-- **This is the largest single measured cost at startup** — 6.1 s of decode work for 14 avatars,
-  against `thread.open->messages-built` at 9.8 ms median. Worth acting on; act on the numbers, not
-  on a theory about why.
+- [ ] **THIRD capture disagrees by 35% — hold this entry.** 2026-08-29 later run, same build, cold
+  cache: n=13, **total 3939 ms**, median 131.4 ms, p95 691.1 ms. So the series is 6530 / 6096 /
+  **3939**. Two agreeing captures looked solid and were not — **do not optimise against this until
+  there is a repeatable measurement.** Find what varies first (which chats are visible, how many
+  distinct contacts, warm vs cold OS file cache).
+- **This may still be the largest single measured cost at startup** — even the low reading is 3.9 s
+  of decode work against `thread.open->messages-built` at ~10 ms median. Worth chasing; not worth
+  guessing at.
 - `avatar.relayout.by:Loaded` was 21 of 85 this session (25%) vs 25 of 54 (46%) previously — the
   ratio moves with usage, the pattern does not.
 #### B2c. `GetMessagesByGuidsAsync` omitted `.Include(m => m.Attachments)` — **FIXED** (`93713a9`, merged `a84354f`)
