@@ -1,4 +1,5 @@
 using BlueBubbles.Core.Configuration;
+using BlueBubbles.Core.Diagnostics;
 using BlueBubbles.Core.Services;
 using BlueBubbles.Windows.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -223,6 +224,11 @@ public sealed partial class AboutSettingsPage : Page
         dp.SetText(_vm.LogText);
         Clipboard.SetContent(dp);
     }
+
+    // Writes the draw/decode rollup into the log at Info, so it stays readable after verbose
+    // logging is switched back off (B2b).
+    private void OnPerfSummaryClick(object sender, RoutedEventArgs e)
+        => PerfStats.Dump();
 
     private void OnClearLogClick(object sender, RoutedEventArgs e)
         => _vm.ClearLogCommand.Execute(null);

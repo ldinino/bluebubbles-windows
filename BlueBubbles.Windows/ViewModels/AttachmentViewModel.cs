@@ -1,5 +1,6 @@
 using System.Net;
 using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Diagnostics;
 using BlueBubbles.Core.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -27,6 +28,10 @@ public partial class AttachmentViewModel : ObservableObject
     private readonly string _attachmentGuid;
     private CancellationTokenSource? _downloadCts;
     private long _generationCounter;
+
+    // Ordinal stamped on each download's Debug lines so B2g can read the order downloads were
+    // kicked off in straight out of the log instead of inferring it from timestamps.
+    private static int _downloadSequence;
 
     public string AttachmentGuid => _attachmentGuid;
     public string? TransferName { get; }
@@ -121,6 +126,12 @@ public partial class AttachmentViewModel : ObservableObject
         _downloadCts = new CancellationTokenSource();
         var generation = Interlocked.Increment(ref _generationCounter);
 
+        var startedAt = PerfStats.Timestamp();
+        if (AppLog.IsEnabled(LogLevel.Debug))
+            AppLog.Debug(LogCategory.Ui,
+                $"Attach download #{Interlocked.Increment(ref _downloadSequence)} start "
+                + $"guid={_attachmentGuid} name='{DisplayName}' bytes={TotalBytes} force={force}");
+
         try
         {
             var progressReporter = new Progress<double>(p =>
@@ -132,18 +143,28 @@ public partial class AttachmentViewModel : ObservableObject
             var path = await _cache.DownloadAsync(
                 _attachmentGuid, TransferName, progressReporter, force, _downloadCts.Token);
 
-            if (Interlocked.Read(ref _generationCounter) != generation) return;
+            if (Interlocked.Read(ref _generationCounter) != generation)
+            {
+                PerfStats.Count("attach.download.stranded");
+                return;
+            }
+
+            PerfStats.Duration("attach.download", startedAt);
+            if (AppLog.IsEnabled(LogLevel.Debug))
+                AppLog.Debug(LogCategory.Ui, $"Attach download done guid={_attachmentGuid} name='{DisplayName}'");
 
             LocalPath = path;
             State = AttachmentState.Cached;
         }
         catch (OperationCanceledException)
         {
+            PerfStats.Count("attach.download.cancelled");
             if (Interlocked.Read(ref _generationCounter) == generation)
                 State = AttachmentState.NotDownloaded;
         }
         catch (Exception ex)
         {
+            PerfStats.Count("attach.download.error");
             if (Interlocked.Read(ref _generationCounter) == generation)
             {
                 State = AttachmentState.Error;

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using BlueBubbles.Core.Configuration;
 using BlueBubbles.Core.Data.Entities;
+using BlueBubbles.Core.Diagnostics;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
 using BlueBubbles.Core.Utils;
@@ -314,6 +315,11 @@ public partial class ChatViewModel : ObservableObject
 
         _ = RefreshScheduledMessagesAsync();
 
+        // Starts the clock for time-to-first-visible (B2b/B2g); AttachmentHolder stops it when the
+        // first media actually reaches the screen. Re-opening a thread restarts it.
+        PerfStats.BeginPhase(PerfStats.ThreadOpenToFirstImage);
+        var threadOpenAt = PerfStats.Timestamp();
+
         IsLoading = true;
         try
         {
@@ -338,6 +344,7 @@ public partial class ChatViewModel : ObservableObject
         finally
         {
             IsLoading = false;
+            PerfStats.Duration("thread.open->messages-built", threadOpenAt);
         }
 
         MessagesLoaded?.Invoke(this, EventArgs.Empty);

@@ -89,6 +89,7 @@
                                   MinWidth="120"
                                   SelectionChanged="OnLogCategoryChanged" />
                         <Button Content="Export Logs" Click="OnExportLogsClick" />
+                        <Button Content="Perf Summary" Click="OnPerfSummaryClick" />
                         <Button Content="Copy All" Click="OnCopyLogClick" />
                         <Button Content="Clear" Click="OnClearLogClick" />
                     </StackPanel>

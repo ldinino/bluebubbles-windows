@@ -1,3 +1,5 @@
+using BlueBubbles.Core.Diagnostics;
+using BlueBubbles.Core.Services;
 using BlueBubbles.Windows.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -137,7 +139,10 @@ public sealed partial class AttachmentHolder : UserControl
                 // Realization-driven auto-download: the list virtualizes, so this fires for what is
                 // on (or near) screen first instead of walking the loaded window oldest-first.
                 if (App.Services.GetService<BlueBubbles.Core.Configuration.AppSettings>()?.AutoDownload == true)
+                {
+                    PerfStats.Count("attach.autodownload");
                     _ = vm.DownloadAsync();
+                }
                 break;
             case AttachmentState.Downloading:
                 ProgressText.Text = $"{vm.Progress:F0}%";
@@ -245,6 +250,11 @@ public sealed partial class AttachmentHolder : UserControl
             {
                 MediaImage.Source = cached;
                 _loadingMediaPath = null;
+                PerfStats.Count("attach.decode.cache-hit");
+                if (AppLog.IsEnabled(LogLevel.Debug))
+                    AppLog.Debug(LogCategory.Ui,
+                        $"Attach decode cache HIT name='{vm.DisplayName}' w={decodeWidth} (sync set)");
+                NoteFirstImageVisible(vm);
                 return;
             }
         }
@@ -255,6 +265,14 @@ public sealed partial class AttachmentHolder : UserControl
 
     private async Task LoadMediaAsync(AttachmentViewModel vm, string path, int decodeWidth, long generation)
     {
+        // A plain long, captured before the await and never dereferenced afterwards, so the timing
+        // cannot keep a stale decode alive or interfere with the generation guard below.
+        var startedAt = PerfStats.Timestamp();
+        var category = vm.Category == AttachmentCategory.Video ? "attach.decode.video" : "attach.decode.image";
+        if (AppLog.IsEnabled(LogLevel.Debug))
+            AppLog.Debug(LogCategory.Ui,
+                $"Attach decode start gen={generation} name='{vm.DisplayName}' w={decodeWidth} cat={vm.Category}");
+
         Microsoft.UI.Xaml.Media.Imaging.BitmapImage? bitmap = null;
         try
         {
@@ -271,16 +289,40 @@ public sealed partial class AttachmentHolder : UserControl
             if (Interlocked.Read(ref _bindGeneration) == generation) _loadingMediaPath = null;
         }
 
+        PerfStats.Duration(category, startedAt);
+
         if (Interlocked.Read(ref _bindGeneration) != generation)
+        {
+            PerfStats.Count("attach.decode.stale");
+            if (AppLog.IsEnabled(LogLevel.Debug))
+                AppLog.Debug(LogCategory.Ui,
+                    $"Attach decode STALE gen={generation} (now {Interlocked.Read(ref _bindGeneration)}) name='{vm.DisplayName}'");
             return;
+        }
 
         if (bitmap is null)
         {
+            PerfStats.Count("attach.decode.failed");
             ReportUnreadable(vm, path);
             return;
         }
 
+        if (AppLog.IsEnabled(LogLevel.Debug))
+            AppLog.Debug(LogCategory.Ui, $"Attach decode landed gen={generation} name='{vm.DisplayName}' -> assign");
+
         MediaImage.Source = bitmap;
+        NoteFirstImageVisible(vm);
+    }
+
+    /// <summary>Closes the thread-open phase the first time any media actually reaches the screen.
+    /// Later images no-op (the phase is consumed), which is what makes the recorded number a
+    /// time-to-<em>first</em>-visible rather than a per-image duration.</summary>
+    private static void NoteFirstImageVisible(AttachmentViewModel vm)
+    {
+        var ms = PerfStats.CompletePhase(PerfStats.ThreadOpenToFirstImage);
+        if (ms is null) return;
+        AppLog.Info(LogCategory.Ui,
+            $"Time-to-first-visible image: {ms.Value:0.0} ms (name='{vm.DisplayName}')");
     }
 
     // Decode failed even though the file is present: a truncated download, or a codec this machine
