@@ -676,6 +676,24 @@ network/UI-thread code; add targeted seams opportunistically when one of them ne
 
 ## Release plan
 
+**0.25.0 — cut 2026-08-29, draft `v0.25.0` awaiting publish.** CI run `33280001621` green;
+asset `BlueBubbles-Setup-0.25.0-x64.exe` (63,912,257 bytes) carries
+`digest: sha256:8faf60ba…`, so the field the updater depends on is published. 647/647 on trunk,
+clean build 0 warnings / 0 errors.
+- **Contents: 55 commits, 13 merges.** The whole **W program** (W1b, W1c, W1a-2, W2, W3 — one writer
+  per entity, transport leakage, dead scaffolding, single announcer); **seven bug fixes** (B7, B8,
+  B2c, B2n, B10, B11, B12) plus B9 and B2d closed by investigation; and **two features** — chat
+  export (F6) and draw-timing instrumentation (B2b).
+- **Human-verified before the cut:** the folder picker opens and a real export produces a readable
+  transcript; a live participant change updates the details pane (which is what proved B10's one
+  unproven assumption); and all five B12 timeline checks pass, including paging up without
+  duplicating an event.
+- [ ] **Publish the draft.**
+- [ ] **This is the first release the updater can actually be exercised on.** 0.24.0 is the earliest
+  version in the field with an update check, so the 0.24.0 -> 0.25.0 hop is the first real test of
+  download -> digest verify -> launch, and of the SmartScreen prompt. **Watch that hop
+  deliberately** — it has never run against a real release.
+
 **0.24.0 — PUBLISHED 2026-08-23** (`gh release list` shows `v0.24.0` as Latest). Shipped F5 (toast
 actions) and U1 (update checker), plus the B7 duplicate-attachment fix; details in
 `docs/PUNCHLIST-ARCHIVE.md`. CI run `32671986227`; asset `BlueBubbles-Setup-0.24.0-x64.exe` carries
