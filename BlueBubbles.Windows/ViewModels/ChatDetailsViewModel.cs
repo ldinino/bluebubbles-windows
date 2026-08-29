@@ -3,6 +3,7 @@ using System.Text.Json;
 using BlueBubbles.Core.Data.Entities;
 using BlueBubbles.Core.Models;
 using BlueBubbles.Core.Services;
+using BlueBubbles.Core.Utils;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -212,7 +213,7 @@ public partial class ChatDetailsViewModel : ObservableObject
             if (success)
             {
                 NewParticipantAddress = string.Empty;
-                await RefreshParticipantsAsync();
+                await RefreshParticipantsAsync(null);
             }
             else
             {
@@ -235,7 +236,7 @@ public partial class ChatDetailsViewModel : ObservableObject
             var success = await _chatsService.RemoveParticipantAsync(_chatGuid, address);
             if (success)
             {
-                await RefreshParticipantsAsync();
+                await RefreshParticipantsAsync(null);
             }
             else
             {
@@ -298,14 +299,15 @@ public partial class ChatDetailsViewModel : ObservableObject
         GoBackRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RefreshParticipantsAsync()
+    private async Task RefreshParticipantsAsync(Chat? payload)
     {
         var chats = _chatsService.Chats;
         var chatData = chats.FirstOrDefault(c => c.Chat.Guid == _chatGuid);
-        if (chatData is null) return;
+        var resolved = DetailsParticipants.Resolve(payload?.Participants, chatData?.Participants);
+        if (resolved.Count == 0) return;
 
         Participants.Clear();
-        foreach (var handle in chatData.Participants)
+        foreach (var handle in resolved)
         {
             Participants.Add(new ParticipantItemViewModel(
                 handle,
@@ -346,7 +348,7 @@ public partial class ChatDetailsViewModel : ObservableObject
 
             if (kind.IsParticipantChange())
             {
-                await RefreshParticipantsAsync();
+                await RefreshParticipantsAsync(chat);
             }
         }
         catch (Exception ex)
