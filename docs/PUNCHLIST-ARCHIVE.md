@@ -222,3 +222,196 @@ done, including an adversarial run against a deleted-and-recreated thread. No
 toggle was `Visibility="Collapsed"`, so every `AppLog.Debug` in the app — including the pre-existing
 avatar tracing — was dropped unconditionally. Restored in `f973010`; off by default. This is what
 made B2 diagnosable at all, and it is why the toggle should stay.
+
+## 0.23.0 — Debug Session 4 (A1-A3, B1, B2e, B2f, B2h, B2i, B3-B6)
+
+### B1. New/updated messages never reached the conversation list
+
+Messages persisted fine; the *event contract* was broken. Six causes, all fixed in PR 3
+(`fix/sync-ui-propagation`): a silent bare catch in `IncomingMessageProcessor.ProcessAsync`;
+`ChatsService.HandleNewMessageAsync` no-opping on an unknown chat; `ProcessUpdatedMessageAsync`
+raising no event; `ConversationListViewModel` never subscribing to `MessagesPersisted`;
+`EnsureChatExistsAsync` not refreshing the in-memory list; a silent participant-fetch failure.
+`UpdateMessageAsync` now returns the owning chat GUID. A mutation of the owning-chat lookup
+(`ChatId ± 1`) originally **survived** — closed by
+`UpdateMessage_ReturnsOwningChatGuid_NotJustTheFirstChat` (`4fa277d`). Maintainer-verified live.
+Deliberately unchanged: reactions raise no persist event (nothing list-visible changes).
+
+### B2e. Removed the `[attach-diag]` instrumentation
+
+Deletion-only, `b609d4a` merged `2cdd29e`; `MessageBubbleViewModel.cs` resolves back to its
+pre-instrumentation blob `b635787`. The O(items) `Any(...)` scan in `AppendMessageBubbles` was
+deleted wholesale rather than just its log line. B2a keepers left intact. **Lesson applied later in
+B7:** this removed the last attachment tracing, and the next attachment bug was immediately harder
+to see from a log — B7 re-added narrow permanent instrumentation behind verbose logging.
+
+### B2f. Every attachment image decoded twice
+
+`91d99a2`, merged `5d3a7d1`. `LoadMedia`'s early-out was `vm.LocalPath == _renderedMediaPath &&
+MediaImage.Source is not null`; while the first decode was in flight `_renderedMediaPath` was set
+but `Source` was still null, so a second call could not short-circuit. A `_loadingMediaPath` field
+closes the window, cleared on rebind/retry/error/cache-hit and in a guarded `finally`. Measured
+10 decode starts / 5 stranded -> 4 starts / 0 stranded. The two legitimate second callers: `Loaded`
+firing ~46 ms after `DataContextChanged`, and `DownloadInternalAsync` raising `PropertyChanged`
+twice (`LocalPath`, then `State`, ~3 ms apart).
+**Refuted, do not re-investigate:** the `at_0_` optimistic-send lead (`at_N_` is just the attachment
+index; asymmetry was cache state); "a systemic double-bind" (it is a second `LoadMedia` call, not a
+second bind); "the list may not be virtualizing" (`ItemsStackPanel` virtualizes fine — off-screen
+downloads came from view-model construction, which is B2g).
+
+### B2h. Avatars decoded twice
+
+One line, `4636a1f` merged `15aa7cd`: `AvatarControl.OnLoaded` calls `QueueRelayout()` instead of
+`RefreshLayout()`. `OnLoaded` had run `RefreshLayout` *directly*, bypassing the coalescer it was
+written for while a relayout queued by the binding's DP sets was still pending — one bind ran two
+full relayouts ~90-130 ms apart, the second finding a cache MISS because the first decode was still
+in flight. Discarded decode work **50% -> 21%** (`decode STALE` 26 -> 4; `RefreshLayout` 110 -> 69).
+**Not B2f's defect class** — `_loadingMediaPath` was not transplanted and should not be. Also
+refuted: "the conversation list builds tiles twice at startup" (every doubled pair carries the same
+`Avatar[N]` `_instanceId`). Residual deliberate waste is B2j.
+
+### B2i. `build-common.ps1` crashed when exactly one app instance was running
+
+`f1214b2`: `$procs.Count` -> `@($procs).Count` in `Stop-BlueBubbles`. Under `Set-StrictMode -Version
+Latest` a single `Process` is a scalar with no `.Count` in PowerShell 5.1, so the clean step threw
+exactly when it most needed to kill the lock-holder. Zero or two-plus instances were unaffected.
+Negative control reproduced first (`n=1 -> THREW`, `n=2 -> OK`). Swept all three `.ps1`; only
+occurrence. `publish.ps1` shares the function and was fixed with it.
+
+### B3. OTP toast has no "Copy code" button — WON'T FIX, upstream gap
+
+**Decision (2026-08-11, maintainer):** do not ship a client-side OTP detector. Detecting one-time
+passcodes in notification text is the platform's job; carrying our own heuristic means owning it
+forever to patch an OS gap affecting one sender's phrasing. **Do not re-litigate by pointing at the
+detector's accuracy — the objection is permanent ownership, not code quality.**
+`OtpDetector` over the real cache: 5,639 messages, 5,282 with text, 16 flagged (15 distinct) in 6
+shape clusters; Windows' own affordance covered **9/15 messages, 4/6 clusters**. The gap is exactly
+`Enter <adjective> code N` — `code` as the object of an imperative verb with a modifier wedged in —
+and **both misses are one sender** (Wells Fargo), so the 40% figure is fragile.
+**Refuted:** that our button budget suppressed the pill (a toast allows 5 actions *and* 5 inputs
+independently; the OS pill renders in its own row outside both, and showed with all five slots
+full); and "Windows covers this anyway", which came from ten *invented* textbook strings showing
+9/10 — **never validate a pattern matcher with invented data.**
+The tempting "only add our button when Windows would miss it" is undeliverable: you cannot ask
+Windows at runtime, so it means modelling an undocumented OS heuristic whose failure mode is silent.
+Research branches are **NOT FOR MERGE**: `experiment/otp-toast-windows-affordance` (`98ef65a`),
+`research/otp-real-corpus` (`b6c8cce`).
+
+### B4. `OnChatUpdated` was `async void` with an unthrottled full reload
+
+`345ef87`. The handler no longer runs `LoadChatsAsync()` on every group-name/participant socket
+event and can no longer throw unobserved; it routes through a debounce matching B1's pattern. Until
+B6 landed this throttled a reload that could not reflect its own trigger — the throttle was always
+correct, it only started doing real work once B6 merged.
+
+### B5. Tests wrote to the real `%LOCALAPPDATA%\BlueBubbles\logs`
+
+`87f961f` (`2333bb2`). `AppLog.RedirectLogDirectory(string)` plus a `[ModuleInitializer]` in the
+test assembly pointing the suite at `%TEMP%\BlueBubblesTests\logs-<guid>`. **`[ModuleInitializer]`
+and not a fixture** because `_logDir ??=` caches on first use and xunit runs collections in
+parallel, so any fixture hook can lose the race; module init runs at assembly load, before
+discovery. Deliberately no "disable file logging" flag — a production-only off switch can ship
+accidentally on and would stop the suite exercising `WriteToFile`. Verified both directions: fixed
+branch leaves the real log byte-identical (308880 bytes), unfixed `main` grows it by 2928 bytes.
+Declared untested, not dressed up: the `_currentLogDate = DateTime.MinValue` reset and midnight
+rollover. Audit: `AppLog` was the only leak into real user state.
+
+### B6. `chat-updated` socket events were never persisted
+
+`cf376e5` (`65499c8` + `5146e3d` + `ccc34c4`). `ActionHandler` parses the chat out of the payload's
+`chats[0]`; `ChatsService.ApplyChatUpdateAsync` is the single writer, going through
+`ChatFieldMerge.ApplyServerOwnedFields` and reconciling participant rows (`LinkParticipantsAsync`
+for adds plus an explicit diff-and-delete for removals, since that helper only ever adds).
+The four events fired `ChatUpdated` and nothing else — no DB write — a deviation from
+`docs/PLAN.md:112`. **It did not self-heal while the app was open**: deltas run only at launch,
+socket connect and network recovery, and `ReconcileChatsAsync` only prunes deletes. Correctness bug,
+not latency. Also refuted: the details-pane rename never worked either — `ChatDetailsViewModel`
+deserialized the whole payload as a `Chat`, got the *message's* GUID, and its `chat.Guid !=
+_chatGuid` guard always returned.
+**Regression caught in review:** `ApplyServerOwnedFields` copied `HasUnreadMessage` unconditionally
+and the model property was non-nullable `bool`, so a group-event payload omitting the field
+deserialized to `false` and **renaming a group cleared its unread badge**. Every fixture stated the
+field explicitly, so nothing caught it. Fixed by making it `bool?` and guarding inside
+`ChatFieldMerge` — the authority, not a call-site exception. Silence now means "no opinion".
+
+### A1. Removed four Appearance settings
+
+Colorful bubbles, Dense chat tiles, Hide dividers, Avatar size (`02dbe69` + `c13cb2a`, merged
+`c24619d`). **No settings migration needed:** `SettingsService.JsonOpts` leaves
+`UnmappedMemberHandling` at `Skip`, so an existing `settings.json` still loads with dead keys
+present; `SettingsVersion` correctly left at 1. Fixed in review: the defaults test had swapped a
+non-vacuous assertion (`AvatarScale == 1.0`) for a **vacuous** one (`Use24HrFormat == false`, where
+`bool` already defaults to `false` and the constructor never sets it).
+
+### A2. Dropped "Scroll to last unread"; status indicators made unconditional
+
+`6562a07` (`2d0202b` + `b76f526`). **Neither was dead code** — the indicator only ever appears on
+chats where *you* sent the last message, which is why toggling it looked like a no-op. Removing the
+setting cascaded `AppSettings` out of `ApplyAppearance`, the tile constructor and
+`ConversationListViewModel`; live 24-hour-time updates were verified unaffected (they run through a
+separate subscription in `ConversationListPage.xaml.cs`).
+**Caught in review:** the PR as pushed still contained `ComputeFirstUnread` with zero callers — its
+deletion existed only as an *uncommitted working-tree edit*, so the reported green run was measured
+against a tree that was not the deliverable. An unused private method is not a compiler warning.
+
+### A3. Removed the "Theme backup" section, folded its keys into Settings backup
+
+`2d00f00`. `theme`, `colorfulAvatars` and `use24HrFormat` now ride in the settings payload, and the
+restore path calls `ThemeHelper.Apply` so a restore re-themes the live window instead of waiting for
+a relaunch. Backward compatibility was a **source read, not an executed test** (`BackupSettingsPage`
+lives in `BlueBubbles.Windows`, unreachable from the suite — B2b). Accepted: a theme backup already
+on the server is now unreachable from this client.
+
+## 0.24.0 — B7, F5, U1
+
+### B7. Photos rendered twice — duplicate attachment rows
+
+`7354c4b` (`fe911bd` + `4a58b60`). Attachment identity is now **`(MessageId, OriginalRowId)`** with
+the GUID check kept as a strict superset. `AttachmentDeduplicator.CollapseDuplicatesAsync` repairs
+existing caches from `SyncService` (the cache has no version stamp — `EnsureCreatedAsync`, no
+migrations — and the pass is idempotent).
+**Root cause, measured:** `originalROWID` is Apple's chat.db attachment ROWID, passed through
+verbatim by the server's `AttachmentSerializer`. **Apple rewrites the GUID as a transfer completes**
+(plain UUID -> `at_<n>_<messageGuid>`) while the ROWID stays put, so GUID-keyed dedupe stored the
+same photo twice. We never synthesize `at_N_`. Verified against a pre-sync snapshot: of 59 groups,
+**18 are the bug** (each exactly one `at_N_` plus one plain GUID) and 41 are genuinely distinct
+attachments. Repair `944 -> 926`, second run removed 0, `distinctPairs == total`.
+**Coverage hole found in review:** a `TransferName` identity — the plausible wrong fix — **survived
+the full 420-test suite**, because the `OriginalRowId` pre-filter masks it in every synthetic case.
+It is not harmless: 9 messages in real data have a mixed shape and msg 4213 would drop from 3 rows
+to 1. Closed by `Collapse_MessageWithBothADuplicateAndADistinctRow_CollapsesOnlyTheDuplicate`.
+**Refuted:** "B2 (`e318fe1`) introduced this" — 17 of 18 affected rows predate that merge.
+Residual open threads carried forward as B9.
+**Process note:** the repair executed against the maintainer's **live cache** during an agent's
+build-and-run — unreviewed code mutated real user data pre-merge. No harm (correct 18 rows, snapshot
+predates it), but agents must not run migrations against live user data before review.
+
+### F5. Toast actions: two reactions plus Mark as read
+
+`38dc7c8` (PR 12). Message toast is now Send + Love + Like + Mark as read (4 buttons); reaction
+toast is Send + Mark as read. Mark as read does **not** foreground the app: the routing decision was
+lifted into `BlueBubbles.Core/Services/ToastActivationRouter.cs` as a pure `Resolve(args, userInput)`
+with `ActivatesWindow => Kind is OpenChat or OpenApp`. Mutation adding `MarkRead` to that rule fails
+`Resolve_InlineActions_DoNotActivateWindow`. **This established the preferred answer to B2b** — lift
+the decision into Core, leave rendering in the view.
+Decisions: the button is always shown, silently local-only when Private API is unavailable (hiding
+it would make toast layout depend on a setting). Known and scoped out: if the app is closed, a toast
+action still shows the window — inherent to unpackaged single-instancing, predates F5.
+
+### U1. In-app updater
+
+`6a1ce4a` (PR 13). Checks `/releases/latest` (excludes drafts and prereleases) once per launch, no
+poll. **The download is verified before execution:** the SHA-256 digest is parsed *before* any bytes
+are fetched, so a missing digest means no download at all; `CryptographicOperations.FixedTimeEquals`
+gates the single `_launcher.Launch` call site, and a mismatch deletes the file and logs at Error.
+Mutation forcing the comparison true fails `Download_DigestMismatch_RefusesToExecuteAndDeletesFile`
+— the check is not decorative. Host allowlist applies to the asset URL *and* the post-redirect final
+URI, checked before the download path is built, so an untrusted redirect never writes a file.
+Semantic comparison on parsed ints; `remote <= local` never offers a downgrade. `CheckForUpdateAsync`
+wraps its whole body in a catch-all with a timeout, so the fire-and-forget call cannot break startup.
+Uses a **separate `HttpClient`** so the BlueBubbles server's auth/proxy headers never reach
+`api.github.com` — keep it that way.
+Never exercised end to end: the download -> verify -> launch cycle has not run against a real
+release (0.23.0 had no update check, so the 0.23.0 -> 0.24.0 hop cannot test it). SmartScreen on the
+unsigned installer is likewise unverified.
+
