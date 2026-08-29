@@ -13,7 +13,9 @@ public class MessagesService : IMessagesService
     private readonly IChatsService _chatsService;
     private readonly SemaphoreSlim _saveLock = new(1, 1);
 
-    private const int MaxSyncHistoryDays = 365;
+    /// <summary>Hard ceiling on how far back <see cref="FetchOlderMessagesFromServerAsync"/> will
+    /// page. Public because an export has to disclose that older history is unreachable.</summary>
+    public const int MaxSyncHistoryDays = 365;
     private const string MessageWithQuery = "attachment,handle,attributedBody,messageSummaryInfo,payloadData";
 
     public MessagesService(
